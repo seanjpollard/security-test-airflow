@@ -16,17 +16,15 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Box, createListCollection, Heading, HStack, Skeleton, type BoxProps } from "@chakra-ui/react";
+import { Box, Heading, Flex, HStack, Skeleton, Separator } from "@chakra-ui/react";
+import type { BoxProps } from "@chakra-ui/react";
+import { createListCollection } from "@chakra-ui/react/collection";
 import { useTranslation } from "react-i18next";
 import { FiDatabase } from "react-icons/fi";
 
 import type { AssetEventCollectionResponse, AssetEventResponse } from "openapi/requests/types.gen";
-
-import { Select } from "src/system-components";
-
 import { StateBadge } from "src/components/StateBadge";
-
-import { formatNumber } from "src/utils";
+import { Select } from "src/components/ui";
 
 import { DataTable } from "../DataTable";
 import type { CardDef, TableState } from "../DataTable/types";
@@ -62,7 +60,7 @@ export const AssetEvents = ({
   titleKey,
   ...rest
 }: AssetEventProps & BoxProps) => {
-  const { i18n, t: translate } = useTranslation(["dashboard", "common", "dag"]);
+  const { t: translate } = useTranslation(["dashboard", "common", "dag"]);
   const assetSortOptions = createListCollection({
     items: [
       { label: translate("sortBy.newestFirst"), value: "-timestamp" },
@@ -71,55 +69,53 @@ export const AssetEvents = ({
   });
 
   return (
-    <Box p={4} py={2} {...rest}>
+    <Box borderBottomWidth={0} borderRadius={8} borderWidth={1} p={4} py={2} {...rest}>
+      <Flex alignItems="center" flexWrap="wrap" justify="space-between">
+        <HStack>
+          <StateBadge colorPalette="brand" fontSize="md" variant="solid">
+            <FiDatabase />
+            {data?.total_entries ?? " "}
+          </StateBadge>
+          <Heading marginEnd="auto" size="md">
+            {translate(titleKey ?? "common:assetEvent", { count: data?.total_entries ?? 0 })}
+          </Heading>
+        </HStack>
+        {setOrderBy === undefined ? undefined : (
+          <Select.Root
+            borderWidth={0}
+            collection={assetSortOptions}
+            data-testid="asset-sort-duration"
+            defaultValue={["-timestamp"]}
+            onValueChange={(option) => setOrderBy(option.value[0] as string)}
+            size="sm"
+            width={130}
+          >
+            <Select.Trigger>
+              <Select.ValueText placeholder={translate("dashboard:sortBy.placeholder")} />
+            </Select.Trigger>
+
+            <Select.Content>
+              {assetSortOptions.items.map((option) => (
+                <Select.Item item={option} key={option.value[0]}>
+                  {option.label}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
+        )}
+      </Flex>
+      {showFilters ? <AssetEventsFilter /> : null}
+      <Separator mt={2.5} />
       <DataTable
         cardDef={cardDef(assetId)}
         columns={[]}
         data={data?.asset_events ?? []}
         displayMode="card"
-        filterActions={showFilters ? <AssetEventsFilter /> : undefined}
-        headingExtra={
-          <HStack>
-            <StateBadge colorPalette="brand" fontSize="md" variant="solid">
-              <FiDatabase />
-              {data?.total_entries === undefined ? " " : formatNumber(data.total_entries, i18n.language)}
-            </StateBadge>
-            <Heading marginEnd="auto" size="md">
-              {translate(titleKey ?? "common:assetEvent", { count: data?.total_entries ?? 0 })}
-            </Heading>
-          </HStack>
-        }
-        hideRowCountHeading
         initialState={tableUrlState}
         isLoading={isLoading}
         modelName="common:assetEvent"
         noRowsMessage={translate("noAssetEvents")}
         onStateChange={setTableUrlState}
-        presentationActions={
-          setOrderBy === undefined ? undefined : (
-            <Select.Root
-              borderWidth={0}
-              collection={assetSortOptions}
-              data-testid="asset-sort-duration"
-              defaultValue={["-timestamp"]}
-              onValueChange={(option) => setOrderBy(option.value[0] as string)}
-              size="sm"
-              width={130}
-            >
-              <Select.Trigger>
-                <Select.ValueText placeholder={translate("dashboard:sortBy.placeholder")} />
-              </Select.Trigger>
-
-              <Select.Content>
-                {assetSortOptions.items.map((option) => (
-                  <Select.Item item={option} key={option.value[0]}>
-                    {option.label}
-                  </Select.Item>
-                ))}
-              </Select.Content>
-            </Select.Root>
-          )
-        }
         skeletonCount={5}
         total={data?.total_entries}
       />

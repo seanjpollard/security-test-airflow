@@ -23,7 +23,6 @@ import shlex
 import shutil
 import sys
 import threading
-from collections.abc import Callable
 from pathlib import Path
 from signal import SIGTERM
 from time import sleep
@@ -31,7 +30,7 @@ from time import sleep
 import click
 
 from airflow_breeze.branch_defaults import DEFAULT_AIRFLOW_CONSTRAINTS_BRANCH
-from airflow_breeze.commands.ci_image_commands import build_ci_image_if_needed
+from airflow_breeze.commands.ci_image_commands import rebuild_or_pull_ci_image_if_needed
 from airflow_breeze.commands.common_options import (
     argument_doc_packages,
     option_airflow_extras,
@@ -70,7 +69,6 @@ from airflow_breeze.commands.common_options import (
     option_project_name,
     option_python,
     option_run_db_tests_only,
-    option_sdk,
     option_skip_db_tests,
     option_standalone_dag_processor,
     option_terminal_multiplexer,
@@ -80,6 +78,7 @@ from airflow_breeze.commands.common_options import (
     option_use_airflow_version,
     option_use_uv,
     option_verbose,
+    option_worker_types,
 )
 from airflow_breeze.commands.common_package_installation_options import (
     option_airflow_constraints_location,
@@ -98,21 +97,15 @@ from airflow_breeze.global_constants import (
     ALLOWED_CELERY_BROKERS,
     ALLOWED_CELERY_EXECUTORS,
     ALLOWED_EXECUTORS,
-    ALLOWED_SDKS,
     DEFAULT_ALLOWED_EXECUTOR,
     DEFAULT_CELERY_BROKER,
     DEFAULT_PYTHON_MAJOR_MINOR_VERSION,
     EDGE_EXECUTOR,
     FAB_AUTH_MANAGER,
     GITHUB_REPO_BRANCH_PATTERN,
-    JAVA_SDK,
     MOUNT_ALL,
     START_AIRFLOW_ALLOWED_EXECUTORS,
     START_AIRFLOW_DEFAULT_ALLOWED_EXECUTOR,
-    TYPESCRIPT_SDK,
-    TYPESCRIPT_SDK_NODE_VERSION,
-    get_java_sdk_version,
-    get_ts_sdk_version,
 )
 from airflow_breeze.params.build_ci_params import BuildCiParams
 from airflow_breeze.params.doc_build_params import DocBuildParams
@@ -120,12 +113,11 @@ from airflow_breeze.params.shell_params import ShellParams
 from airflow_breeze.utils.confirm import Answer, user_confirm
 from airflow_breeze.utils.console import console_print
 from airflow_breeze.utils.docker_command_utils import (
+    bring_all_compose_projects_down,
     bring_compose_project_down,
-    bring_compose_projects_down,
     check_docker_resources,
     enter_shell,
     execute_command_in_shell,
-    find_other_worktree_projects,
     fix_ownership_using_docker,
     perform_environment_checks,
 )
@@ -135,9 +127,7 @@ from airflow_breeze.utils.path_utils import (
     COMMON_AI_PLUGIN_PREK_HOOK,
     EDGE_PLUGIN_PREK_HOOK,
     FAB_AUTH_MANAGER_WWW_PREK_HOOK,
-    PYCACHE_VOLUME_NAME,
     cleanup_python_generated_files,
-    get_main_git_dir_for_worktree,
 )
 from airflow_breeze.utils.platforms import get_normalized_platform
 from airflow_breeze.utils.run_utils import (
@@ -334,6 +324,7 @@ option_load_default_connections = click.option(
 @option_force_lowest_dependencies
 @option_forward_credentials
 @option_github_repository
+@option_worker_types
 @option_include_mypy_volume
 @option_install_airflow_with_constraints_default_true
 @option_install_selected_providers
@@ -393,6 +384,7 @@ def shell(
     force_lowest_dependencies: bool,
     forward_credentials: bool,
     github_repository: str,
+    worker_type: tuple[str, ...],
     include_mypy_volume: bool,
     install_selected_providers: str,
     install_airflow_with_constraints: bool,
@@ -469,8 +461,8 @@ def shell(
         force_lowest_dependencies=force_lowest_dependencies,
         forward_credentials=forward_credentials,
         github_repository=github_repository,
+        worker_type=worker_type,
         include_mypy_volume=include_mypy_volume,
-        include_pycache_volume=True,
         install_airflow_with_constraints=install_airflow_with_constraints,
         install_airflow_python_client=install_airflow_python_client,
         install_selected_providers=install_selected_providers,
@@ -510,7 +502,7 @@ def shell(
         warn_image_upgrade_needed=warn_image_upgrade_needed,
     )
     perform_environment_checks(quiet=shell_params.quiet)
-    build_ci_image_if_needed(command_params=shell_params)
+    rebuild_or_pull_ci_image_if_needed(command_params=shell_params)
     result = enter_shell(shell_params=shell_params)
     fix_ownership_using_docker()
     sys.exit(result.returncode)
@@ -566,6 +558,7 @@ option_executor_start_airflow = click.option(
 @option_force_build
 @option_forward_credentials
 @option_github_repository
+@option_worker_types
 @option_installation_distribution_format
 @option_install_selected_providers
 @option_install_airflow_with_constraints_default_true
@@ -616,6 +609,7 @@ def start_airflow(
     force_build: bool,
     forward_credentials: bool,
     github_repository: str,
+    worker_type: tuple[str, ...],
     integration: tuple[str, ...],
     install_selected_providers: str,
     load_default_connections: bool,
@@ -690,6 +684,10 @@ def start_airflow(
 
     console_print(f"[info]Airflow will be using: {executor} to execute the tasks.")
 
+    if worker_type != () and executor != EDGE_EXECUTOR:
+        console_print(f"[error]Worker type {worker_type} requires executor: {EDGE_EXECUTOR}")
+        sys.exit(1)
+
     platform = get_normalized_platform(platform)
     shell_params = ShellParams(
         airflow_constraints_location=airflow_constraints_location,
@@ -715,7 +713,7 @@ def start_airflow(
         force_build=force_build,
         forward_credentials=forward_credentials,
         github_repository=github_repository,
-        include_pycache_volume=True,
+        worker_type=worker_type,
         integration=integration,
         install_selected_providers=install_selected_providers,
         install_airflow_with_constraints=install_airflow_with_constraints,
@@ -742,7 +740,7 @@ def start_airflow(
         use_distributions_from_dist=use_distributions_from_dist,
         use_uv=use_uv,
     )
-    build_ci_image_if_needed(command_params=shell_params)
+    rebuild_or_pull_ci_image_if_needed(command_params=shell_params)
     result = enter_shell(shell_params=shell_params)
     fix_ownership_using_docker()
     if CELERY_INTEGRATION in integration and executor not in ALLOWED_CELERY_EXECUTORS:
@@ -752,240 +750,6 @@ def start_airflow(
         )
 
     sys.exit(result.returncode)
-
-
-def _stage_sdk_docs(*, generated_path: Path, package_name: str, src: Path, version: str) -> None:
-    """Stage a natively-built SDK doc tree for the publish pipeline.
-
-    The destination is replaced rather than merged: the SDK doc generators name pages
-    after the symbols they document, so a renamed or deleted export would otherwise
-    leave an orphaned page behind from an earlier build and publish it.
-
-    The ``stable.txt`` written alongside makes ``breeze release-management publish-docs``
-    treat the package as versioned and place it at ``docs-archive/{package_name}/{version}/``.
-    """
-    package_dir = generated_path / "_build" / "docs" / package_name
-    dst = package_dir / "stable"
-    console_print(f"[info]Staging {package_name} docs: {src} -> {dst}")
-    shutil.rmtree(dst, ignore_errors=True)
-    shutil.copytree(src, dst)
-    (package_dir / "stable.txt").write_text(version + "\n")
-    console_print(f"[success]{package_name} docs staged at {dst}  (version: {version})")
-
-
-def _build_java_sdk_docs(generated_path: Path) -> int:
-    """Run Dokka for the Java SDK and stage its output for the publish pipeline.
-
-    Runs ``./gradlew :sdk:dokkaGeneratePublicationHtml`` inside a container of
-    ``eclipse-temurin:11-jdk`` so no local JDK installation is required. The
-    resulting HTML tree is placed at::
-
-        generated/_build/docs/java-sdk/stable/
-
-    and a ``stable.txt`` file (containing the Java SDK version from
-    ``java-sdk/gradle.properties``) is written alongside it so that
-    ``breeze release-management publish-docs`` places the docs at
-    ``docs-archive/java-sdk/{version}/``.
-    """
-    java_sdk_root = AIRFLOW_ROOT_PATH / "java-sdk"
-    console_print("[info]Building Java SDK Javadoc with Dokka (eclipse-temurin:11-jdk)...")
-    result = run_command(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "--user",
-            f"{os.getuid()}:{os.getgid()}",
-            # Persist the Gradle wrapper distribution and dependency cache between runs.
-            "-e",
-            "GRADLE_USER_HOME=/repo/java-sdk/.gradle",
-            "-v",
-            f"{AIRFLOW_ROOT_PATH}:/repo",
-            "-w",
-            "/repo/java-sdk",
-            "eclipse-temurin:11-jdk",
-            "./gradlew",
-            ":sdk:dokkaGeneratePublicationHtml",
-            "--no-daemon",
-        ],
-        check=False,
-    )
-    if result.returncode != 0:
-        console_print("[error]Dokka build failed.")
-        return result.returncode
-
-    _stage_sdk_docs(
-        generated_path=generated_path,
-        package_name="java-sdk",
-        src=java_sdk_root / "sdk" / "build" / "dokka" / "html",
-        version=get_java_sdk_version(),
-    )
-    return 0
-
-
-def _build_ts_sdk_docs(generated_path: Path) -> int:
-    """Run TypeDoc for the TypeScript SDK and stage its output for the publish pipeline.
-
-    Runs the docs toolchain pinned in ``ts-sdk/docs/package.json`` inside a
-    ``node:{TYPESCRIPT_SDK_NODE_VERSION}`` container so no local Node installation is
-    required. The resulting HTML tree is placed at::
-
-        generated/_build/docs/ts-sdk/stable/
-
-    and a ``stable.txt`` file (containing the version from ``ts-sdk/package.json``) is
-    written alongside it so that ``breeze release-management publish-docs`` places the
-    docs at ``docs-archive/ts-sdk/{version}/``.
-    """
-    ts_sdk_docs_root = AIRFLOW_ROOT_PATH / "ts-sdk" / "docs"
-    console_print(
-        f"[info]Building TypeScript SDK API reference with TypeDoc (node:{TYPESCRIPT_SDK_NODE_VERSION})..."
-    )
-    result = run_command(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "--user",
-            f"{os.getuid()}:{os.getgid()}",
-            # npm needs a writable HOME for its cache; /repo is bind-mounted and writable.
-            "-e",
-            "HOME=/repo/ts-sdk/docs/.npm-home",
-            "-v",
-            f"{AIRFLOW_ROOT_PATH}:/repo",
-            "-w",
-            "/repo/ts-sdk/docs",
-            f"node:{TYPESCRIPT_SDK_NODE_VERSION}-bookworm-slim",
-            "sh",
-            "-c",
-            # `npm ci` keeps the lock file authoritative; `npm test` covers the postbuild
-            # checks; `npm run build` strips the ASF header from the landing page, runs
-            # TypeDoc, then checks the generated HTML is publishable.
-            "npm ci --no-audit --no-fund && npm test && npm run build",
-        ],
-        check=False,
-    )
-    if result.returncode != 0:
-        console_print("[error]TypeScript SDK docs build failed.")
-        return result.returncode
-
-    _stage_sdk_docs(
-        generated_path=generated_path,
-        package_name="ts-sdk",
-        src=ts_sdk_docs_root / "_build" / "html",
-        version=get_ts_sdk_version(),
-    )
-    return 0
-
-
-# Language SDKs whose API reference is produced by the language's own toolchain rather
-# than Sphinx. Keep in sync with ALLOWED_SDKS.
-SDK_DOCS_BUILDERS: dict[str, Callable[..., int]] = {
-    JAVA_SDK: _build_java_sdk_docs,
-    TYPESCRIPT_SDK: _build_ts_sdk_docs,
-}
-
-
-def _build_python_docs(
-    *,
-    generated_path: Path,
-    builder: str,
-    clean_build: bool,
-    clean_inventory_cache: bool,
-    refresh_airflow_inventories: bool,
-    fail_on_missing_third_party_inventories: bool,
-    github_repository: str,
-    include_not_ready_providers: bool,
-    include_removed_providers: bool,
-    include_commits: bool,
-    one_pass_only: bool,
-    package_filter: tuple[str, ...],
-    distributions_list: str,
-    doc_packages: tuple[str, ...],
-    sphinx_airflow_theme_path: str,
-):
-    # Docs are always built on the default Python. The Sphinx configuration mocks third-party
-    # modules, and what that mocking does depends on the interpreter - on 3.12 functools copies
-    # __type_params__, for which a mock returns another mock rather than a tuple, so providers
-    # decorating methods with functools.wraps over a mocked callable fail to import. Letting a
-    # caller pick the interpreter here silently changes what the docs build can document.
-    build_params = BuildCiParams(
-        github_repository=github_repository,
-        python=DEFAULT_PYTHON_MAJOR_MINOR_VERSION,
-        builder=builder,
-    )
-    build_ci_image_if_needed(command_params=build_params)
-    if clean_build:
-        directories_to_clean = ["_build", "_doctrees", "apis"]
-    else:
-        directories_to_clean = ["apis"]
-    for dir_name in directories_to_clean:
-        console_print("Removing all generated dirs.")
-        for directory in generated_path.rglob(dir_name):
-            console_print(f"[info]Removing {directory}")
-            shutil.rmtree(directory, ignore_errors=True)
-    if clean_inventory_cache:
-        inventory_cache_dir = generated_path / "_inventory_cache"
-        if inventory_cache_dir.exists():
-            console_print(f"[info]Removing inventory cache: {inventory_cache_dir}")
-            shutil.rmtree(inventory_cache_dir, ignore_errors=True)
-    if refresh_airflow_inventories and not clean_build:
-        console_print("Removing airflow inventories.")
-        package_globs = ["helm-chart", "docker-stack", "apache-airflow*"]
-        for package_glob in package_globs:
-            for directory in (generated_path / "_inventory_cache").rglob(package_glob):
-                console_print(f"[info]Removing {directory}")
-                shutil.rmtree(directory, ignore_errors=True)
-
-    docs_list_as_tuple: tuple[str, ...] = ()
-    if distributions_list and len(distributions_list):
-        console_print(f"\n[info]Populating provider list from DISTRIBUTIONS_LIST env as {distributions_list}")
-        docs_list_as_tuple = tuple(distributions_list.split(" "))
-    if doc_packages and docs_list_as_tuple:
-        console_print(
-            f"[warning]Both package arguments and --distributions-list / DISTRIBUTIONS_LIST passed. "
-            f"Overriding to {docs_list_as_tuple}"
-        )
-    doc_packages = docs_list_as_tuple or doc_packages
-    doc_builder = DocBuildParams(
-        package_filter=package_filter,
-        one_pass_only=one_pass_only,
-        include_commits=include_commits,
-        fail_on_missing_third_party_inventories=fail_on_missing_third_party_inventories,
-        clean_inventory_cache=clean_inventory_cache,
-        short_doc_packages=expand_all_provider_distributions(
-            short_doc_packages=doc_packages,
-            include_removed=include_removed_providers,
-            include_not_ready=include_not_ready_providers,
-        ),
-    )
-    cmd = "/opt/airflow/scripts/in_container/run_docs_build.sh " + " ".join(
-        shlex.quote(arg) for arg in doc_builder.args_doc_builder
-    )
-    shell_params = ShellParams(
-        github_repository=github_repository,
-        python=DEFAULT_PYTHON_MAJOR_MINOR_VERSION,
-        mount_sources=MOUNT_ALL,
-        sphinx_airflow_theme_path=sphinx_airflow_theme_path,
-    )
-    result = execute_command_in_shell(shell_params, project_name="breeze-docs", command=cmd)
-    fix_ownership_using_docker()
-    sphinx_returncode = result.returncode
-    if sphinx_returncode == 0:
-        console_print(
-            "Run ./docs/start_doc_server.sh for a lighter resource option and view "
-            "the built docs at http://localhost:8000"
-        )
-    return sphinx_returncode
-
-
-def _validate_sphinx_airflow_theme_path(ctx: click.Context, param: click.Parameter, value: str | None):
-    if value and not Path(value, "sphinx_airflow_theme/static/_gen").is_dir():
-        raise click.BadParameter(
-            f"{value} has no sphinx_airflow_theme/static/_gen. It must be the `sphinx_airflow_theme` "
-            "sub-folder of an airflow-site checkout (not the repository root), "
-            "after `./site.sh build-landing-pages && ./site.sh prepare-theme`."
-        )
-    return value
 
 
 @main.command(name="build-docs")
@@ -1013,6 +777,7 @@ def _validate_sphinx_airflow_theme_path(ctx: click.Context, param: click.Paramet
     help="Fail the build if any third-party inventory cannot be downloaded. "
     "By default, missing third-party inventories are warned about but do not fail the build.",
 )
+@click.option("-d", "--docs-only", help="Only build documentation.", is_flag=True)
 @click.option(
     "--include-commits", help="Include commits in the documentation.", is_flag=True, envvar="INCLUDE_COMMITS"
 )
@@ -1041,20 +806,7 @@ def _validate_sphinx_airflow_theme_path(ctx: click.Context, param: click.Paramet
     "building, and document publishing. It is an easier alternative to adding individual packages as"
     " arguments to every command. This overrides the packages passed as arguments.",
 )
-@option_sdk
-@click.option(
-    "--sdk-docs-only",
-    is_flag=True,
-    help="Only build SDK docs. Requires at least one --sdk value to be useful.",
-)
-@click.option(
-    "--sphinx-airflow-theme-path",
-    type=click.Path(exists=True, file_okay=False, resolve_path=True),
-    callback=_validate_sphinx_airflow_theme_path,
-    help="Build the docs with the `sphinx_airflow_theme` sub-folder of an airflow-site checkout "
-    "(e.g. `../airflow-site/sphinx_airflow_theme`, not the repository root), after "
-    "`./site.sh build-landing-pages && ./site.sh prepare-theme`, instead of the published theme.",
-)
+@click.option("-s", "--spellcheck-only", help="Only run spell checking.", is_flag=True)
 @option_verbose
 @option_answer
 @argument_doc_packages
@@ -1064,6 +816,7 @@ def build_docs(
     clean_inventory_cache: bool,
     refresh_airflow_inventories: bool,
     fail_on_missing_third_party_inventories: bool,
+    docs_only: bool,
     github_repository: str,
     include_not_ready_providers: bool,
     include_removed_providers: bool,
@@ -1071,65 +824,102 @@ def build_docs(
     one_pass_only: bool,
     package_filter: tuple[str, ...],
     distributions_list: str,
-    sdk: tuple[str, ...],
-    sdk_docs_only: bool,
-    sphinx_airflow_theme_path: str | None,
+    spellcheck_only: bool,
     doc_packages: tuple[str, ...],
 ):
     """
     Build documents.
     """
-    if sdk_docs_only and sphinx_airflow_theme_path:
-        raise click.UsageError(
-            "--sphinx-airflow-theme-path cannot be used with --sdk-docs-only: "
-            "the SDK docs do not use the Sphinx theme."
-        )
     perform_environment_checks()
     fix_ownership_using_docker()
     cleanup_python_generated_files()
+    build_params = BuildCiParams(
+        github_repository=github_repository,
+        python=DEFAULT_PYTHON_MAJOR_MINOR_VERSION,
+        builder=builder,
+    )
+    rebuild_or_pull_ci_image_if_needed(command_params=build_params)
+    if clean_build:
+        directories_to_clean = ["_build", "_doctrees", "apis"]
+    else:
+        directories_to_clean = ["apis"]
     generated_path = AIRFLOW_ROOT_PATH / "generated"
+    for dir_name in directories_to_clean:
+        console_print("Removing all generated dirs.")
+        for directory in generated_path.rglob(dir_name):
+            console_print(f"[info]Removing {directory}")
+            shutil.rmtree(directory, ignore_errors=True)
+    if clean_inventory_cache:
+        inventory_cache_dir = generated_path / "_inventory_cache"
+        if inventory_cache_dir.exists():
+            console_print(f"[info]Removing inventory cache: {inventory_cache_dir}")
+            shutil.rmtree(inventory_cache_dir, ignore_errors=True)
+    if refresh_airflow_inventories and not clean_build:
+        console_print("Removing airflow inventories.")
+        package_globs = ["helm-chart", "docker-stack", "apache-airflow*"]
+        for package_glob in package_globs:
+            for directory in (generated_path / "_inventory_cache").rglob(package_glob):
+                console_print(f"[info]Removing {directory}")
+                shutil.rmtree(directory, ignore_errors=True)
 
-    returncode = 0
-    if not sdk_docs_only:
-        returncode = _build_python_docs(
-            generated_path=generated_path,
-            builder=builder,
-            clean_build=clean_build,
-            clean_inventory_cache=clean_inventory_cache,
-            refresh_airflow_inventories=refresh_airflow_inventories,
-            fail_on_missing_third_party_inventories=fail_on_missing_third_party_inventories,
-            github_repository=github_repository,
-            include_not_ready_providers=include_not_ready_providers,
-            include_removed_providers=include_removed_providers,
-            include_commits=include_commits,
-            one_pass_only=one_pass_only,
-            package_filter=package_filter,
-            distributions_list=distributions_list,
-            doc_packages=doc_packages,
-            sphinx_airflow_theme_path=sphinx_airflow_theme_path or "",
+    docs_list_as_tuple: tuple[str, ...] = ()
+    if distributions_list and len(distributions_list):
+        console_print(f"\n[info]Populating provider list from DISTRIBUTIONS_LIST env as {distributions_list}")
+        # Override doc_packages with values from DISTRIBUTIONS_LIST
+        docs_list_as_tuple = tuple(distributions_list.split(" "))
+    if doc_packages and docs_list_as_tuple:
+        console_print(
+            f"[warning]Both package arguments and --distributions-list / DISTRIBUTIONS_LIST passed. "
+            f"Overriding to {docs_list_as_tuple}"
         )
-    # Every requested SDK is built even if an earlier one failed, so a single run reports
-    # all the broken toolchains rather than only the first.
-    for sdk_name in ALLOWED_SDKS:
-        if sdk_name in sdk:
-            sdk_returncode = SDK_DOCS_BUILDERS[sdk_name](generated_path=generated_path)
-            returncode = returncode or sdk_returncode
-
-    sys.exit(returncode)
+    doc_packages = docs_list_as_tuple or doc_packages
+    doc_builder = DocBuildParams(
+        package_filter=package_filter,
+        docs_only=docs_only,
+        spellcheck_only=spellcheck_only,
+        one_pass_only=one_pass_only,
+        include_commits=include_commits,
+        fail_on_missing_third_party_inventories=fail_on_missing_third_party_inventories,
+        clean_inventory_cache=clean_inventory_cache,
+        short_doc_packages=expand_all_provider_distributions(
+            short_doc_packages=doc_packages,
+            include_removed=include_removed_providers,
+            include_not_ready=include_not_ready_providers,
+        ),
+    )
+    cmd = "/opt/airflow/scripts/in_container/run_docs_build.sh " + " ".join(
+        [shlex.quote(arg) for arg in doc_builder.args_doc_builder]
+    )
+    shell_params = ShellParams(
+        github_repository=github_repository,
+        python=DEFAULT_PYTHON_MAJOR_MINOR_VERSION,
+        mount_sources=MOUNT_ALL,
+    )
+    result = execute_command_in_shell(shell_params, project_name="docs", command=cmd)
+    fix_ownership_using_docker()
+    if result.returncode == 0:
+        console_print(
+            "Run ./docs/start_doc_server.sh for a lighter resource option and view "
+            "the built docs at http://localhost:8000"
+        )
+    sys.exit(result.returncode)
 
 
 @main.command(
     name="down",
     help=(
-        "Stop Breeze projects with no worktree, in this checkout, or belonging to deleted worktrees. "
-        "Removes containers, networks and volumes without changing local files or images. "
-        "Use --all-worktrees to include other checkouts, or --project-name for one exact project."
+        "Stop every docker compose project breeze knows about. Discovers running "
+        "projects via the `com.docker.compose.project` label and brings each one "
+        "down with `--remove-orphans` (and `--volumes` unless `--preserve-volumes` "
+        "is passed). Covers `breeze shell`, `breeze testing`, `breeze build-docs`, "
+        "`breeze db`, release-management, registry, and prek-hook compose projects "
+        "in a single command."
     ),
 )
 @click.option(
     "-p",
     "--preserve-volumes",
-    help="Keep all volumes, including those belonging to deleted worktrees.",
+    help="Skip removing database volumes when stopping Breeze.",
     is_flag=True,
 )
 @click.option(
@@ -1139,27 +929,25 @@ def build_docs(
     is_flag=True,
 )
 @click.option(
-    "--cleanup-pycache",
-    help="Additionally cleanup the Python bytecode cache volume used by Breeze shells.",
-    is_flag=True,
-)
-@click.option(
     "-b",
     "--cleanup-build-cache",
     help="Additionally cleanup Build (pip/uv) cache.",
     is_flag=True,
 )
 @click.option(
-    "--all-worktrees",
+    "--all-projects",
     help=(
-        "Remove Breeze-owned resources across all checkouts, including leftover volumes. "
-        "Unrelated Docker projects are left alone."
+        "Also bring down docker compose projects whose names do not match any known "
+        "breeze prefix. Off by default to avoid touching unrelated projects on the host."
     ),
     is_flag=True,
 )
 @click.option(
     "--project-name",
-    help=("Restrict removal to this exact Compose project, without cleaning up other stale worktrees."),
+    help=(
+        "Restrict the cleanup to a single docker compose project name and skip "
+        "discovery. Useful in CI steps that want to bring exactly one project down."
+    ),
     default=None,
 )
 @option_verbose
@@ -1167,39 +955,25 @@ def build_docs(
 def down(
     preserve_volumes: bool,
     cleanup_mypy_cache: bool,
-    cleanup_pycache: bool,
     cleanup_build_cache: bool,
-    all_worktrees: bool,
+    all_projects: bool,
     project_name: str | None,
 ):
-    if all_worktrees and project_name:
-        raise click.UsageError("--all-worktrees and --project-name cannot be used together.")
-    perform_environment_checks(cleanup_stale_worktrees=False)
-    # Resources keep this worktree's label when isolation is disabled later, so select them either way.
-    current_worktree = str(AIRFLOW_ROOT_PATH.resolve()) if get_main_git_dir_for_worktree() else ""
-    brought_down = bring_compose_projects_down(
+    perform_environment_checks()
+    brought_down, skipped = bring_all_compose_projects_down(
         preserve_volumes=preserve_volumes,
-        all_worktrees=all_worktrees,
+        include_unknown=all_projects,
         only_project=project_name,
-        current_worktree=current_worktree,
     )
-    if brought_down:
-        action = "Would remove" if get_dry_run() else "Removed"
+    if not brought_down and not project_name:
+        console_print("[info]No running breeze-managed docker compose projects found.[/]")
+    elif brought_down:
+        console_print(f"[success]Brought down {len(brought_down)} compose project(s): {brought_down}[/]")
+    if skipped:
         console_print(
-            f"[success]{action} resources from {len(brought_down)} compose project(s): {brought_down}[/]"
+            f"[warning]Left {len(skipped)} unrelated compose project(s) running: {skipped}\n"
+            f"Use `breeze down --all-projects` to also bring those down.[/]"
         )
-    else:
-        console_print("[info]No matching Docker resources to remove.[/]")
-    if not all_worktrees and not project_name:
-        other_worktrees = find_other_worktree_projects(current_worktree)
-        if other_worktrees:
-            console_print("[warning]Other worktrees still have Breeze containers or volumes:[/]")
-            for other_worktree, projects in other_worktrees.items():
-                console_print(f"[warning]  {other_worktree}: {', '.join(projects)}[/]")
-            console_print(
-                "[warning]Run `breeze down` in those worktrees, or `breeze down --all-worktrees` "
-                "to remove them all.[/]"
-            )
     if cleanup_mypy_cache:
         command_to_execute = ["docker", "volume", "rm", "--force", "mypy-cache-volume"]
         run_command(command_to_execute)
@@ -1212,8 +986,6 @@ def down(
             if hook_dir.exists():
                 console_print(f"\n[info]Removing dedicated mypy {subdir}: {hook_dir}\n")
                 shutil.rmtree(hook_dir)
-    if cleanup_pycache:
-        run_command(["docker", "volume", "rm", "--force", PYCACHE_VOLUME_NAME])
     if cleanup_build_cache:
         command_to_execute = ["docker", "volume", "rm", "--force", "airflow-cache-volume"]
         run_command(command_to_execute)
@@ -1317,13 +1089,13 @@ def autogenerate(
     build_params = BuildCiParams(
         github_repository=github_repository, python=DEFAULT_PYTHON_MAJOR_MINOR_VERSION, builder=builder
     )
-    build_ci_image_if_needed(command_params=build_params)
+    rebuild_or_pull_ci_image_if_needed(command_params=build_params)
     shell_params = ShellParams(
         github_repository=github_repository,
         python=DEFAULT_PYTHON_MAJOR_MINOR_VERSION,
     )
     cmd = f"/opt/airflow/scripts/in_container/run_generate_migration.sh '{message}'"
-    execute_command_in_shell(shell_params, project_name="breeze-db", command=cmd)
+    execute_command_in_shell(shell_params, project_name="db", command=cmd)
     fix_ownership_using_docker()
 
 
@@ -1344,7 +1116,9 @@ def doctor(ctx):
     if not get_dry_run() and given_answer == Answer.YES:
         cleanup_python_generated_files()
 
-    bring_compose_projects_down(all_worktrees=True)
+    # Doctor is the heal-everything command, so it sweeps EVERY compose project
+    # on the host (not only the known-prefix ones that `breeze down` defaults to).
+    bring_all_compose_projects_down(preserve_volumes=False, include_unknown=True)
 
     given_answer = user_confirm("Are you sure with the removal of mypy cache and build cache dir?")
     if given_answer == Answer.YES:
@@ -1392,7 +1166,6 @@ def doctor(ctx):
 @option_forward_credentials
 @option_forward_ports
 @option_github_repository
-@option_include_mypy_volume
 @option_mysql_version
 @option_platform_single
 @option_postgres_version
@@ -1413,7 +1186,6 @@ def run(
     forward_credentials: bool,
     forward_ports: bool,
     github_repository: str,
-    include_mypy_volume: bool,
     mysql_version: str,
     platform: str | None,
     postgres_version: str,
@@ -1448,7 +1220,7 @@ def run(
     """
     import uuid
 
-    from airflow_breeze.commands.ci_image_commands import build_ci_image_if_needed
+    from airflow_breeze.commands.ci_image_commands import rebuild_or_pull_ci_image_if_needed
     from airflow_breeze.params.shell_params import ShellParams
     from airflow_breeze.utils.ci_group import ci_group
     from airflow_breeze.utils.docker_command_utils import (
@@ -1459,7 +1231,7 @@ def run(
     from airflow_breeze.utils.platforms import get_normalized_platform
 
     # Generate a unique project name to avoid conflicts with other running instances
-    unique_project_name = f"breeze-{project_name}-run-{uuid.uuid4().hex[:8]}"
+    unique_project_name = f"{project_name}-run-{uuid.uuid4().hex[:8]}"
 
     # Build the full command string with proper escaping
     import shlex
@@ -1481,7 +1253,6 @@ def run(
         force_build=force_build,
         forward_credentials=forward_credentials,
         github_repository=github_repository,
-        include_mypy_volume=include_mypy_volume,
         mysql_version=mysql_version,
         platform=platform,
         postgres_version=postgres_version,
@@ -1501,7 +1272,8 @@ def run(
         console_print(f"[info]Running command in Breeze: {full_command}[/]")
         console_print(f"[info]Using project name: {unique_project_name}[/]")
 
-    build_ci_image_if_needed(command_params=shell_params)
+    # Build or pull the CI image if needed
+    rebuild_or_pull_ci_image_if_needed(command_params=shell_params)
 
     # Execute the command in the shell, cleaning up Docker resources afterward
     try:

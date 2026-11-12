@@ -36,10 +36,10 @@ from airflow.api_fastapi.common.types import Mimetype
 from airflow.api_fastapi.core_api.datamodels.log import ExternalLogUrlResponse, TaskInstancesLogResponse
 from airflow.api_fastapi.core_api.openapi.exceptions import create_openapi_http_exception_doc
 from airflow.api_fastapi.core_api.security import DagAccessEntity, requires_access_dag
-from airflow.api_fastapi.core_api.services.public.task_coordinates import TaskScopeDep
 from airflow.configuration import conf
 from airflow.exceptions import TaskNotFound
 from airflow.models import TaskInstance, Trigger
+from airflow.models.taskinstancehistory import TaskInstanceHistory
 from airflow.utils.log.log_reader import TaskLogReader
 
 _NDJSON_BATCH_SIZE = conf.getint("api", "log_stream_buffer_size")
@@ -79,9 +79,7 @@ def _buffered_ndjson_stream(
 @task_instances_log_router.get(
     "/{task_id}/logs/{try_number}",
     responses={
-        **create_openapi_http_exception_doc(
-            [status.HTTP_400_BAD_REQUEST, status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT]
-        ),
+        **create_openapi_http_exception_doc([status.HTTP_404_NOT_FOUND]),
         status.HTTP_200_OK: {
             "description": "Successful Response",
             "content": ndjson_example_response_for_get_log,
@@ -100,8 +98,8 @@ def get_log(
     request: Request,
     dag_bag: DagBagDep,
     session: SessionDep,
-    scope: TaskScopeDep,
     full_content: bool = False,
+    map_index: int = -1,
     token: str | None = None,
 ):
     """Get logs for a specific task instance."""
@@ -131,25 +129,34 @@ def get_log(
             TaskInstance.task_id == task_id,
             TaskInstance.dag_id == dag_id,
             TaskInstance.run_id == dag_run_id,
-            TaskInstance.region_index == scope.region_index,
-            TaskInstance.region_id == scope.region_id,
+            TaskInstance.map_index == map_index,
             TaskInstance.try_number == try_number,
         )
         .join(TaskInstance.dag_run)
         .options(joinedload(TaskInstance.trigger).joinedload(Trigger.triggerer_job))
         .options(joinedload(TaskInstance.dag_model))
-        .execution_options(include_all_attempts=True)
     )
     ti = session.scalar(query)
+    if ti is None:
+        query = (
+            select(TaskInstanceHistory)
+            .where(
+                TaskInstanceHistory.task_id == task_id,
+                TaskInstanceHistory.dag_id == dag_id,
+                TaskInstanceHistory.run_id == dag_run_id,
+                TaskInstanceHistory.map_index == map_index,
+                TaskInstanceHistory.try_number == try_number,
+            )
+            .options(joinedload(TaskInstanceHistory.dag_run))
+            # we need to joinedload the dag_run, since FileTaskHandler._render_filename needs ti.dag_run
+        )
+        ti = session.scalar(query)
+
     if ti is None:
         metadata["end_of_log"] = True
         raise HTTPException(status.HTTP_404_NOT_FOUND, "TaskInstance not found")
 
-    dag = (
-        dag_bag.get_dag(ti.dag_version_id, session=session)
-        if ti.dag_version_id
-        else dag_bag.get_dag_for_run(ti.dag_run, session=session)
-    )
+    dag = dag_bag.get_dag_for_run(ti.dag_run, session=session)
     if dag:
         with contextlib.suppress(TaskNotFound):
             ti.task = dag.get_task(ti.task_id)
@@ -180,9 +187,7 @@ def get_log(
 
 @task_instances_log_router.get(
     "/{task_id}/externalLogUrl/{try_number}",
-    responses=create_openapi_http_exception_doc(
-        [status.HTTP_400_BAD_REQUEST, status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT]
-    ),
+    responses=create_openapi_http_exception_doc([status.HTTP_400_BAD_REQUEST, status.HTTP_404_NOT_FOUND]),
     dependencies=[Depends(requires_access_dag("GET", DagAccessEntity.TASK_LOGS))],
 )
 def get_external_log_url(
@@ -191,7 +196,7 @@ def get_external_log_url(
     task_id: str,
     try_number: PositiveInt,
     session: SessionDep,
-    scope: TaskScopeDep,
+    map_index: int = -1,
 ) -> ExternalLogUrlResponse:
     """Get external log URL for a specific task instance."""
     task_log_reader = TaskLogReader()
@@ -206,12 +211,9 @@ def get_external_log_url(
             TaskInstance.task_id == task_id,
             TaskInstance.dag_id == dag_id,
             TaskInstance.run_id == dag_run_id,
-            TaskInstance.region_index == scope.region_index,
-            TaskInstance.region_id == scope.region_id,
-            TaskInstance.try_number == try_number,
+            TaskInstance.map_index == map_index,
         )
         .options(joinedload(TaskInstance.dag_model))
-        .execution_options(include_all_attempts=True)
     )
     ti = session.scalar(query)
 

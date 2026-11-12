@@ -17,30 +17,26 @@
 from __future__ import annotations
 
 import logging
-import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from inspect import signature
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 import uuid6
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, Uuid, and_, func, select, text
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, Uuid, and_, func, inspect, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from airflow._shared.observability.metrics import stats
 from airflow._shared.timezones import timezone
-from airflow.configuration import conf
-from airflow.exceptions import RemovedInAirflow4Warning
 from airflow.models.base import Base
 from airflow.models.callback import (
     Callback,
     ExecutorCallback,
     TriggererCallback,
 )
-from airflow.utils.helpers import prune_dict
 from airflow.utils.log.logging_mixin import LoggingMixin
 from airflow.utils.session import provide_session
 from airflow.utils.sqlalchemy import UtcDateTime, get_dialect_name
@@ -57,43 +53,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 CALLBACK_METRICS_PREFIX = "deadline_alerts"
-
-# Must be in sync with the identically named constants in airflow.sdk.definitions.deadline
-EVALUATION_TIMING_FIELD = "evaluation_timing"
-DAGRUN_CREATED_TIMING = "DAGRUN_CREATED"
-DAGRUN_QUEUED_TIMING = "DAGRUN_QUEUED"
-
-
-class DeadlineDagRunProtocol(Protocol):
-    """The Dag run interface deadline references are evaluated against."""
-
-    dag_id: str
-    logical_date: datetime | None
-    queued_at: datetime | None
-
-
-def _get_evaluation_kwargs(reference: Any, evaluator: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Return the evaluation arguments accepted by a deadline reference."""
-    required_kwargs: set[str] | None = getattr(reference, "required_kwargs", None)
-    if required_kwargs is not None:
-        warnings.warn(
-            "required_kwargs is deprecated. Declare the keyword-only parameters your "
-            "_evaluate_with() implementation needs instead.",
-            RemovedInAirflow4Warning,
-            stacklevel=3,
-        )
-        kwargs = {key: value for key, value in kwargs.items() if key in required_kwargs}
-        if missing_kwargs := required_kwargs - kwargs.keys():
-            raise ValueError(
-                f"{reference.__class__.__name__} is missing required parameters: {', '.join(missing_kwargs)}"
-            )
-        return kwargs
-
-    parameters = signature(evaluator).parameters
-    if any(param.kind is param.VAR_KEYWORD for param in parameters.values()):
-        return kwargs
-
-    return {key: value for key, value in kwargs.items() if key in parameters}
 
 
 class classproperty:
@@ -170,7 +129,6 @@ class Deadline(Base):
         dagrun_id: int,
         deadline_alert_id: UUID | None,
         dag_id: str | None = None,
-        bundle_name: str | None = None,
     ):
         super().__init__()
         self.deadline_time = deadline_time
@@ -179,17 +137,14 @@ class Deadline(Base):
         self.callback = Callback.create_from_sdk_def(
             callback_def=callback, prefix=CALLBACK_METRICS_PREFIX, dag_id=dag_id
         )
-        self.callback.bundle_name = bundle_name
         self.deadline_alert_id = deadline_alert_id
 
     def __repr__(self):
         def _determine_resource() -> tuple[str, str]:
             """Determine the type of resource based on which values are present."""
             if self.dagrun_id:
-                # Guard the relationship: the FK can be set while ``dagrun`` resolves to None (e.g.
-                # after a cascade delete). __repr__ must not raise, so fall back to the id-only form.
-                dag_id = self.dagrun.dag_id if self.dagrun is not None else "<unknown>"
-                return "DagRun", f"Dag: {dag_id} Run: {self.dagrun_id}"
+                # The deadline is for a Dag run:
+                return "DagRun", f"Dag: {self.dagrun.dag_id} Run: {self.dagrun_id}"
 
             return "Unknown", ""
 
@@ -216,7 +171,6 @@ class Deadline(Base):
         :param session: Session to use.
         """
         from airflow.models import DagRun  # Avoids circular import
-        from airflow.models.dag import DagModel
 
         # Assemble the filter conditions.
         filter_conditions = [column == value for column, value in conditions.items()]
@@ -224,10 +178,9 @@ class Deadline(Base):
             return 0
 
         try:
-            # Exclude deadlines already marked ``missed``: the scheduler owns their (queued)
-            # callbacks, so prune must never cascade-delete them.
+            # Get deadlines which match the provided conditions and their associated DagRuns.
             deadline_dagrun_pairs = session.execute(
-                select(Deadline, DagRun).join(DagRun).where(and_(*filter_conditions)).where(~Deadline.missed)
+                select(Deadline, DagRun).join(DagRun).where(and_(*filter_conditions))
             ).all()
 
         except AttributeError as e:
@@ -244,16 +197,9 @@ class Deadline(Base):
             if dagrun.end_date is not None and dagrun.end_date <= deadline.deadline_time:
                 # If the DagRun finished before the Deadline:
                 session.delete(deadline)
-                team_name = (
-                    DagModel.get_team_name(dagrun.dag_id, session=session)
-                    if conf.getboolean("core", "multi_team")
-                    else None
-                )
                 stats.incr(
                     "deadline_alerts.deadline_not_missed",
-                    tags=prune_dict(
-                        {"dag_id": dagrun.dag_id, "dagrun_id": dagrun.run_id, "team_name": team_name}
-                    ),
+                    tags={"dag_id": dagrun.dag_id, "dagrun_id": dagrun.run_id},
                 )
                 deleted_count += 1
                 dagruns_to_refresh.add(dagrun)
@@ -269,7 +215,6 @@ class Deadline(Base):
 
     def handle_miss(self, session: Session):
         """Handle a missed deadline by queueing the callback."""
-        from airflow.models.dag import DagModel  # Avoids circular import
 
         def get_simple_context():
             from airflow.api_fastapi.core_api.datamodels.dag_run import DAGRunResponse
@@ -284,52 +229,30 @@ class Deadline(Base):
 
             return {
                 "dag_run": DAGRunResponse.model_validate(dagrun).model_dump(mode="json"),
-                "deadline": {"id": str(self.id), "deadline_time": self.deadline_time},
+                "deadline": {"id": self.id, "deadline_time": self.deadline_time},
             }
 
-        def callback_data_with_context():
-            data = self.callback.data.copy()
-            kwargs = dict(data.get("kwargs") or {})
-            kwargs["context"] = get_simple_context()
-            data["kwargs"] = kwargs
-            return data
-
-        callback_failed = False
         if isinstance(self.callback, TriggererCallback):
-            from airflow.api_fastapi.core_api.datamodels.common import find_reserved_keys
+            # Update the callback with context before queuing
+            if "kwargs" not in self.callback.data:
+                self.callback.data["kwargs"] = {}
+            self.callback.data["kwargs"] = (self.callback.data.get("kwargs") or {}) | {
+                "context": get_simple_context()
+            }
 
-            data = callback_data_with_context()
-            # The triggerer decodes the context with full serde, which rebuilds a value in either
-            # encoding as an object, and strict serialize raises on the current one. Fail the
-            # callback instead of queueing it: raising here would abort the scheduler loop, and the
-            # deadline would be picked up and raise again on every restart.
-            if found := find_reserved_keys(data["kwargs"]["context"], root="context"):
-                _, keys = found
-                logger.error(
-                    "Not queueing the callback of deadline %s for Dag %s, run %s: its context holds "
-                    "reserved serialization keys %s",
-                    self.id,
-                    self.dagrun.dag_id,
-                    self.dagrun.run_id,
-                    ", ".join(keys),
-                )
-                self.callback.state = CallbackState.FAILED
-                self.callback.output = (
-                    f"Not queued: the callback context holds reserved serialization keys {', '.join(keys)}"
-                )
-                callback_failed = True
-            else:
-                self.callback.data = data
-                self.callback.queue(session=session)
+            self.callback.queue()
             session.add(self.callback)
             session.flush()
 
         elif isinstance(self.callback, ExecutorCallback):
-            data = callback_data_with_context()
-            data["deadline_id"] = str(self.id)
-            data["dag_run_id"] = str(self.dagrun.id)
-            data["dag_id"] = self.dagrun.dag_id
-            self.callback.data = data
+            if "kwargs" not in self.callback.data:
+                self.callback.data["kwargs"] = {}
+            self.callback.data["kwargs"] = (self.callback.data.get("kwargs") or {}) | {
+                "context": get_simple_context()
+            }
+            self.callback.data["deadline_id"] = str(self.id)
+            self.callback.data["dag_run_id"] = str(self.dagrun.id)
+            self.callback.data["dag_id"] = self.dagrun.dag_id
 
             self.callback.state = CallbackState.PENDING
             session.add(self.callback)
@@ -340,24 +263,10 @@ class Deadline(Base):
 
         self.missed = True
         session.add(self)
-
-        team_name = (
-            DagModel.get_team_name(self.dagrun.dag_id, session=session)
-            if conf.getboolean("core", "multi_team")
-            else None
-        )
         stats.incr(
             "deadline_alerts.deadline_missed",
-            tags=prune_dict(
-                {"dag_id": self.dagrun.dag_id, "dagrun_id": self.dagrun.run_id, "team_name": team_name}
-            ),
+            tags={"dag_id": self.dagrun.dag_id, "dagrun_id": self.dagrun.run_id},
         )
-        if callback_failed:
-            stats.incr(
-                **self.callback.get_metric_info(
-                    CallbackState.FAILED, self.callback.output, team_name=team_name
-                )
-            )
 
 
 class ReferenceModels:
@@ -391,20 +300,34 @@ class ReferenceModels:
     class BaseDeadlineReference(LoggingMixin, ABC):
         """Base class for all Deadline implementations."""
 
-        evaluation_timing: str = DAGRUN_CREATED_TIMING
+        # Set of required kwargs - subclasses should override this.
+        required_kwargs: set[str] = set()
 
         @classproperty
         def reference_name(cls: Any) -> str:
             return cls.__name__
 
         def evaluate_with(self, *, session: Session, interval: timedelta, **kwargs: Any) -> datetime | None:
-            """Evaluate this deadline with the supplied context."""
-            evaluation_kwargs = _get_evaluation_kwargs(self, self._evaluate_with, kwargs)
-            base_time = self._evaluate_with(session=session, **evaluation_kwargs)
+            """Validate the provided kwargs and evaluate this deadline with the given conditions."""
+            filtered_kwargs = {k: v for k, v in kwargs.items() if k in self.required_kwargs}
+
+            if missing_kwargs := self.required_kwargs - filtered_kwargs.keys():
+                raise ValueError(
+                    f"{self.__class__.__name__} is missing required parameters: {', '.join(missing_kwargs)}"
+                )
+
+            if extra_kwargs := kwargs.keys() - filtered_kwargs.keys():
+                self.log.debug(
+                    "%s ignoring unexpected parameters: %s",
+                    self.reference_name,
+                    ", ".join(extra_kwargs),
+                )
+
+            base_time = self._evaluate_with(session=session, **filtered_kwargs)
             return base_time + interval if base_time is not None else None
 
         @abstractmethod
-        def _evaluate_with(self, *, session: Session, dagrun: DeadlineDagRunProtocol) -> datetime | None:
+        def _evaluate_with(self, *, session: Session, **kwargs: Any) -> datetime | None:
             """Must be implemented by subclasses to perform the actual evaluation."""
             raise NotImplementedError
 
@@ -438,7 +361,7 @@ class ReferenceModels:
 
         _datetime: datetime
 
-        def _evaluate_with(self, *, session: Session, **kwargs) -> datetime | None:
+        def _evaluate_with(self, *, session: Session, **kwargs: Any) -> datetime | None:
             return self._datetime
 
         def serialize_reference(self) -> dict:
@@ -454,16 +377,23 @@ class ReferenceModels:
     class DagRunLogicalDateDeadline(BaseDeadlineReference):
         """A deadline that returns a DagRun's logical date."""
 
-        def _evaluate_with(self, *, session: Session, dagrun: DeadlineDagRunProtocol) -> datetime | None:
-            return dagrun.logical_date
+        required_kwargs = {"dag_id", "run_id"}
+
+        def _evaluate_with(self, *, session: Session, **kwargs: Any) -> datetime | None:
+            from airflow.models import DagRun
+
+            return _fetch_from_db(DagRun.logical_date, session=session, **kwargs)
 
     class DagRunQueuedAtDeadline(BaseDeadlineReference):
         """A deadline that returns when a DagRun was queued."""
 
-        evaluation_timing: str = DAGRUN_QUEUED_TIMING
+        required_kwargs = {"dag_id", "run_id"}
 
-        def _evaluate_with(self, *, session: Session, dagrun: DeadlineDagRunProtocol) -> datetime | None:
-            return dagrun.queued_at
+        @provide_session
+        def _evaluate_with(self, *, session: Session, **kwargs: Any) -> datetime | None:
+            from airflow.models import DagRun
+
+            return _fetch_from_db(DagRun.queued_at, session=session, **kwargs)
 
     @dataclass
     class AverageRuntimeDeadline(BaseDeadlineReference):
@@ -472,6 +402,7 @@ class ReferenceModels:
         DEFAULT_LIMIT = 10
         max_runs: int
         min_runs: int | None = None
+        required_kwargs = {"dag_id"}
 
         def __post_init__(self):
             if self.min_runs is None:
@@ -480,10 +411,10 @@ class ReferenceModels:
                 raise ValueError("min_runs must be at least 1")
 
         @provide_session
-        def _evaluate_with(self, *, session: Session, dagrun: DeadlineDagRunProtocol) -> datetime | None:
+        def _evaluate_with(self, *, session: Session, **kwargs: Any) -> datetime | None:
             from airflow.models import DagRun
 
-            dag_id = dagrun.dag_id
+            dag_id = kwargs["dag_id"]
 
             # Get database dialect to use appropriate time difference calculation
             dialect = get_dialect_name(session)
@@ -556,3 +487,54 @@ class ReferenceModels:
 
 
 DeadlineReferenceType = ReferenceModels.BaseDeadlineReference
+
+
+@provide_session
+def _fetch_from_db(model_reference: Mapped, session=None, **conditions) -> datetime | None:
+    """
+    Fetch a datetime value from the database using the provided model reference and filtering conditions.
+
+    For example, to fetch a TaskInstance's start_date:
+        _fetch_from_db(
+            TaskInstance.start_date, dag_id='example_dag', task_id='example_task', run_id='example_run'
+        )
+
+    This generates SQL equivalent to:
+        SELECT start_date
+        FROM task_instance
+        WHERE dag_id = 'example_dag'
+            AND task_id = 'example_task'
+            AND run_id = 'example_run'
+
+    :param model_reference: SQLAlchemy Column to select (e.g., DagRun.logical_date, TaskInstance.start_date)
+    :param conditions: Filtering conditions applied as equality comparisons in the WHERE clause.
+                       Multiple conditions are combined with AND.
+    :param session: SQLAlchemy session (auto-provided by decorator)
+    """
+    query = select(model_reference)
+
+    for key, value in conditions.items():
+        inspected = inspect(model_reference)
+        if inspected is not None:
+            query = query.where(getattr(inspected.class_, key) == value)
+
+    compiled_query = query.compile(compile_kwargs={"literal_binds": True})
+    pretty_query = "\n    ".join(str(compiled_query).splitlines())
+    logger.debug(
+        "Executing query:\n    %r\nAs SQL:\n    %s",
+        query,
+        pretty_query,
+    )
+
+    try:
+        result = session.scalar(query)
+    except SQLAlchemyError:
+        logger.exception("Database query failed.")
+        raise
+
+    if result is None:
+        message = f"No matching record found in the database for query:\n    {pretty_query}"
+        logger.error(message)
+        raise ValueError(message)
+
+    return result

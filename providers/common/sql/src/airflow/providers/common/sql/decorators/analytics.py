@@ -117,9 +117,7 @@ class _AnalyticsDecoratedOperator(DecoratedOperator, AnalyticsOperator):
         # AnalyticsOperator expects queries as a list of strings
         self.queries = [result] if isinstance(result, str) else result
 
-        # Render only the queries the callable returned. The other template fields were already
-        # rendered before execute().
-        self.queries = self.render_template(self.queries, context)
+        self.render_template_fields(context)
 
         return AnalyticsOperator.execute(self, context)
 

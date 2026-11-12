@@ -26,7 +26,7 @@ import re
 from collections.abc import Sequence
 from functools import cached_property
 from tempfile import NamedTemporaryFile
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
+from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlparse
 
 from databricks.sql.utils import ParamEscaper
@@ -38,30 +38,12 @@ from airflow.providers.common.compat.sdk import (
 )
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 from airflow.providers.databricks.hooks.databricks_sql import DatabricksSqlHook
-from airflow.providers.databricks.utils.query_tags import build_query_tags
 
 if TYPE_CHECKING:
     from airflow.providers.common.compat.sdk import Context
-    from airflow.providers.databricks.assets.databricks import UnityTableIdentity
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _DISALLOWED_SQL_TOKENS = (";", "--", "/*", "*/")
-
-
-class _CopyIntoTarget(NamedTuple):
-    catalog: str | None
-    schema: str | None
-    table: str
-
-
-def _resolve_copy_into_target(table_name: str, *, catalog: str | None, schema: str | None) -> _CopyIntoTarget:
-    """Split a 1, 2, or 3-part ``table_name``, filling missing leading parts from ``catalog`` and ``schema``."""
-    parts = table_name.split(".")
-    if len(parts) == 3:
-        return _CopyIntoTarget(catalog=parts[0], schema=parts[1], table=parts[2])
-    if len(parts) == 2:
-        return _CopyIntoTarget(catalog=catalog, schema=parts[0], table=parts[1])
-    return _CopyIntoTarget(catalog=catalog, schema=schema, table=table_name)
 
 
 class DatabricksSqlOperator(SQLExecuteQueryOperator):
@@ -86,8 +68,6 @@ class DatabricksSqlOperator(SQLExecuteQueryOperator):
     :param session_configuration: An optional dictionary of Spark session parameters. Defaults to None.
         If not specified, it could be specified in the Databricks connection's extra parameters.
     :param client_parameters: Additional parameters internal to Databricks SQL Connector parameters
-    :param query_tags: Optional dictionary of query tags to attach to Databricks SQL queries.
-    :param include_airflow_query_tags: If True, add Airflow DAG/task/run metadata as query tags.
     :param http_headers: An optional list of (k, v) pairs that will be set as HTTP headers on every request.
          (templated)
     :param catalog: An optional initial catalog to use. Requires DBR version 9.0+ (templated)
@@ -113,7 +93,6 @@ class DatabricksSqlOperator(SQLExecuteQueryOperator):
             "http_headers",
             "databricks_conn_id",
             "_gcs_impersonation_chain",
-            "query_tags",
         }
         | set(SQLExecuteQueryOperator.template_fields)
     )
@@ -136,8 +115,6 @@ class DatabricksSqlOperator(SQLExecuteQueryOperator):
         output_format: str = "csv",
         csv_params: dict[str, Any] | None = None,
         client_parameters: dict[str, Any] | None = None,
-        query_tags: dict[str, str | None] | None = None,
-        include_airflow_query_tags: bool = True,
         gcp_conn_id: str = "google_cloud_default",
         gcs_impersonation_chain: str | Sequence[str] | None = None,
         **kwargs,
@@ -155,8 +132,6 @@ class DatabricksSqlOperator(SQLExecuteQueryOperator):
         self.http_headers = http_headers
         self.catalog = catalog
         self.schema = schema
-        self.query_tags = query_tags or {}
-        self.include_airflow_query_tags = include_airflow_query_tags
         self._gcp_conn_id = gcp_conn_id
         self._gcs_impersonation_chain = gcs_impersonation_chain
 
@@ -328,13 +303,6 @@ class DatabricksSqlOperator(SQLExecuteQueryOperator):
 
         return list(zip(descriptions, results))
 
-    def _get_query_tags(self, context: Context) -> dict[str, str | None] | None:
-        return build_query_tags(context, self.query_tags, self.include_airflow_query_tags)
-
-    def execute(self, context: Context) -> Any:
-        self.get_db_hook().query_tags = self._get_query_tags(context)
-        return super().execute(context)
-
 
 COPY_INTO_APPROVED_FORMATS = ["CSV", "JSON", "AVRO", "ORC", "PARQUET", "TEXT", "BINARYFILE"]
 
@@ -367,8 +335,6 @@ class DatabricksCopyIntoOperator(BaseOperator):
     :param catalog: An optional initial catalog to use. Requires DBR version 9.0+
     :param schema: An optional initial schema to use. Requires DBR version 9.0+
     :param client_parameters: Additional parameters internal to Databricks SQL Connector parameters
-    :param query_tags: Optional dictionary of query tags to attach to Databricks SQL queries.
-    :param include_airflow_query_tags: If True, add Airflow DAG/task/run metadata as query tags.
     :param files: optional list of files to import. Can't be specified together with ``pattern``. (templated)
     :param pattern: optional regex string to match file names to import.
         Can't be specified together with ``files``.
@@ -389,7 +355,6 @@ class DatabricksCopyIntoOperator(BaseOperator):
         "files",
         "table_name",
         "databricks_conn_id",
-        "query_tags",
     )
 
     def __init__(
@@ -416,12 +381,16 @@ class DatabricksCopyIntoOperator(BaseOperator):
         force_copy: bool | None = None,
         copy_options: dict[str, str] | None = None,
         validate: bool | int | None = None,
-        query_tags: dict[str, str | None] | None = None,
-        include_airflow_query_tags: bool = True,
         **kwargs,
     ) -> None:
-        """Create a new ``DatabricksCopyIntoOperator``."""
+        """Create a new ``DatabricksSqlOperator``."""
         super().__init__(**kwargs)
+        if files is not None and pattern is not None:
+            raise AirflowException("Only one of 'pattern' or 'files' should be specified")
+        if table_name == "":
+            raise AirflowException("table_name shouldn't be empty")
+        if file_location == "":
+            raise AirflowException("file_location shouldn't be empty")
         if file_format not in COPY_INTO_APPROVED_FORMATS:
             raise AirflowException(f"file_format '{file_format}' isn't supported")
         self.files = files
@@ -444,8 +413,6 @@ class DatabricksCopyIntoOperator(BaseOperator):
         self._validate = validate
         self._http_headers = http_headers
         self._client_parameters = client_parameters or {}
-        self.query_tags = query_tags or {}
-        self.include_airflow_query_tags = include_airflow_query_tags
         if force_copy is not None:
             self._copy_options["force"] = "true" if force_copy else "false"
         self._sql: str | None = None
@@ -501,6 +468,7 @@ class DatabricksCopyIntoOperator(BaseOperator):
                     raise ValueError("expression_list must not contain statement separators or comments.")
 
     def _create_sql_query(self) -> str:
+
         self._validate_sql_fragments()
         escaper = ParamEscaper()
         maybe_with = ""
@@ -546,21 +514,10 @@ FILEFORMAT = {self._file_format}
 """
         return sql.strip()
 
-    def _get_query_tags(self, context: Context) -> dict[str, str | None] | None:
-        return build_query_tags(context, self.query_tags, self.include_airflow_query_tags)
-
     def execute(self, context: Context) -> Any:
-        # files/table_name/file_location are template fields; validate after rendering.
-        if self.files is not None and self._pattern is not None:
-            raise AirflowException("Only one of 'pattern' or 'files' should be specified")
-        if self.table_name == "":
-            raise AirflowException("table_name shouldn't be empty")
-        if self.file_location == "":
-            raise AirflowException("file_location shouldn't be empty")
         self._sql = self._create_sql_query()
         self.log.info("Executing: %s", self._sql)
         hook = self._get_hook()
-        hook.query_tags = self._get_query_tags(context)
         hook.run(self._sql)
 
     def on_kill(self) -> None:
@@ -598,7 +555,16 @@ FILEFORMAT = {self._file_format}
         from airflow.providers.common.compat.openlineage.facet import Dataset, Error
 
         try:
-            catalog, schema, table = _resolve_copy_into_target(self.table_name, catalog=None, schema=None)
+            table_parts = self.table_name.split(".")
+            if len(table_parts) == 3:  # catalog.schema.table
+                catalog, schema, table = table_parts
+            elif len(table_parts) == 2:  # schema.table
+                catalog = None
+                schema, table = table_parts
+            else:
+                catalog = None
+                schema = None
+                table = self.table_name
 
             hook = self._get_hook()
             schema = schema or hook.get_openlineage_default_schema()  # Fallback to default schema
@@ -662,54 +628,3 @@ FILEFORMAT = {self._file_format}
             job_facets={"sql": SQLJobFacet(query=SQLParser.normalize_sql(self._sql))},
             run_facets=run_facets,
         )
-
-
-class DatabricksCopyIntoAssetOperator(DatabricksCopyIntoOperator):
-    """
-    Run ``COPY INTO`` and declare the target Unity Catalog table as an asset outlet.
-
-    Accepts every :class:`DatabricksCopyIntoOperator` argument. ``table_name`` stays templated.
-    ``unity_table`` is static, so the asset is known when the Dag is parsed.
-
-    .. seealso::
-        For more information on how to use this operator, take a look at the guide:
-        :ref:`howto/operator:DatabricksCopyIntoAssetOperator`
-
-    :param unity_table: Static identity of the ``COPY INTO`` target table. When ``outlets`` is
-        omitted, the outlets are ``[unity_table.to_asset()]``. When ``outlets`` is passed, including
-        ``outlets=[]``, it is kept as is, so callers that want extra outlets include
-        ``unity_table.to_asset()`` among them. At execution, the rendered ``table_name`` is resolved
-        with ``catalog`` and ``schema`` and must equal ``unity_table``. Otherwise ``ValueError`` is
-        raised and no SQL runs.
-    """
-
-    def __init__(self, *, unity_table: UnityTableIdentity, **kwargs) -> None:
-        if "outlets" not in kwargs:
-            kwargs["outlets"] = [unity_table.to_asset()]
-        super().__init__(**kwargs)
-        self.unity_table = unity_table
-
-    def execute(self, context: Context) -> Any:
-        expected = _CopyIntoTarget(
-            catalog=self.unity_table.catalog, schema=self.unity_table.schema, table=self.unity_table.table
-        )
-        target = _resolve_copy_into_target(self.table_name, catalog=self._catalog, schema=self._schema)
-        normalized_target = _CopyIntoTarget(
-            catalog=target.catalog.lower() if target.catalog is not None else None,
-            schema=target.schema.lower() if target.schema is not None else None,
-            table=target.table.lower(),
-        )
-        if normalized_target != expected:
-            raise ValueError(
-                f"COPY INTO target {target._asdict()} resolved from table_name={self.table_name!r}, "
-                f"catalog={self._catalog!r}, schema={self._schema!r} does not match "
-                f"unity_table {expected._asdict()}."
-            )
-
-        hook = self._get_hook()
-        if (hook.host or "").lower() != self.unity_table.host:
-            raise ValueError(
-                f"Databricks connection host {hook.host!r} does not match "
-                f"unity_table host {self.unity_table.host!r}."
-            )
-        return super().execute(context)

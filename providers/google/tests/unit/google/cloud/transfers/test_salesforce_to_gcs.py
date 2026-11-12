@@ -53,7 +53,6 @@ pytestmark = pytest.mark.filterwarnings("ignore::FutureWarning")
     [
         (True, EXPECTED_GCS_URI),
         (False, [EXPECTED_GCS_URI]),
-        (None, EXPECTED_GCS_URI),
     ],
 )
 class TestSalesforceToGcsOperator:

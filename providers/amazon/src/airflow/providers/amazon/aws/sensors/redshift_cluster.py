@@ -89,9 +89,6 @@ class RedshiftClusterSensor(AwsBaseSensor[RedshiftHook]):
                     cluster_identifier=self.cluster_identifier,
                     target_status=self.target_status,
                     poke_interval=self.poke_interval,
-                    region_name=self.region_name,
-                    verify=self.verify,
-                    botocore_config=self.botocore_config,
                 ),
                 method_name="execute_complete",
             )

@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import copy
 import functools
 import operator
 import weakref
@@ -27,7 +28,6 @@ from typing import TYPE_CHECKING
 import attrs
 import methodtools
 
-from airflow._shared.dagnode.node import TaskGroupMixin
 from airflow.serialization.definitions.node import DAGNode
 
 if TYPE_CHECKING:
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 
 @attrs.define(eq=False, hash=False, kw_only=True)
-class SerializedTaskGroup(TaskGroupMixin, DAGNode):
+class SerializedTaskGroup(DAGNode):
     """Serialized representation of a TaskGroup used in protected processes."""
 
     _group_id: str | None = attrs.field(alias="group_id")
@@ -48,7 +48,6 @@ class SerializedTaskGroup(TaskGroupMixin, DAGNode):
     parent_group: SerializedTaskGroup | None = attrs.field()
     dag: SerializedDAG = attrs.field()
     tooltip: str = attrs.field()
-    doc_md: str | None = attrs.field(default=None)
     default_args: dict[str, Any] = attrs.field(factory=dict)
 
     # TODO: Are these actually useful?
@@ -216,128 +215,37 @@ class SerializedTaskGroup(TaskGroupMixin, DAGNode):
                 yield group
             group = group.parent_group
 
-    def hierarchical_alphabetical_sort(self) -> list[DAGNode]:
+    def topological_sort(self) -> list[DAGNode]:
         """
-        Sort children in hierarchical alphabetical order: groups first, then tasks, each alphabetical.
+        Sorts children in topographical order.
 
-        Mirrors ``TaskGroup.hierarchical_alphabetical_sort`` in task-sdk. This orders one group's
-        direct children; the server-side graph/grid builder in
-        ``api_fastapi.core_api.services.ui.task_group`` walks the tree and re-applies it at every
-        level, so the API response is fully ordered at all nesting levels and the UI renders it as-is.
+        A task in the result would come after any of its upstream dependencies.
         """
-        return sorted(
-            self.children.values(),
-            key=lambda node: (not isinstance(node, SerializedTaskGroup), node.node_id),
-        )
-
-    def topological_sort(
-        self, *, group_dict: dict[str | None, SerializedTaskGroup] | None = None
-    ) -> list[DAGNode]:
-        """
-        Sort children topologically — a task always comes after its upstream dependencies.
-
-        See ``TaskGroup.topological_sort`` in task-sdk for the algorithm, including how siblings
-        that depend on each other in a cycle are ordered.
-        """
-        children = self.children
-        if not children:
-            return []
-
-        nodes = list(children.values())
-        n = len(nodes)
-        id_to_idx = {nid: i for i, nid in enumerate(children)}
-        if group_dict is None:
-            group_dict = self.dag.task_group.get_task_group_dict()
-
-        projected: list[tuple[int, ...]] = [()] * n
-        nodes_with_back_edge = 0
-        for i, child in enumerate(nodes):
-            deps = self._project_child_deps(i, child, id_to_idx, group_dict)
-            if deps:
-                projected[i] = deps
-                if any(d > i for d in deps):
-                    nodes_with_back_edge += 1
-
-        # The ratio catches dense back-heavy groups; a 32-node absolute cutoff keeps
-        # padded reverse-declared runs on the fast path once sweep rescans overtake pass-numbering.
-        if nodes_with_back_edge >= 32 or nodes_with_back_edge * 2 > n:
-            return self._sort_via_pass_numbering(nodes, projected)
-        return self._sweep_projection(nodes, projected)
-
-    def _project_child_deps(
-        self,
-        child_idx: int,
-        child: DAGNode,
-        id_to_idx: dict[str, int],
-        group_dict: dict[str | None, SerializedTaskGroup],
-    ) -> tuple[int, ...]:
-        upstream_ids = child._topological_upstream_ids
-        if not upstream_ids:
-            return ()
-        sib_deps: set[int] = set()
-        for edge_id in upstream_ids:
-            j = id_to_idx.get(edge_id)
-            if j is not None:
-                if j != child_idx:
-                    sib_deps.add(j)
-                continue
-            tg = group_dict.get(edge_id)
-            if tg is None:
-                edge = self.dag.get_task(edge_id)
-                tg = edge.task_group
-            while tg is not None:
-                anc_idx = id_to_idx.get(tg.node_id)
-                if anc_idx is not None:
-                    if anc_idx != child_idx:
-                        sib_deps.add(anc_idx)
-                    break
-                tg = tg.parent_group
-        return tuple(sib_deps)
-
-    def _sweep_projection(self, nodes: list[DAGNode], projected: list[tuple[int, ...]]) -> list[DAGNode]:
-        n = len(nodes)
-        emitted = bytearray(n)
-        order: list[DAGNode] = []
-        order_append = order.append
-        pending: list[int] = []
-        pending_append = pending.append
-        for i in range(n):
-            blocked = False
-            for d in projected[i]:
-                if not emitted[d]:
-                    blocked = True
-                    break
-            if blocked:
-                pending_append(i)
-                continue
-            emitted[i] = 1
-            order_append(nodes[i])
-        while pending:
-            next_pending: list[int] = []
-            next_pending_append = next_pending.append
-            for i in pending:
-                blocked = False
-                for d in projected[i]:
-                    if not emitted[d]:
-                        blocked = True
+        # This uses a modified version of Kahn's Topological Sort algorithm to
+        # not have to pre-compute the "in-degree" of the nodes.
+        graph_unsorted = copy.copy(self.children)
+        graph_sorted: list[DAGNode] = []
+        if not self.children:
+            return graph_sorted
+        while graph_unsorted:
+            for node in list(graph_unsorted.values()):
+                for edge in node.upstream_list:
+                    if edge.node_id in graph_unsorted:
                         break
-                if blocked:
-                    next_pending_append(i)
-                    continue
-                emitted[i] = 1
-                order_append(nodes[i])
-            if len(next_pending) == len(pending):
-                return self._sort_cyclic_projection(nodes, projected)
-            pending = next_pending
-        return order
+                    # Check for task's group is a child (or grand child) of this TG,
+                    tg = edge.task_group
+                    while tg:
+                        if tg.node_id in graph_unsorted:
+                            break
+                        tg = tg.parent_group
 
-    def _sort_via_pass_numbering(
-        self, nodes: list[DAGNode], projected: list[tuple[int, ...]]
-    ) -> list[DAGNode]:
-        sorted_indices = self._compute_pass_order(projected)
-        if len(sorted_indices) != len(nodes):
-            return self._sort_cyclic_projection(nodes, projected)
-        return [nodes[i] for i in sorted_indices]
+                    if tg:
+                        # We are already going to visit that TG
+                        break
+                else:
+                    del graph_unsorted[node.node_id]
+                    graph_sorted.append(node)
+        return graph_sorted
 
     def add(self, node: DAGNode) -> DAGNode:
         # Set the TG first, as setting it might change the return value of node_id!
@@ -347,16 +255,6 @@ class SerializedTaskGroup(TaskGroupMixin, DAGNode):
                 node.dag = self.dag
         self.children[node.node_id] = node
         return node
-
-
-@attrs.define(kw_only=True, repr=False)
-class SerializedLoopTaskGroup(SerializedTaskGroup):
-    """Serialized loop definition used in protected processes."""
-
-    max_iterations: int
-    has_until: bool
-    terminal_task_id: str
-    gate_task_id: str
 
 
 @attrs.define(kw_only=True, repr=False)

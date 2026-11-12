@@ -16,17 +16,14 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from "react";
-
 import { Box, Button, Flex, Heading, Separator, Skeleton, VStack } from "@chakra-ui/react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FiClock } from "react-icons/fi";
 
 import { useDeadlinesServiceGetDagDeadlineAlerts } from "openapi/queries";
 import type { DeadlineAlertResponse } from "openapi/requests/types.gen";
-
 import { ErrorAlert } from "src/components/ErrorAlert";
-
 import { useDeadlines } from "src/queries/useDeadlines";
 
 import { AllDeadlinesModal } from "./AllDeadlinesModal";
@@ -42,13 +39,9 @@ export const DagDeadlines = ({ dagId }: DagDeadlinesProps) => {
   const { t: translate } = useTranslation("dag");
   const [modalOpen, setModalOpen] = useState(false);
 
-  const { data: alertData } = useDeadlinesServiceGetDagDeadlineAlerts({ dagId, limit: 100 });
+  const { data, error, isLoading } = useDeadlines({ dagId, limit: LIMIT });
 
-  const { data, error, isLoading } = useDeadlines({
-    dagId,
-    enabled: (alertData?.total_entries ?? 0) > 0,
-    limit: LIMIT,
-  });
+  const { data: alertData } = useDeadlinesServiceGetDagDeadlineAlerts({ dagId, limit: 100 });
 
   const alertMap = new Map<string, DeadlineAlertResponse>();
 

@@ -21,20 +21,16 @@ from typing import TYPE_CHECKING
 from unittest.mock import Mock, patch
 
 import pytest
-from fastapi import FastAPI, HTTPException, status
-from fastapi.testclient import TestClient
+from fastapi import HTTPException, status
 from sqlalchemy import select, update
-from sqlalchemy.exc import DataError, IntegrityError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from airflow.api_fastapi.common.exceptions import (
-    ERROR_HANDLERS,
     DagErrorHandler,
-    DataErrorHandler,
     _DatabaseDialect,
     _UniqueConstraintErrorHandler,
 )
-from airflow.api_fastapi.compat import HTTP_422_UNPROCESSABLE_CONTENT
 from airflow.configuration import conf
 from airflow.exceptions import DeserializationError
 from airflow.models import DagRun, Pool, Variable
@@ -96,6 +92,17 @@ def generate_test_cases_parametrize(
     return generated_test_cases
 
 
+def get_unique_constraint_error_prefix():
+    """Get unique constraint error prefix based on current database dialect."""
+    if CURRENT_DATABASE_DIALECT.startswith(_DatabaseDialect.SQLITE.value):
+        return _UniqueConstraintErrorHandler.unique_constraint_error_prefix_dict[_DatabaseDialect.SQLITE]
+    if CURRENT_DATABASE_DIALECT.startswith(_DatabaseDialect.MYSQL.value):
+        return _UniqueConstraintErrorHandler.unique_constraint_error_prefix_dict[_DatabaseDialect.MYSQL]
+    if CURRENT_DATABASE_DIALECT.startswith(_DatabaseDialect.POSTGRES.value):
+        return _UniqueConstraintErrorHandler.unique_constraint_error_prefix_dict[_DatabaseDialect.POSTGRES]
+    return ""
+
+
 class TestUniqueConstraintErrorHandler:
     unique_constraint_error_handler = _UniqueConstraintErrorHandler()
 
@@ -147,10 +154,9 @@ class TestUniqueConstraintErrorHandler:
     def test_handle_single_column_unique_constraint_error_without_stacktrace(
         self,
         mock_get_random_string,
+        session,
         table,
         expected_exception,
-        *,
-        session: Session,
     ) -> None:
         # Take Pool and Variable tables as test cases
         # Note: SQLA2 uses a more optimized bulk insert strategy when multiple objects are added to the
@@ -240,10 +246,9 @@ class TestUniqueConstraintErrorHandler:
     def test_handle_single_column_unique_constraint_error_with_stacktrace(
         self,
         mock_get_random_string,
+        session,
         table,
         expected_exception,
-        *,
-        session: Session,
     ) -> None:
         # Take Pool and Variable tables as test cases
         # Note: SQLA2 uses a more optimized bulk insert strategy when multiple objects are added to the
@@ -266,22 +271,7 @@ class TestUniqueConstraintErrorHandler:
 
         exeinfo_response_error.value.detail.pop("message", None)  # type: ignore[attr-defined]
         assert exeinfo_response_error.value.status_code == expected_exception.status_code
-
-        # The exact rendered SQL (e.g. explicit driver-added type casts) and trailing whitespace in
-        # the driver's own error text are driver-specific rendering details, not meaningful content —
-        # match on the statement's target table and normalize trailing newlines instead of an exact
-        # string compare.
-        response_detail = exeinfo_response_error.value.detail
-        expected_detail = expected_exception.detail
-        actual_statement = response_detail.pop("statement", None)  # type: ignore[attr-defined]
-        expected_statement = expected_detail.pop("statement", None)
-        response_detail["orig_error"] = response_detail["orig_error"].rstrip("\n")  # type: ignore[index]
-        expected_detail["orig_error"] = expected_detail["orig_error"].rstrip("\n")
-
-        assert response_detail == expected_detail
-        assert expected_statement is not None
-        assert actual_statement is not None
-        assert f"INSERT INTO {expected_statement.split()[2]}" in actual_statement
+        assert exeinfo_response_error.value.detail == expected_exception.detail
 
     @patch("airflow.api_fastapi.common.exceptions.get_random_string", return_value=MOCKED_ID)
     @conf_vars({("api", "expose_stacktrace"): "False"})
@@ -289,8 +279,7 @@ class TestUniqueConstraintErrorHandler:
     def test_handle_multiple_columns_unique_constraint_error_without_stacktrace(
         self,
         mock_get_random_string,
-        *,
-        session: Session,
+        session,
     ) -> None:
         expected_exception = HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -362,10 +351,9 @@ class TestUniqueConstraintErrorHandler:
     def test_handle_multiple_columns_unique_constraint_error_with_stacktrace(
         self,
         mock_get_random_string,
+        session,
         table,
         expected_exception,
-        *,
-        session: Session,
     ) -> None:
         if table == "DagRun":
             session.add(
@@ -395,155 +383,9 @@ class TestUniqueConstraintErrorHandler:
 
         # Removes the stacktrace from response to remove during comparison.
         response_detail.pop("message", None)  # type: ignore[attr-defined]
-        # Trailing whitespace in the driver's own error text is a driver-specific rendering detail.
-        response_detail["orig_error"] = response_detail["orig_error"].rstrip("\n")  # type: ignore[index]
-        expected_detail["orig_error"] = expected_detail["orig_error"].rstrip("\n")
         assert response_detail == expected_detail
         assert "INSERT INTO dag_run" in actual_statement
         assert exeinfo_response_error.value.detail == expected_exception.detail
-
-
-class TestDataErrorHandler:
-    handler = DataErrorHandler()
-
-    _STATEMENT = "INSERT INTO dag_run (conf) VALUES (?)"
-
-    # One representative ``orig`` message per dialect / rejection class. The handler is
-    # dialect-agnostic (it translates every DataError the same way), so the value only
-    # needs to round-trip through ``orig_error`` when stacktrace exposure is on.
-    _ORIG_MSGS = [
-        pytest.param(
-            "(1406, \"Data too long for column 'conf' at row 1\")",
-            id="mysql-1406-data-too-long",
-        ),
-        pytest.param(
-            "value too long for type character varying(250)",
-            id="postgres-value-too-long",
-        ),
-        pytest.param(
-            "string or blob too big",
-            id="sqlite-blob-too-big",
-        ),
-        pytest.param(
-            "(1264, \"Out of range value for column 'slots' at row 1\")",
-            id="mysql-1264-out-of-range",
-        ),
-        pytest.param(
-            "numeric field overflow",
-            id="postgres-numeric-field-overflow",
-        ),
-        pytest.param(
-            "(1366, \"Incorrect integer value: 'abc' for column 'slots' at row 1\")",
-            id="mysql-1366-incorrect-value",
-        ),
-        pytest.param(
-            "invalid input syntax for type integer",
-            id="postgres-invalid-input-syntax",
-        ),
-    ]
-
-    @staticmethod
-    def _make_data_error(orig_msg: str) -> DataError:
-        return DataError(
-            statement=TestDataErrorHandler._STATEMENT,
-            params={},
-            orig=Exception(orig_msg),
-        )
-
-    @pytest.mark.parametrize("orig_msg", _ORIG_MSGS)
-    @patch("airflow.api_fastapi.common.exceptions.get_random_string", return_value=MOCKED_ID)
-    @conf_vars({("api", "expose_stacktrace"): "False"})
-    def test_data_error_hides_db_internals_without_stacktrace(
-        self,
-        mock_get_random_string,
-        orig_msg: str,
-    ) -> None:
-        exc = self._make_data_error(orig_msg)
-        with pytest.raises(HTTPException) as exc_info:
-            self.handler.exception_handler(Mock(), exc)
-        assert exc_info.value.status_code == HTTP_422_UNPROCESSABLE_CONTENT
-        assert exc_info.value.detail == {
-            "reason": "Value rejected by database",
-            "statement": "hidden",
-            "orig_error": "hidden",
-            "message": MESSAGE,
-        }
-
-    @pytest.mark.parametrize("orig_msg", _ORIG_MSGS)
-    @patch("airflow.api_fastapi.common.exceptions.get_random_string", return_value=MOCKED_ID)
-    @conf_vars({("api", "expose_stacktrace"): "True"})
-    def test_data_error_exposes_db_internals_with_stacktrace(
-        self,
-        mock_get_random_string,
-        orig_msg: str,
-    ) -> None:
-        exc = self._make_data_error(orig_msg)
-        with pytest.raises(HTTPException) as exc_info:
-            self.handler.exception_handler(Mock(), exc)
-        assert exc_info.value.status_code == HTTP_422_UNPROCESSABLE_CONTENT
-        detail = exc_info.value.detail
-        assert isinstance(detail, dict)
-        assert detail["reason"] == "Value rejected by database"
-        assert detail["statement"] == self._STATEMENT
-        assert detail["orig_error"] == orig_msg
-
-    @conf_vars({("api", "expose_stacktrace"): "False"})
-    def test_data_error_dispatched_through_fastapi_app(self) -> None:
-        """End-to-end: a route raising DataError returns 422 via the registered handler."""
-        app = FastAPI()
-        for h in ERROR_HANDLERS:
-            app.add_exception_handler(h.exception_cls, h.exception_handler)
-
-        @app.post("/test")
-        def trigger_data_error():
-            raise self._make_data_error("(1406, \"Data too long for column 'conf' at row 1\")")
-
-        response = TestClient(app, raise_server_exceptions=False).post("/test")
-        assert response.status_code == HTTP_422_UNPROCESSABLE_CONTENT
-        detail = response.json()["detail"]
-        assert detail["reason"] == "Value rejected by database"
-        assert detail["statement"] == "hidden"
-        assert detail["orig_error"] == "hidden"
-
-    @conf_vars({("api", "expose_stacktrace"): "False"})
-    @patch("airflow.api_fastapi.common.exceptions.get_random_string", return_value=MOCKED_ID)
-    def test_sqlalchemy_error_dispatched_through_fastapi_app(self, mock_get_random_string) -> None:
-        """End-to-end: a route raising SQLAlchemyError returns 500 via the registered handler."""
-        from sqlalchemy.exc import SQLAlchemyError
-
-        app = FastAPI()
-        for h in ERROR_HANDLERS:
-            app.add_exception_handler(h.exception_cls, h.exception_handler)
-
-        @app.post("/test")
-        def trigger_error():
-            raise SQLAlchemyError("boom")
-
-        response = TestClient(app, raise_server_exceptions=False).post("/test")
-        assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-        detail = response.json()["detail"]
-        assert detail["reason"] == "Database error"
-        assert detail["message"] == MESSAGE
-
-    @conf_vars({("api", "expose_stacktrace"): "True"})
-    @patch("airflow.api_fastapi.common.exceptions.get_random_string", return_value=MOCKED_ID)
-    def test_sqlalchemy_error_includes_traceback_with_stacktrace(self, mock_get_random_string) -> None:
-        """End-to-end: SQLAlchemyError exposes traceback details when stacktrace logging is enabled."""
-        from sqlalchemy.exc import SQLAlchemyError
-
-        app = FastAPI()
-        for h in ERROR_HANDLERS:
-            app.add_exception_handler(h.exception_cls, h.exception_handler)
-
-        @app.post("/test")
-        def trigger_error():
-            raise SQLAlchemyError("boom")
-
-        response = TestClient(app, raise_server_exceptions=False).post("/test")
-        assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-        detail = response.json()["detail"]
-        assert detail["reason"] == "Database error"
-        assert "trigger_error" in detail["message"]
 
 
 class TestDagErrorHandler:
@@ -560,7 +402,6 @@ class TestDagErrorHandler:
             "ValueError",
         ],
     )
-    @conf_vars({("api", "expose_stacktrace"): "True"})
     def test_handle_deserialization_error(self, cause: Exception) -> None:
         deserialization_error = DeserializationError("test_dag_id")
         deserialization_error.__cause__ = cause
@@ -573,26 +414,6 @@ class TestDagErrorHandler:
         with pytest.raises(HTTPException, match=re.escape(expected_exception.detail)):
             DagErrorHandler().exception_handler(Mock(), deserialization_error)
 
-    @conf_vars({("api", "expose_stacktrace"): "False"})
-    def test_handle_deserialization_error_without_stacktrace(self) -> None:
-        deserialization_error = DeserializationError("secret_dag_id")
-        deserialization_error.__cause__ = RuntimeError("internal credential leak xyz")
-
-        with patch("airflow.api_fastapi.common.exceptions.log") as mock_log:
-            with pytest.raises(HTTPException) as exc_info:
-                DagErrorHandler().exception_handler(Mock(), deserialization_error)
-
-        detail = exc_info.value.detail
-        assert exc_info.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-        # Raw exception text is withheld when expose_stacktrace is off ...
-        assert str(deserialization_error) not in detail
-        assert "internal credential leak xyz" not in detail
-        # ... and the caller gets an id to correlate with the server-side log.
-        assert "look for ID" in detail
-        # The error is still logged server-side, so detail is not silently lost.
-        mock_log.error.assert_called_once()
-
-    @conf_vars({("api", "expose_stacktrace"): "True"})
     @pytest.mark.usefixtures("testing_dag_bundle")
     @pytest.mark.need_serialized_dag
     def test_handle_real_dag_deserialization_error(self, session: Session, dag_maker: DagMaker) -> None:

@@ -20,89 +20,62 @@ import { Heading, HStack, Spacer, VStack } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
 import { LuFileWarning } from "react-icons/lu";
 
-import type { DAGWarningResponse, ImportErrorResponse } from "openapi/requests/types.gen";
+import type { DAGWarningResponse } from "openapi/requests/types.gen";
+import { Dialog } from "src/components/ui";
 
-import { Modal } from "src/system-components";
-
-import { getApiErrorDetail } from "src/utils";
-
-import { DagImportErrorDetails } from "./DagImportErrorDetails";
-import type { ExpandedApiError } from "./ErrorAlert";
-import { StatusMessage } from "./StatusMessage";
+import { ErrorAlert } from "./ErrorAlert";
 import { WarningAlert } from "./WarningAlert";
 
-type Props = {
-  /** Stated as one more warning, for a Dag that is no longer in its file. */
-  readonly deactivatedMessage?: string;
-  readonly error?: unknown;
-  /** Names the whole list. Derived with the chip's own label, so the two cannot disagree. */
-  readonly heading: string;
-  readonly importError?: ImportErrorResponse;
-  readonly onClose: () => void;
-  readonly open: boolean;
-  readonly warnings?: Array<DAGWarningResponse>;
+type ImportDAGErrorModalProps = {
+  error?: unknown;
+  onClose: () => void;
+  open: boolean;
+  warnings?: Array<DAGWarningResponse>;
 };
 
-export const DAGWarningsModal = ({
-  deactivatedMessage,
-  error,
-  heading,
-  importError,
-  onClose,
-  open,
-  warnings,
-}: Props) => {
-  const { t: translate } = useTranslation("common");
-  const apiError = error as ExpandedApiError | undefined;
-  // What the request itself said, falling back to the bare word when it carried no status or message.
-  const pageErrorHeading =
-    [apiError?.status, apiError?.message].filter(Boolean).join(" ") || translate("error.title");
-  const detail = getApiErrorDetail(error);
-  const errorDetail = Array.isArray(detail) ? detail.join("\n") : detail;
+export const DAGWarningsModal: React.FC<ImportDAGErrorModalProps> = ({ error, onClose, open, warnings }) => {
+  const { t: translate } = useTranslation("components");
+  const heading = Boolean(error)
+    ? warnings?.length !== undefined && warnings.length > 0
+      ? translate("dagWarnings.errorAndWarning", {
+          warning: translate("dagWarnings.warning", { count: warnings.length }),
+        })
+      : translate("dagWarnings.error_one")
+    : "";
 
   return (
-    <Modal
+    <Dialog.Root
       data-testid="dag-warnings-modal"
-      headerProps={{
-        children: (
-          <HStack gap={2}>
-            <LuFileWarning />
-            <Heading fontSize="lg">{heading}</Heading>
-          </HStack>
-        ),
-      }}
       onOpenChange={onClose}
       open={open}
       scrollBehavior="inside"
+      size="xl"
     >
-      {importError === undefined ? undefined : (
-        <VStack>
-          <StatusMessage
-            body={<DagImportErrorDetails importError={importError} />}
-            heading={translate("dashboard:importErrors.dagImportError", { count: 1 })}
-            severity="error"
-          />
-          <Spacer />
-        </VStack>
-      )}
-      {Boolean(error) && (
-        <VStack>
-          <StatusMessage body={errorDetail} heading={pageErrorHeading} severity="error" />
-          <Spacer />
-        </VStack>
-      )}
-      {deactivatedMessage === undefined ? undefined : (
-        <VStack>
-          <StatusMessage heading={deactivatedMessage} severity="warning" />
-          <Spacer />
-        </VStack>
-      )}
-      {warnings?.map((warning) => (
-        <VStack key={warning.message}>
-          <WarningAlert warning={warning} />
-          <Spacer />
-        </VStack>
-      ))}
-    </Modal>
+      <Dialog.Content backdrop>
+        <Dialog.Header>
+          <HStack fontSize="xl">
+            <LuFileWarning />
+            <Heading>{heading}</Heading>
+          </HStack>
+        </Dialog.Header>
+
+        <Dialog.CloseTrigger />
+
+        <Dialog.Body>
+          {Boolean(error) && (
+            <VStack>
+              <ErrorAlert error={error} />
+              <Spacer />
+            </VStack>
+          )}
+          {warnings?.map((warning) => (
+            <VStack key={warning.message}>
+              <WarningAlert warning={warning} />
+              <Spacer />
+            </VStack>
+          ))}
+        </Dialog.Body>
+      </Dialog.Content>
+    </Dialog.Root>
   );
 };

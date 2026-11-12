@@ -22,7 +22,7 @@ from operator import itemgetter
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, or_, select
 
 from airflow.api_fastapi.app import get_auth_manager
 from airflow.api_fastapi.auth.managers.models.batch_apis import IsAuthorizedDagRequest
@@ -31,14 +31,11 @@ from airflow.api_fastapi.auth.managers.models.resource_details import (
 )
 from airflow.api_fastapi.common.db.common import (
     SessionDep,
-    apply_filters_to_select,
     paginated_select,
 )
 from airflow.api_fastapi.common.parameters import (
     QueryLimit,
     QueryOffset,
-    QueryParseImportErrorBundleNameFilter,
-    QueryParseImportErrorFilenameFilter,
     QueryParseImportErrorFilenamePatternSearch,
     QueryParseImportErrorFilenamePrefixPatternSearch,
     SortParam,
@@ -55,7 +52,6 @@ from airflow.api_fastapi.core_api.security import (
     requires_access_view,
 )
 from airflow.models import DagModel
-from airflow.models.dagbundle import DagBundleModel
 from airflow.models.errors import ParseImportError
 
 REDACTED_STACKTRACE = "REDACTED - you do not have read permission on all Dags in the file"
@@ -100,21 +96,13 @@ def get_import_error(
         ).all()
     )
 
-    # No Dags matched for this file, so there is no per-Dag key to authorize on:
-    # gate on ``IMPORT_ERRORS_ALL``, scoped to the file's team via its bundle.
-    # Denying rather than failing open -- returning the row would leak the file's
-    # existence, and for team-scoped bundles the cross-team repository structure.
+    # No Dags matched for this file -- either the file genuinely contains
+    # no Dags (parse failed before any Dag was defined), or the name keys
+    # did not resolve. Redact the stacktrace rather than returning the raw
+    # error, so the response stays on the deny-by-default side of the
+    # authorization check.
     if not file_dag_ids:
-        team_name = (
-            DagBundleModel.get_team_name(error.bundle_name, session=session) if error.bundle_name else None
-        )
-        if not auth_manager.authorize_view(
-            access_view=AccessView.IMPORT_ERRORS_ALL, user=user, team_name=team_name
-        ):
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN,
-                "You do not have permission to view import errors for files with no registered Dag",
-            )
+        error.stacktrace = REDACTED_STACKTRACE
         return error
 
     # Can the user read any Dags in the file?
@@ -147,7 +135,6 @@ def get_import_errors(
                     "id",
                     "timestamp",
                     "filename",
-                    "source_reference",
                     "bundle_name",
                     "stacktrace",
                 ],
@@ -158,8 +145,6 @@ def get_import_errors(
     ],
     filename_pattern: QueryParseImportErrorFilenamePatternSearch,
     filename_prefix_pattern: QueryParseImportErrorFilenamePrefixPatternSearch,
-    filename: QueryParseImportErrorFilenameFilter,
-    bundle_name: QueryParseImportErrorBundleNameFilter,
     session: SessionDep,
     user: GetUserDep,
 ) -> ImportErrorCollectionResponse:
@@ -168,33 +153,7 @@ def get_import_errors(
     readable_dag_ids = auth_manager.get_authorized_dag_ids(method="GET", user=user)
 
     # Subquery for files that have any Dags
-    files_with_any_dags = select(DagModel.relative_fileloc, DagModel.bundle_name).distinct().subquery()
-
-    # Errors for files with no registered Dag are authorized on ``IMPORT_ERRORS_ALL``,
-    # scoped to the file's team via its bundle. Filtering here rather than redacting in
-    # the loop keeps unauthorized rows out of the count and pagination too, so their
-    # existence -- and for team-scoped bundles the cross-team file names -- does not leak.
-    unregistered_errors = session.execute(
-        select(ParseImportError.id, ParseImportError.bundle_name)
-        .outerjoin(
-            files_with_any_dags,
-            (ParseImportError.filename == files_with_any_dags.c.relative_fileloc)
-            & (ParseImportError.bundle_name == files_with_any_dags.c.bundle_name),
-        )
-        .where(files_with_any_dags.c.relative_fileloc.is_(None))
-    ).all()
-    team_name_by_bundle = DagBundleModel.get_team_names(
-        {bundle_name for _, bundle_name in unregistered_errors if bundle_name}, session=session
-    )
-    authorized_unregistered_ids = {
-        error_id
-        for error_id, bundle_name in unregistered_errors
-        if auth_manager.authorize_view(
-            access_view=AccessView.IMPORT_ERRORS_ALL,
-            user=user,
-            team_name=team_name_by_bundle.get(bundle_name) if bundle_name else None,
-        )
-    }
+    files_with_any_dags = select(DagModel.relative_fileloc).distinct().subquery()
 
     # Files (identified by ``(relative_fileloc, bundle_name)``) where the
     # user can read at least one Dag. Used to decide which import errors
@@ -232,10 +191,7 @@ def get_import_errors(
         select(ParseImportError, file_dags_cte.c.dag_id)
         .outerjoin(
             files_with_any_dags,
-            and_(
-                ParseImportError.filename == files_with_any_dags.c.relative_fileloc,
-                ParseImportError.bundle_name == files_with_any_dags.c.bundle_name,
-            ),
+            ParseImportError.filename == files_with_any_dags.c.relative_fileloc,
         )
         .outerjoin(
             file_dags_cte,
@@ -246,53 +202,21 @@ def get_import_errors(
         )
         .where(
             or_(
-                # Unregistered-file errors the caller is authorized to see.
-                ParseImportError.id.in_(authorized_unregistered_ids),
-                # Files where the caller can read at least one Dag.
+                files_with_any_dags.c.relative_fileloc.is_(None),
                 file_dags_cte.c.dag_id.isnot(None),
             )
         )
         .order_by(ParseImportError.id)
     )
 
-    filtered_import_errors_stmt = apply_filters_to_select(
+    # Paginate the import errors query
+    import_errors_select, total_entries = paginated_select(
         statement=import_errors_stmt,
-        filters=[filename_pattern, filename_prefix_pattern, filename, bundle_name],
-    )
-    import_error_ids_stmt = (
-        filtered_import_errors_stmt.with_only_columns(
-            ParseImportError.id,
-            ParseImportError.timestamp,
-            ParseImportError.filename,
-            ParseImportError.source_reference,
-            ParseImportError.bundle_name,
-            ParseImportError.stacktrace,
-        )
-        .distinct()
-        .order_by(None)
-    )
-    total_entries = session.scalar(select(func.count()).select_from(import_error_ids_stmt.subquery())) or 0
-
-    # Paginate distinct import error IDs first so limit/offset apply to
-    # import error objects, not to the joined Dag rows.
-    paginated_import_error_ids_select, _ = paginated_select(
-        statement=import_error_ids_stmt,
-        filters=[],
+        filters=[filename_pattern, filename_prefix_pattern],
         order_by=order_by,
         offset=offset,
         limit=limit,
         session=session,
-        return_total_entries=False,
-    )
-    paginated_import_error_ids = paginated_import_error_ids_select.subquery()
-
-    # Fetch all joined Dag rows for the paginated import error IDs before
-    # grouping, so each returned import error still has the full Dag set.
-    import_errors_select = apply_filters_to_select(
-        statement=filtered_import_errors_stmt.where(
-            ParseImportError.id.in_(select(paginated_import_error_ids.c.id))
-        ),
-        filters=[order_by],
     )
     import_errors_result: Iterable[tuple[ParseImportError, Iterable]] = groupby(
         session.execute(import_errors_select), itemgetter(0)
@@ -302,9 +226,14 @@ def get_import_errors(
     for import_error, file_dag_ids_iter in import_errors_result:
         dag_ids = [dag_id for _, dag_id in file_dag_ids_iter if dag_id is not None]
 
-        # Unauthorized unregistered-file errors were already filtered out above,
-        # so anything reaching here may show its raw stacktrace.
+        # No Dags matched for this file -- either the file genuinely has
+        # no Dags yet (parse failed before any Dag was defined), or the
+        # name keys did not resolve. Redact the stacktrace before
+        # appending so the response stays on the deny-by-default side of
+        # the authorization check.
         if not dag_ids:
+            session.expunge(import_error)
+            import_error.stacktrace = REDACTED_STACKTRACE
             import_errors.append(import_error)
             continue
 

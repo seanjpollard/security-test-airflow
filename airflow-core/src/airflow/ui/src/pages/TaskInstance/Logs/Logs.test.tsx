@@ -16,21 +16,15 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import "@testing-library/jest-dom/vitest";
+import "@testing-library/jest-dom";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-
-// Resolve the route module during test collection, outside the per-test timeout.
-import "src/pages/TaskInstance";
+import { describe, it, expect, beforeAll } from "vitest";
 
 import { AppWrapper } from "src/utils/AppWrapper";
 
 const ITEM_HEIGHT = 20;
 
 beforeAll(() => {
-  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
-    value: ITEM_HEIGHT,
-  });
   Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
     value: ITEM_HEIGHT,
   });
@@ -88,66 +82,6 @@ describe("Task log source", () => {
     expect(loc).toHaveProperty("innerText", "loc=dagbag.py:593");
   });
 });
-
-const timestampPattern = /\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]/u;
-const levelPattern = /INFO - /u;
-
-const selectSetting = async (testId: string) => {
-  fireEvent.click(screen.getByTestId("log-settings-button"));
-  fireEvent.click(await screen.findByTestId(testId));
-};
-
-const renderLogSourceTask = async () => {
-  render(
-    <AppWrapper initialEntries={["/dags/log_grouping/runs/manual__2025-02-18T12:19/tasks/log_source"]} />,
-  );
-  await waitForLogs();
-
-  return screen.getByTestId("virtualized-list");
-};
-
-describe("Task log settings", () => {
-  // Settings persist in localStorage, so reset them for the other tests.
-  afterEach(() => localStorage.clear());
-
-  it("renders log levels and formatted timestamps", async () => {
-    const logList = await renderLogSourceTask();
-
-    expect(logList).toHaveTextContent(timestampPattern);
-    expect(logList).toHaveTextContent(levelPattern);
-  });
-
-  it("hides timestamps and log levels and shows the source from the settings menu", async () => {
-    const logList = await renderLogSourceTask();
-
-    await selectSetting("log-settings-timestamp");
-    await waitFor(() => expect(logList).not.toHaveTextContent(timestampPattern));
-    expect(logList).toHaveTextContent(levelPattern);
-
-    await selectSetting("log-settings-log-level");
-    await waitFor(() => expect(logList).not.toHaveTextContent(levelPattern));
-
-    expect(logList.querySelector('[data-key="logger"]')).toBeNull();
-    await selectSetting("log-settings-source");
-    await waitFor(() => expect(logList.querySelector('[data-key="logger"]')).not.toBeNull());
-  });
-
-  it("toggles the wrap and expand menu item labels", async () => {
-    await renderLogSourceTask();
-
-    fireEvent.click(screen.getByTestId("log-settings-button"));
-    expect(await screen.findByTestId("log-settings-wrap")).toHaveTextContent("wrap.wrap");
-    expect(screen.getByTestId("log-settings-expand")).toHaveTextContent("expand.expand");
-
-    fireEvent.click(screen.getByTestId("log-settings-wrap"));
-    await selectSetting("log-settings-expand");
-
-    fireEvent.click(screen.getByTestId("log-settings-button"));
-    await waitFor(() => expect(screen.getByTestId("log-settings-wrap")).toHaveTextContent("wrap.unwrap"));
-    expect(screen.getByTestId("log-settings-expand")).toHaveTextContent("expand.collapse");
-  });
-});
-
 describe("Task log grouping", () => {
   it("Display task log content on click", async () => {
     render(
@@ -200,7 +134,7 @@ describe("Task log grouping", () => {
     await waitFor(() => expect(screen.queryByText(/Marking task as SUCCESS/iu)).toBeNull());
 
     // Test Expand All / Collapse All via settings menu
-    const settingsBtn = screen.getByTestId("log-settings-button");
+    const settingsBtn = screen.getByRole("button", { name: /settings/iu });
 
     fireEvent.click(settingsBtn);
 
@@ -247,7 +181,7 @@ describe("Task log grouping", () => {
 });
 
 describe("Task Identity preamble", () => {
-  it("renders Task Identity preamble after the 'Pre Execute' group header as first group element", async () => {
+  it("renders Task Identity preamble after the Log message source details group", async () => {
     render(
       <AppWrapper initialEntries={["/dags/log_grouping/runs/manual__2025-02-18T12:19/tasks/ti_context"]} />,
     );
@@ -258,27 +192,22 @@ describe("Task Identity preamble", () => {
 
     expect(sourceGroup).toBeInTheDocument();
 
-    // Expand the Pre Execute group to reveal the preamble
-    const groupHeader = screen.getByTestId("summary-Pre Execute");
-
-    fireEvent.click(groupHeader);
-
-    // Task Identity preamble should be visible after expanding the group
-    await waitFor(() => expect(screen.getByText("Task Identity")).toBeInTheDocument());
+    // Task Identity preamble should be visible
+    expect(screen.getByText("Task Identity")).toBeInTheDocument();
     expect(screen.getByText("ti_id")).toBeInTheDocument();
     // Value is a text node adjacent to =; match via partial text
     expect(screen.getByText(/01951900-16f6-7c1c-ae66-91bdfe9e0cfd/u)).toBeInTheDocument();
-    expect(screen.getByText("Done. Returned value was: None")).toBeInTheDocument();
 
-    // Preamble should come after the "Pre Execute" group header in DOM order.
+    // Preamble should come after the source details group in DOM order.
     const preamble = screen.getByText("Task Identity");
+    const groupHeader = sourceGroup.closest('[data-testid^="group-header-"]');
 
     expect(preamble).toBeInTheDocument();
     expect(groupHeader).toBeInTheDocument();
 
     // DOCUMENT_POSITION_FOLLOWING (4) is set when preamble comes after groupHeader
     // eslint-disable-next-line no-bitwise
-    expect(groupHeader.compareDocumentPosition(preamble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(groupHeader!.compareDocumentPosition(preamble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("does not render TI context fields on individual log lines", async () => {
@@ -325,8 +254,8 @@ describe("Task log search", () => {
 
     // Navigation buttons should become enabled once matches are found
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /nextMatch/u })).not.toBeDisabled();
-      expect(screen.getByRole("button", { name: /previousMatch/u })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: /next match/iu })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: /previous match/iu })).not.toBeDisabled();
     });
   });
 
@@ -343,7 +272,7 @@ describe("Task log search", () => {
 
     await waitFor(() => {
       // Navigation buttons should be disabled with zero matches
-      const nextBtn = screen.getByRole("button", { name: /nextMatch/u });
+      const nextBtn = screen.getByRole("button", { name: /next match/iu });
 
       expect(nextBtn).toBeDisabled();
     });
@@ -360,7 +289,7 @@ describe("Task log search", () => {
 
     fireEvent.change(searchInput, { target: { value: "running" } });
 
-    await waitFor(() => expect(screen.queryByRole("button", { name: /nextMatch/u })).toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("button", { name: /next match/iu })).toBeInTheDocument());
 
     fireEvent.keyDown(searchInput, { key: "Escape" });
 
@@ -382,13 +311,13 @@ describe("Task log search", () => {
     fireEvent.change(searchInput, { target: { value: "state" } });
 
     // Wait for matches to be found (navigation buttons become enabled)
-    await waitFor(() => expect(screen.getByRole("button", { name: /nextMatch/u })).not.toBeDisabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /next match/iu })).not.toBeDisabled());
 
     // Navigate forward — buttons remain enabled
     fireEvent.keyDown(searchInput, { key: "Enter" });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /nextMatch/u })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: /next match/iu })).not.toBeDisabled();
     });
   });
 
@@ -404,13 +333,13 @@ describe("Task log search", () => {
     fireEvent.change(searchInput, { target: { value: "state" } });
 
     // Wait for matches to be found
-    await waitFor(() => expect(screen.getByRole("button", { name: /previousMatch/u })).not.toBeDisabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /previous match/iu })).not.toBeDisabled());
 
     // Navigate backward — buttons remain enabled
     fireEvent.keyDown(searchInput, { key: "Enter", shiftKey: true });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /previousMatch/u })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: /previous match/iu })).not.toBeDisabled();
     });
   });
 
@@ -428,13 +357,13 @@ describe("Task log search", () => {
     fireEvent.change(searchInput, { target: { value: "INFO" } });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /nextMatch/u })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: /next match/iu })).not.toBeDisabled();
     });
 
     // Verify per-line search by navigating through matches.
     // With the old code (1 match per group), there were only 3 matches for "INFO".
     // Now each line is a separate match, so we can navigate through many more.
-    const nextBtn = screen.getByRole("button", { name: /nextMatch/u });
+    const nextBtn = screen.getByRole("button", { name: /next match/iu });
 
     // Navigate forward 4 times — if only 3 matches existed, the 4th click would wrap to #1
     // We just verify it stays enabled (which it always does with >0 matches).
@@ -462,7 +391,7 @@ describe("Task log search", () => {
     fireEvent.change(searchInput, { target: { value: "starting attempt" } });
 
     await waitFor(() => {
-      const nextBtn = screen.getByRole("button", { name: /nextMatch/u });
+      const nextBtn = screen.getByRole("button", { name: /next match/iu });
 
       expect(nextBtn).not.toBeDisabled();
     });

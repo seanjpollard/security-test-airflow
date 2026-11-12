@@ -21,13 +21,11 @@ import { useTranslation } from "react-i18next";
 import { FiClipboard, FiZap } from "react-icons/fi";
 
 import { useDashboardServiceDagStats } from "openapi/queries";
-
-import { NeedsReviewButtonWithModal } from "src/components/NeedsReviewButton";
+import { NeedsReviewButton } from "src/components/NeedsReviewButton";
 import { StatsCard } from "src/components/StatsCard";
-
 import { useAutoRefresh } from "src/utils";
 
-import { DagImportErrors } from "./DagImportErrors";
+import { DAGImportErrors } from "./DAGImportErrors";
 import { PluginImportErrors } from "./PluginImportErrors";
 
 export const Stats = () => {
@@ -54,7 +52,7 @@ export const Stats = () => {
       </Flex>
 
       <Flex flexWrap="wrap" gap={4}>
-        <NeedsReviewButtonWithModal />
+        <NeedsReviewButton />
 
         <StatsCard
           colorScheme="failed"
@@ -62,11 +60,11 @@ export const Stats = () => {
           isLoading={isStatsLoading}
           isRTL={isRTL}
           label={translate("stats.failedDags")}
-          link="/dags?last_dag_run_state=failed"
+          link="dags?last_dag_run_state=failed"
           state="failed"
         />
 
-        <DagImportErrors />
+        <DAGImportErrors />
 
         <PluginImportErrors />
 
@@ -77,7 +75,7 @@ export const Stats = () => {
             isLoading={isStatsLoading}
             isRTL={isRTL}
             label={translate("stats.queuedDags")}
-            link="/dags?dag_run_state=queued"
+            link="dags?last_dag_run_state=queued"
             state="queued"
           />
         ) : undefined}
@@ -88,7 +86,7 @@ export const Stats = () => {
           isLoading={isStatsLoading}
           isRTL={isRTL}
           label={translate("stats.runningDags")}
-          link="/dags?dag_run_state=running"
+          link="dags?last_dag_run_state=running"
           state="running"
         />
 
@@ -99,7 +97,7 @@ export const Stats = () => {
           isLoading={isStatsLoading}
           isRTL={isRTL}
           label={translate("stats.activeDags")}
-          link="/dags?scheduling_state=active"
+          link="dags?paused=false"
         />
       </Flex>
     </Box>

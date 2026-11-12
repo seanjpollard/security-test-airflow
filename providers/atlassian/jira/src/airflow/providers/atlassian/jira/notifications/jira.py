@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from functools import cached_property
 from typing import Any
 
@@ -41,14 +40,7 @@ class JiraNotifier(BaseNotifier):
     :param labels: The labels to be applied to the issue
     """
 
-    template_fields: Sequence[str] = (
-        "description",
-        "summary",
-        "project_id",
-        "issue_type_id",
-        "labels",
-        "jira_conn_id",
-    )
+    template_fields = ("description", "summary", "project_id", "issue_type_id", "labels")
 
     def __init__(
         self,

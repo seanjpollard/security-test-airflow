@@ -33,7 +33,6 @@ PRODUCTION_IMAGE_TOOLS_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] =
             "options": [
                 "--build-progress",
                 "--docker-cache",
-                "--use-pinned-os-deps-images",
                 "--docker-host",
                 "--install-airflow-version",
                 "--python",
@@ -57,7 +56,6 @@ PRODUCTION_IMAGE_TOOLS_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] =
                 "--additional-pip-install-flags",
                 "--commit-sha",
                 "--debian-version",
-                "--image-flavor",
                 "--python-image",
                 "--skip-asset-compiled-check",
                 "--use-uv",

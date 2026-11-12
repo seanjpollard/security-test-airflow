@@ -18,7 +18,6 @@
  */
 import { HStack } from "@chakra-ui/react";
 import type { AxiosError } from "axios";
-import type { ReactNode } from "react";
 
 import type { HttpExceptionResponse, HttpValidationError } from "openapi/requests/types.gen";
 
@@ -38,7 +37,7 @@ export const ErrorAlert = ({ error: err }: Props) => {
   const statusCode = response?.status;
   const statusText = response?.statusText ?? message;
   const detail = response?.data.detail;
-  let detailMessage: ReactNode;
+  let detailMessage: React.ReactNode;
 
   if (typeof detail === "string") {
     detailMessage = detail;
@@ -50,9 +49,9 @@ export const ErrorAlert = ({ error: err }: Props) => {
     <Alert status="error">
       <HStack align="start" flexDirection="column" gap={2} mt={-1}>
         {statusCode} {statusText}
-        {detailMessage === undefined || detailMessage === statusText ? undefined : (
+        {detailMessage !== undefined && detailMessage !== statusText ? (
           <span>{detailMessage}</span>
-        )}
+        ) : undefined}
       </HStack>
     </Alert>
   );

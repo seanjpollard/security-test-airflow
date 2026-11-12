@@ -16,17 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from "react";
-
 import { Flex, Heading, Button } from "@chakra-ui/react";
+import { useState } from "react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { useTranslation } from "react-i18next";
 
 import type { TaskInstanceCollectionResponse } from "openapi/requests/types.gen";
-
-import { Tooltip } from "src/system-components";
-
-import { SHORTCUTS } from "src/context/keyboardShortcuts";
-import { useShortcut } from "src/hooks/useShortcut";
+import { Tooltip } from "src/components/ui";
 import { useConfig } from "src/queries/useConfig";
 
 import { TaskLogPreview } from "./TaskLogPreview";
@@ -44,10 +40,7 @@ const FailedLogs = ({
 
   const toggleWrap = () => setWrap(!wrap);
 
-  useShortcut({
-    ...SHORTCUTS.logs.toggleWrap,
-    callback: toggleWrap,
-  });
+  useHotkeys("w", toggleWrap);
 
   if (taskLogs === undefined || taskLogs.length <= 0) {
     return undefined;
@@ -63,6 +56,7 @@ const FailedLogs = ({
             bg="bg.panel"
             fontSize="sm"
             onClick={toggleWrap}
+            size="sm"
             variant="outline"
           >
             {translate(`common:wrap.${wrap ? "un" : ""}wrap`)}

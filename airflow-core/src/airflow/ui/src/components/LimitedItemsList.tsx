@@ -16,12 +16,11 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { type ReactNode, Fragment } from "react";
-
 import { Box, Button, Text, HStack, Stack } from "@chakra-ui/react";
+import React, { type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Popover } from "src/system-components";
+import { Popover } from "./ui";
 
 type ListProps = {
   readonly icon?: ReactNode;
@@ -53,13 +52,13 @@ export const LimitedItemsList = ({
       <Box fontSize="sm">
         {displayItems.map((item, index) => (
           // eslint-disable-next-line react/no-array-index-key
-          <Fragment key={index}>
+          <React.Fragment key={index}>
             <Text as="span">{item}</Text>
             {index < displayItems.length - 1 ||
             (shouldTruncate && remainingItems.length >= 1 && index === displayItems.length - 1) ? (
               <Text as="span">{separator}</Text>
             ) : undefined}
-          </Fragment>
+          </React.Fragment>
         ))}
         {shouldTruncate ? (
           remainingItems.length === 1 ? (
@@ -68,6 +67,8 @@ export const LimitedItemsList = ({
             <Popover.Root lazyMount unmountOnExit>
               <Popover.Trigger asChild>
                 <Button
+                  colorPalette="brand"
+                  cursor="pointer"
                   data-testid="limited-items-expand-button"
                   fontSize="sm"
                   minH="auto"

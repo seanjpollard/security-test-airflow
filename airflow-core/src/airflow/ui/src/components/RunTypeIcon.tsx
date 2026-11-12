@@ -17,7 +17,8 @@
  * under the License.
  */
 import type { IconBaseProps } from "react-icons";
-import { HiDatabase, HiLightningBolt } from "react-icons/hi";
+import { HiDatabase } from "react-icons/hi";
+import { HiLightningBolt } from "react-icons/hi";
 import { MdPlayArrow, MdOutlineSchedule } from "react-icons/md";
 import { RiArrowGoBackFill } from "react-icons/ri";
 

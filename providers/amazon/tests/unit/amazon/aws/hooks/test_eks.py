@@ -17,10 +17,7 @@
 # under the License.
 from __future__ import annotations
 
-import json
-import subprocess
 import sys
-from contextlib import AbstractContextManager
 from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -31,8 +28,6 @@ from urllib.parse import urlsplit
 import pytest
 import time_machine
 import yaml
-from boto3.session import Session
-from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
 from moto import mock_aws
 from moto.core import DEFAULT_ACCOUNT_ID
@@ -58,7 +53,7 @@ from moto.eks.models import (
     NODEGROUP_NOT_FOUND_MSG,
 )
 
-from airflow.providers.amazon.aws.hooks.eks import COMMAND, EksHook
+from airflow.providers.amazon.aws.hooks.eks import EksHook
 
 from unit.amazon.aws.utils.eks_test_constants import (
     DEFAULT_CONN_ID,
@@ -1215,87 +1210,6 @@ class TestEksHooks:
 class TestEksHook:
     python_executable = f"python{sys.version_info[0]}.{sys.version_info[1]}"
 
-    @mock.patch.object(EksHook, "generate_config_file", autospec=True)
-    @mock.patch.object(EksHook, "get_session", autospec=True)
-    def test_generate_config_file_with_credentials(self, get_session, generate_config):
-        hook = EksHook(aws_conn_id=None)
-        session = mock.create_autospec(Session, instance=True)
-        session.get_credentials.return_value = Credentials("access-key", "secret-key", "session-token")
-        get_session.return_value = session
-        config_context = mock.MagicMock(spec=AbstractContextManager)
-        config_context.__enter__.return_value = "/tmp/kubeconfig"
-        generate_config.return_value = config_context
-
-        with hook.generate_config_file_with_credentials("cluster", "namespace") as (config, credentials):
-            assert config == "/tmp/kubeconfig"
-            assert Path(credentials).read_text() == (
-                "export AWS_ACCESS_KEY_ID='access-key'\n"
-                "export AWS_SECRET_ACCESS_KEY='secret-key'\n"
-                "export AWS_SESSION_TOKEN='session-token'\n"
-            )
-            config_context.__exit__.assert_not_called()
-
-        credentials = generate_config.call_args.kwargs["credentials_file"]
-        generate_config.assert_called_once_with(
-            hook, eks_cluster_name="cluster", pod_namespace="namespace", credentials_file=credentials
-        )
-        assert not Path(credentials).exists()
-        config_context.__exit__.assert_called_once()
-
-    @mock.patch.object(EksHook, "generate_config_file", autospec=True)
-    @mock.patch.object(EksHook, "get_session", autospec=True)
-    def test_auth_context_cleans_up_after_caller_failure(self, get_session, generate_config):
-        hook = EksHook(aws_conn_id=None)
-        session = mock.create_autospec(Session, instance=True)
-        session.get_credentials.return_value = Credentials("access-key", "secret-key", "session-token")
-        get_session.return_value = session
-        config_context = mock.MagicMock(spec=AbstractContextManager)
-        config_context.__enter__.return_value = "/tmp/kubeconfig"
-        generate_config.return_value = config_context
-        error = ValueError("caller failed")
-
-        with pytest.raises(ValueError, match="caller failed") as raised:
-            with hook.generate_config_file_with_credentials("cluster", "namespace") as (_, credentials):
-                raise error
-
-        assert raised.value is error
-        assert not Path(credentials).exists()
-        config_context.__exit__.assert_called_once_with(ValueError, error, mock.ANY)
-
-    @mock.patch.object(EksHook, "generate_config_file", autospec=True)
-    @mock.patch.object(EksHook, "get_session", autospec=True)
-    def test_auth_context_cleans_up_after_kubeconfig_failure(self, get_session, generate_config):
-        hook = EksHook(aws_conn_id=None)
-        session = mock.create_autospec(Session, instance=True)
-        session.get_credentials.return_value = Credentials("access-key", "secret-key", "session-token")
-        get_session.return_value = session
-        config_context = mock.MagicMock(spec=AbstractContextManager)
-        error = ValueError("kubeconfig failed")
-        config_context.__enter__.side_effect = error
-        generate_config.return_value = config_context
-
-        with pytest.raises(ValueError, match="kubeconfig failed") as raised:
-            with hook.generate_config_file_with_credentials("cluster", "namespace"):
-                pytest.fail("Kubeconfig failure must prevent entering the auth context")
-
-        assert raised.value is error
-        credentials = generate_config.call_args.kwargs["credentials_file"]
-        assert not Path(credentials).exists()
-
-    @mock.patch.object(EksHook, "generate_config_file", autospec=True)
-    @mock.patch.object(EksHook, "get_session", autospec=True)
-    def test_generate_config_file_with_credentials_missing_credentials(self, get_session, generate_config):
-        hook = EksHook(aws_conn_id=None)
-        session = mock.create_autospec(Session, instance=True)
-        session.get_credentials.return_value = None
-        get_session.return_value = session
-
-        with pytest.raises(RuntimeError, match="Unable to retrieve AWS credentials"):
-            with hook.generate_config_file_with_credentials("cluster", "namespace"):
-                pytest.fail("Missing credentials must prevent kubeconfig creation")
-
-        generate_config.assert_not_called()
-
     @mock.patch("airflow.providers.amazon.aws.hooks.base_aws.AwsBaseHook.conn")
     @pytest.mark.parametrize(
         ("aws_conn_id", "region_name", "expected_region_args"),
@@ -1358,65 +1272,6 @@ class TestEksHook:
             # Verify region arguments are properly included
             if expected_region_args:
                 assert expected_region_args in command_arg
-
-    def test_command_template_captures_stderr_separately(self):
-        """Verify COMMAND keeps stderr out of stdout while preserving errors."""
-        # Verify stderr is not merged with stdout (the core correctness requirement)
-        assert "2>&1" not in COMMAND, (
-            "COMMAND must not use 2>&1 — merging stderr with stdout breaks bash token parsing"
-        )
-        assert "stderr_file=$(mktemp)" in COMMAND
-        assert '2>"$stderr_file"' in COMMAND
-        assert 'cat "$stderr_file" >&2' in COMMAND
-        assert "2>/dev/null" not in COMMAND
-
-    def test_command_template_uses_last_stdout_line_with_posix_shell(self, tmp_path):
-        credentials_file = tmp_path / "credentials"
-        credentials_file.write_text(
-            "export AWS_ACCESS_KEY_ID='test-access-key'\nexport AWS_SECRET_ACCESS_KEY='test-secret-key'\n"
-        )
-        token_helper = tmp_path / "token-helper"
-        token_helper.write_text(
-            "#!/bin/sh\n"
-            "printf '%s\\n' '2026-09-04T17:50:59Z [info] Found credentials in environment variables.'\n"
-            "printf '%s\\n' 'expirationTimestamp: 2026-09-04T18:04:59Z, token: test-token'\n"
-        )
-        token_helper.chmod(0o700)
-        command = COMMAND.format(
-            credentials_file=credentials_file,
-            sts_url="https://sts.us-east-1.amazonaws.com",
-            python_executable=token_helper,
-            eks_cluster_name="test-cluster",
-            args="",
-            authentication_api_version="client.authentication.k8s.io/v1",
-        )
-
-        result = subprocess.run(["sh", "-c", command], capture_output=True, text=True, check=True)
-
-        assert json.loads(result.stdout) == {
-            "kind": "ExecCredential",
-            "apiVersion": "client.authentication.k8s.io/v1",
-            "spec": {},
-            "status": {"expirationTimestamp": "2026-09-04T18:04:59Z", "token": "test-token"},
-        }
-
-    def test_command_template_does_not_print_token_output_on_error(self):
-        """Verify the error path does not echo stdout, which can contain a token."""
-        failure_block = COMMAND.split('if [ "$status" -ne 0 ]; then', 1)[1].split("fi", 1)[0]
-        assert '"$output"' not in failure_block
-
-    def test_command_template_validates_token(self):
-        """Verify COMMAND template validates that the token was successfully
-        extracted before producing the ExecCredential JSON. Without this check,
-        a malformed ExecCredential with an empty token is sent to the API server,
-        resulting in 401 Unauthorized with an empty user identity in audit logs.
-        """
-        # Verify token validation check exists
-        assert 'if [ -z "$token" ]' in COMMAND, (
-            "COMMAND must validate that token is non-empty before producing ExecCredential JSON"
-        )
-        # Verify the empty-token validation block exits with an error
-        assert "exit 1" in COMMAND, "COMMAND must exit with error when token extraction fails"
 
 
 # Helper methods for repeated assert combinations.

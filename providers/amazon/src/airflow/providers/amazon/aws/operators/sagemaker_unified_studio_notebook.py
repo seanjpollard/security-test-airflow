@@ -39,7 +39,6 @@ from airflow.providers.amazon.aws.triggers.sagemaker_unified_studio_notebook imp
     SageMakerUnifiedStudioNotebookTrigger,
 )
 from airflow.providers.amazon.aws.utils import validate_execute_complete_event
-from airflow.providers.amazon.aws.utils.deferral import should_defer
 from airflow.providers.amazon.aws.utils.mixins import aws_template_fields
 from airflow.providers.common.compat.sdk import conf
 
@@ -86,10 +85,7 @@ class SageMakerUnifiedStudioNotebookOperator(AwsBaseOperator[SageMakerUnifiedStu
         the run. (default: True)
     :param waiter_delay: Interval in seconds to poll the notebook run status (default: 10).
     :param deferrable: If True, the operator will defer polling to the trigger,
-        freeing up the worker slot while waiting.
-        Deferring when ``wait_for_completion`` is False is deprecated; from the next major release
-        this has no effect when ``wait_for_completion`` is False.
-        (default: False)
+        freeing up the worker slot while waiting. (default: False)
     :param endpoint_url: Optional custom endpoint URL for the DataZone API.
 
     .. seealso::
@@ -161,7 +157,6 @@ class SageMakerUnifiedStudioNotebookOperator(AwsBaseOperator[SageMakerUnifiedStu
         outputs = self.hook.get_notebook_outputs(
             notebook_identifier=self.notebook_identifier,
             notebook_run_id=notebook_run_id,
-            domain_identifier=self.domain_identifier,
             owning_project_identifier=self.owning_project_identifier,
         )
         if outputs:
@@ -191,7 +186,7 @@ class SageMakerUnifiedStudioNotebookOperator(AwsBaseOperator[SageMakerUnifiedStu
         notebook_run_id = response["id"]
         self.log.info("Started notebook run %s for notebook %s", notebook_run_id, self.notebook_identifier)
 
-        if should_defer(deferrable=self.deferrable, wait_for_completion=self.wait_for_completion):
+        if self.deferrable:
             self.defer(
                 trigger=SageMakerUnifiedStudioNotebookTrigger(
                     notebook_run_id=notebook_run_id,
@@ -199,9 +194,6 @@ class SageMakerUnifiedStudioNotebookOperator(AwsBaseOperator[SageMakerUnifiedStu
                     owning_project_identifier=self.owning_project_identifier,
                     waiter_delay=self.waiter_delay,
                     timeout_configuration=self.timeout_configuration,
-                    region_name=self.region_name,
-                    verify=self.verify,
-                    botocore_config=self.botocore_config,
                 ),
                 method_name="execute_complete",
             )

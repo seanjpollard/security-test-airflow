@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 """
-Example Airflow DAG that shows how to use Knowledge Catalog.
+Example Airflow DAG that shows how to use Dataplex.
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ with DAG(
     DAG_ID,
     start_date=datetime.datetime(2021, 1, 1),
     schedule="@once",
-    tags=["example", "knowledge-catalog"],
+    tags=["example", "dataplex"],
 ) as dag:
     create_bucket = GCSCreateBucketOperator(
         task_id="create_bucket", bucket_name=BUCKET_NAME, project_id=PROJECT_ID

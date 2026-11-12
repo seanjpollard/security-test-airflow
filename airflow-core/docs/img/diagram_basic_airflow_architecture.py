@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.10"
 # dependencies = [
 #    "rich>=13.6.0",
 #    "diagrams>=0.23.4",
@@ -68,16 +68,14 @@ def generate_basic_airflow_diagram():
     ):
         user = User("Airflow User")
 
-        dag_bundle = Custom("Dag bundle", MULTIPLE_FILES_IMAGE.as_posix())
-        user >> Edge(color="brown", style="solid", reverse=False, label="author\n\n") >> dag_bundle
+        dag_files = Custom("DAG files", MULTIPLE_FILES_IMAGE.as_posix())
+        user >> Edge(color="brown", style="solid", reverse=False, label="author\n\n") >> dag_files
 
         with Cluster("Parsing, Scheduling & Executing"):
-            dag_processor = Python("Dag processor")
             scheduler = Python("Scheduler")
 
         metadata_db = Custom("Metadata DB", DATABASE_IMAGE.as_posix())
         scheduler >> Edge(color="red", style="dotted", reverse=True) >> metadata_db
-        dag_processor >> Edge(color="red", style="dotted", reverse=True) >> metadata_db
 
         plugins_and_packages = Custom(
             "Plugin folder\n& installed packages", PACKAGES_IMAGE.as_posix(), color="transparent"
@@ -92,10 +90,9 @@ def generate_basic_airflow_diagram():
 
         metadata_db >> Edge(color="red", style="dotted", reverse=True) >> webserver
 
-        dag_bundle >> Edge(color="brown", style="solid", label="read\n\n") >> dag_processor
+        dag_files >> Edge(color="brown", style="solid", label="read\n\n") >> scheduler
 
         plugins_and_packages >> Edge(color="blue", style="solid", label="install\n\n") >> scheduler
-        plugins_and_packages >> Edge(color="blue", style="solid", label="install\n\n") >> dag_processor
         plugins_and_packages >> Edge(color="blue", style="solid", label="install\n\n") >> webserver
 
     console.print(f"[green]Generating architecture image {image_file}")

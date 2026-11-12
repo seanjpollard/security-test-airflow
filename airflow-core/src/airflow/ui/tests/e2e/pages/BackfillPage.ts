@@ -19,14 +19,13 @@
 import { expect } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 import { testConfig } from "playwright.config";
-
 import { BasePage } from "tests/e2e/pages/BasePage";
 import {
   apiCancelAllActiveBackfills,
   apiCancelBackfill,
+  apiWaitForBackfillComplete,
   apiWaitForNoActiveBackfill,
-} from "tests/e2e/utils/api/backfills";
-import { DATA_ROWS } from "tests/e2e/utils/ui/selectors";
+} from "tests/e2e/utils/test-helpers";
 
 export const REPROCESS_API_TO_UI = {
   completed: "All Runs",
@@ -77,15 +76,13 @@ function getColumnIndex(columnMap: Map<string, number>, name: string): number {
   return index;
 }
 
-// Columns getBackfillDetailsByDateRange reads; findBackfillRowByDateRange waits for all of them.
-const DETAIL_COLUMNS = ["From", "To", "Reprocess Behavior", "Created at", "Completed at"];
-
 export class BackfillPage extends BasePage {
-  public readonly backfillFromTrigger: Locator;
+  public readonly backfillDateError: Locator;
+  public readonly backfillFromDateInput: Locator;
   public readonly backfillModeRadio: Locator;
   public readonly backfillRunButton: Locator;
   public readonly backfillsTable: Locator;
-  public readonly backfillToTrigger: Locator;
+  public readonly backfillToDateInput: Locator;
   public readonly cancelButton: Locator;
   public readonly pauseButton: Locator;
   public readonly triggerButton: Locator;
@@ -100,12 +97,11 @@ export class BackfillPage extends BasePage {
     this.triggerButton = page.getByTestId("trigger-dag-button");
     // Chakra UI radio cards: target the label directly since <input> is hidden.
     this.backfillModeRadio = page.locator("label").getByText("Backfill", { exact: true });
-    // Each date-range bound is a trigger that opens a popover with a date (YYYY/MM/DD) and a time
-    // (HH:mm) text input, matching the date-range filter (see #54429).
-    this.backfillFromTrigger = page.getByTestId("datetime-input").first();
-    this.backfillToTrigger = page.getByTestId("datetime-input").nth(1);
+    this.backfillFromDateInput = page.getByTestId("datetime-input").first();
+    this.backfillToDateInput = page.getByTestId("datetime-input").nth(1);
     this.backfillRunButton = page.getByRole("button", { name: "Run Backfill" });
     this.backfillsTable = page.getByTestId("table-list");
+    this.backfillDateError = page.getByText("Start Date must be before the End Date");
     this.cancelButton = page.getByRole("button", { name: "Cancel backfill" });
     this.pauseButton = page.getByRole("button", { name: "Pause backfill" });
     this.unpauseButton = page.getByRole("button", { name: "Unpause backfill" });
@@ -136,16 +132,19 @@ export class BackfillPage extends BasePage {
   public async createBackfill(dagName: string, options: CreateBackfillOptions): Promise<number> {
     const { fromDate, reprocessBehavior = "none", toDate } = options;
 
-    const fromDateStr = fromDate.slice(0, 10).replaceAll("-", "/");
-    const fromTimeStr = fromDate.slice(11, 16);
-    const toDateStr = toDate.slice(0, 10).replaceAll("-", "/");
-    const toTimeStr = toDate.slice(11, 16);
+    const uiFromDate = fromDate.slice(0, 16);
+    const uiToDate = toDate.slice(0, 16);
 
     await this.navigateToDagDetail(dagName);
     await this.openBackfillDialog();
 
-    await this.setBound(this.backfillFromTrigger, fromDateStr, fromTimeStr);
-    await this.setBound(this.backfillToTrigger, toDateStr, toTimeStr);
+    await this.backfillFromDateInput.click();
+    await this.backfillFromDateInput.fill(uiFromDate);
+    await this.backfillFromDateInput.press("Tab");
+
+    await this.backfillToDateInput.click();
+    await this.backfillToDateInput.fill(uiToDate);
+    await this.backfillToDateInput.press("Tab");
 
     await this.selectReprocessBehavior(reprocessBehavior);
 
@@ -284,30 +283,20 @@ export class BackfillPage extends BasePage {
             const fromIndex = columnMap.get("From");
             const toIndex = columnMap.get("To");
 
-            // Headers come from the "common" and "components" i18next namespaces, which load in
-            // parallel. With useSuspense: false a header renders its raw key (e.g.
-            // `backfill.reprocessBehavior`) until its namespace arrives.
-            if (
-              fromIndex === undefined ||
-              toIndex === undefined ||
-              !DETAIL_COLUMNS.every((column) => columnMap.has(column))
-            ) {
+            if (fromIndex === undefined || toIndex === undefined) {
               return false;
             }
 
-            const rows = this.backfillsTable.locator(DATA_ROWS);
+            const rows = this.backfillsTable.locator("tbody tr");
             const rowCount = await rows.count();
 
             for (let i = 0; i < rowCount; i++) {
               const row = rows.nth(i);
               const cells = row.locator("td");
-              const fromCell = (await cells.nth(fromIndex).locator("time").getAttribute("datetime")) ?? "";
-              const toCell = (await cells.nth(toIndex).locator("time").getAttribute("datetime")) ?? "";
+              const fromCell = ((await cells.nth(fromIndex).textContent()) ?? "").slice(0, 10);
+              const toCell = ((await cells.nth(toIndex).textContent()) ?? "").slice(0, 10);
 
-              if (
-                fromCell.slice(0, 10) === expectedFrom.slice(0, 10) &&
-                toCell.slice(0, 10) === expectedTo.slice(0, 10)
-              ) {
+              if (fromCell === expectedFrom.slice(0, 10) && toCell === expectedTo.slice(0, 10)) {
                 foundRow = row;
                 foundColumnMap = columnMap;
 
@@ -324,7 +313,7 @@ export class BackfillPage extends BasePage {
         },
         {
           intervals: [2000, 5000],
-          message: `Backfill row with dates ${expectedFrom} ~ ${expectedTo} not found (waiting for columns: ${DETAIL_COLUMNS.join(", ")})`,
+          message: `Backfill row with dates ${expectedFrom} ~ ${expectedTo} not found in table`,
           timeout,
         },
       )
@@ -348,8 +337,8 @@ export class BackfillPage extends BasePage {
     const completedAtIndex = getColumnIndex(columnMap, "Completed at");
 
     const [fromDate, toDate, reprocessBehavior, createdAt, completedAt] = await Promise.all([
-      cells.nth(fromIndex).locator("time").getAttribute("datetime"),
-      cells.nth(toIndex).locator("time").getAttribute("datetime"),
+      cells.nth(fromIndex).textContent(),
+      cells.nth(toIndex).textContent(),
       cells.nth(reprocessIndex).textContent(),
       cells.nth(createdAtIndex).textContent(),
       cells.nth(completedAtIndex).textContent(),
@@ -362,6 +351,14 @@ export class BackfillPage extends BasePage {
       reprocessBehavior: (reprocessBehavior ?? "").trim(),
       toDate: (toDate ?? "").trim(),
     };
+  }
+
+  public getColumnHeader(columnName: string): Locator {
+    return this.backfillsTable.getByRole("columnheader", { name: columnName });
+  }
+
+  public getFilterButton(): Locator {
+    return this.page.getByRole("button", { name: /filter table columns/i });
   }
 
   public async navigateToBackfillsTab(dagName: string): Promise<void> {
@@ -381,7 +378,17 @@ export class BackfillPage extends BasePage {
   public async openBackfillDialog(): Promise<void> {
     await this.triggerButton.click({ timeout: 15_000 });
     await this.backfillModeRadio.click();
-    await expect(this.backfillFromTrigger).toBeVisible();
+    await expect(this.backfillFromDateInput).toBeVisible();
+  }
+
+  public async openFilterMenu(): Promise<void> {
+    await expect(async () => {
+      if (!(await this.page.getByRole("menu").isVisible())) {
+        await this.getFilterButton().click();
+      }
+      await expect(this.page.getByRole("menu")).toBeVisible({ timeout: 3000 });
+      await this.page.getByRole("menuitem").first().click({ timeout: 3000, trial: true });
+    }).toPass({ intervals: [1000], timeout: 15_000 });
   }
 
   public async pauseBackfillViaApi(backfillId: number): Promise<boolean> {
@@ -434,29 +441,16 @@ export class BackfillPage extends BasePage {
       .click();
   }
 
-  /** Open a date-range bound's popover, fill its date (and optional time) text input, then close it. */
-  public async setBound(trigger: Locator, dateStr: string, timeStr?: string): Promise<void> {
-    const dateInput = this.page.getByPlaceholder("YYYY/MM/DD");
-    const timeInput = this.page.getByPlaceholder("HH:mm");
-
-    await trigger.click();
-    await dateInput.fill(dateStr);
-    if (timeStr !== undefined && timeStr !== "") {
-      await timeInput.fill(timeStr);
-    }
-    // Dismiss the popover so the next bound's inputs are the only ones matching these placeholders.
-    // Under load webkit can drop a single toggle click, so retry until the content detaches. (Escape
-    // is avoided on purpose: it would close the whole dialog, not just the popover.)
-    await expect(async () => {
-      if ((await dateInput.count()) > 0) {
-        await trigger.click();
-      }
-      await expect(dateInput).toHaveCount(0, { timeout: 800 });
-    }).toPass({ intervals: [300, 700, 1500], timeout: 15_000 });
+  public async toggleColumn(columnName: string): Promise<void> {
+    await this.page.getByRole("menuitem", { name: columnName }).click();
   }
 
   public async togglePauseState(): Promise<void> {
     await this.pauseOrUnpauseButton.click();
+  }
+
+  public async waitForBackfillComplete(backfillId: number, timeout: number = 120_000): Promise<void> {
+    await apiWaitForBackfillComplete(this.page, backfillId, timeout);
   }
 
   public async waitForNoActiveBackfillViaApi(dagId: string, timeout: number = 120_000): Promise<void> {

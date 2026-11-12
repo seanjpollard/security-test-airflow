@@ -86,18 +86,13 @@ spec:
           tolerations: {{- toYaml $tolerations | nindent 12 }}
           topologySpreadConstraints: {{- toYaml $topologySpreadConstraints | nindent 12 }}
           serviceAccountName: {{ include "cleanup.serviceAccountName" . }}
-          enableServiceLinks: {{ .Values.enableServiceLinks }}
           imagePullSecrets: {{- include "image_pull_secrets" . | nindent 12 }}
-          {{- if $securityContext }}
           securityContext: {{ $securityContext | nindent 12 }}
-          {{- end }}
           containers:
             - name: airflow-cleanup-pods
               image: {{ template "airflow_image" . }}
               imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
-              {{- if $containerSecurityContext }}
               securityContext: {{ $containerSecurityContext | nindent 16 }}
-              {{- end }}
               {{- if $containerLifecycleHooks }}
               lifecycle: {{- tpl (toYaml $containerLifecycleHooks) . | nindent 16 }}
               {{- end }}
@@ -113,17 +108,14 @@ spec:
               volumeMounts:
                 {{- include "airflow_config_mount" . | nindent 16 }}
                 {{- if .Values.volumeMounts }}
-                  {{- tpl (toYaml .Values.volumeMounts) . | nindent 16 }}
+                  {{- toYaml .Values.volumeMounts | nindent 16 }}
                 {{- end }}
-                {{- include "serviceAccountTokenVolumeMount" (list . .Values.cleanup.serviceAccount)  | nindent 16 }}
               resources: {{- toYaml .Values.cleanup.resources | nindent 16 }}
           volumes:
             - name: config
               configMap:
                 name: {{ template "airflow_config" . }}
             {{- if .Values.volumes }}
-              {{- tpl (toYaml .Values.volumes) . | nindent 12 }}
+              {{- toYaml .Values.volumes | nindent 12 }}
             {{- end }}
-            {{- include "serviceAccountTokenVolume" (list . .Values.cleanup.serviceAccount) | nindent 12 }}
-
 {{- end }}

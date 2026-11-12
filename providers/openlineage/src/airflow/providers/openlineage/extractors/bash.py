@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from openlineage.client.facet_v2 import source_code_job
 
+from airflow.providers.openlineage import conf
 from airflow.providers.openlineage.extractors.base import BaseExtractor, OperatorLineage
 from airflow.providers.openlineage.utils.utils import get_unknown_source_attribute_run_facet
 
@@ -44,7 +45,7 @@ class BashExtractor(BaseExtractor):
 
     def _execute_extraction(self) -> OperatorLineage | None:
         job_facets: dict = {}
-        if self.source_code_enabled:
+        if conf.is_source_enabled():
             job_facets = {
                 "sourceCode": source_code_job.SourceCodeJobFacet(
                     language="bash",
@@ -54,7 +55,7 @@ class BashExtractor(BaseExtractor):
             }
         else:
             self.log.debug(
-                "OpenLineage source_code is disabled - no source code is extracted.",
+                "OpenLineage disable_source_code option is on - no source code is extracted.",
             )
 
         return OperatorLineage(

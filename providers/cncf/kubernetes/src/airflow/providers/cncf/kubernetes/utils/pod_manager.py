@@ -162,8 +162,9 @@ async def await_pod_start(
     :param schedule_timeout: Maximum time (in seconds) to wait for the pod to be scheduled.
     :param startup_timeout: Maximum time (in seconds) to wait for the pod to start running after being scheduled.
     :param check_interval: Interval (in seconds) between status checks.
+    :param is_async: Set to True if called in an async context; otherwise, False.
     """
-    pod_manager.log.info("::group::Waiting up to %ss to get the POD scheduled...", schedule_timeout)
+    pod_manager.log.info("::group::Waiting until %ss to get the POD scheduled...", schedule_timeout)
     pod_was_scheduled = False
     start_check_time = time.time()
     is_async = isinstance(pod_manager, AsyncPodManager)
@@ -173,15 +174,8 @@ async def await_pod_start(
         else:
             remote_pod = pod_manager.read_pod(pod)
         pod_status = remote_pod.status
-
-        if pod_status.phase == PodPhase.FAILED and pod_status.container_statuses is None:
-            pod_manager.stop_watching_events = True
-            pod_manager.log.info("::endgroup::")
-            raise PodLaunchFailedException("Pod failed before containers started")
-
         if pod_status.phase not in (PodPhase.PENDING, PodPhase.UNKNOWN):
             pod_manager.stop_watching_events = True
-            pod_manager.log.info("Pod has reached %s phase before launch timeout", pod_status.phase)
             pod_manager.log.info("::endgroup::")
             break
 
@@ -254,39 +248,30 @@ def detect_pod_terminate_early_issues(pod: V1Pod) -> str | None:
 
     FATAL_STATES = ["InvalidImageName", "ErrImageNeverPull"]
     TRANSIENT_STATES = ["ErrImagePull", "ImagePullBackOff"]
-    ERROR_MESSAGE = "Image for container '{name}' cannot be pulled, unable to start: {reason}\n{message}"
+    ERROR_MESSAGE = "Image cannot be pulled, unable to start: {reason}\n{message}"
 
     pod_status = pod.status
-    # ``init_container_statuses`` also lists native sidecars -- init containers with
-    # ``restartPolicy: Always`` -- which can fail a restart mid-run. Scan init containers
-    # only until ``Initialized`` is true: one that cannot pull keeps it false, and kubelet
-    # keeps it true once any main container has started, even while a sidecar restarts.
-    initialized = any(
-        condition.type == "Initialized" and condition.status == "True"
-        for condition in (pod_status.conditions or [])
-    )
-    container_statuses = [
-        # Init containers first: while one of them is stuck pulling, the main
-        # container only reports ``PodInitializing``, which matches no state below.
-        *([] if initialized else (pod_status.init_container_statuses or [])),
-        *(pod_status.container_statuses or []),
-    ]
-    for container_status in container_statuses:
+    if not pod_status.container_statuses:
+        return None
+
+    for container_status in pod_status.container_statuses:
         container_state: V1ContainerState = container_status.state
         container_waiting: V1ContainerStateWaiting | None = container_state.waiting
         if not container_waiting:
             continue
 
-        reason = container_waiting.reason
-        message = container_waiting.message or ""
+        if container_waiting.reason in FATAL_STATES:
+            return ERROR_MESSAGE.format(
+                reason=container_waiting.reason, message=container_waiting.message or ""
+            )
 
-        # The message can quote the image name, so a transient pattern can match by
-        # accident; it only ever excuses a TRANSIENT_STATES reason.
-        if reason in FATAL_STATES or (
-            reason in TRANSIENT_STATES
-            and not any(pattern in message.lower() for pattern in TRANSIENT_ERROR_PATTERNS)
-        ):
-            return ERROR_MESSAGE.format(name=container_status.name, reason=reason, message=message)
+        if container_waiting.reason in TRANSIENT_STATES:
+            message_lower = (container_waiting.message or "").lower()
+            is_transient = any(pattern in message_lower for pattern in TRANSIENT_ERROR_PATTERNS)
+            if not is_transient:
+                return ERROR_MESSAGE.format(
+                    reason=container_waiting.reason, message=container_waiting.message or ""
+                )
     return None
 
 
@@ -453,25 +438,16 @@ class PodManager(LoggingMixin):
         return self.run_pod_async(pod)
 
     async def watch_pod_events(self, pod: V1Pod, check_interval: float = 10) -> None:
-        """
-        Read pod events and write into log.
-
-        Best-effort: any error logs one warning and stops the watch, so a struggling API server
-        is not polled again for this pod.
-        """
+        """Read pod events and write into log."""
         resource_version = None
         seen_events: set[str] = set()
         while not self.stop_watching_events:
-            try:
-                events = self.read_pod_events(pod, resource_version)
-                if events.metadata and events.metadata.resource_version:
-                    resource_version = events.metadata.resource_version
-                for event in events.items:
-                    log_pod_event(self, event, seen_events)
-                    resource_version = event.metadata.resource_version
-            except Exception as e:
-                self.log.warning("Stopped watching events of pod %s: %s", pod.metadata.name, e, exc_info=True)
-                return
+            events = self.read_pod_events(pod, resource_version)
+            if events.metadata and events.metadata.resource_version:
+                resource_version = events.metadata.resource_version
+            for event in events.items:
+                log_pod_event(self, event, seen_events)
+                resource_version = event.metadata.resource_version
             await asyncio.sleep(check_interval)
 
     async def await_pod_start(
@@ -590,15 +566,6 @@ class PodManager(LoggingMixin):
                         line = raw_line.decode("utf-8", errors="backslashreplace")
                         line_timestamp, message = parse_log_line(line)
                         if line_timestamp:  # detect new log line
-                            if not message:
-                                # Empty container write: advance the resume
-                                # marker but do not emit a noisy ``[base] ``
-                                # row or break the previous buffered message
-                                # with a stray continuation (#36571).
-                                self.container_log_times[
-                                    (pod.metadata.namespace, pod.metadata.name, container_name)
-                                ] = line_timestamp
-                                continue
                             if message_to_log is None:  # first line in the log
                                 message_to_log = message
                                 message_timestamp = line_timestamp
@@ -992,17 +959,8 @@ class PodManager(LoggingMixin):
                 )
             time.sleep(1)
 
-    def extract_xcom(self, pod: V1Pod, *, ignore_kill_failure: bool = True) -> str:
-        """
-        Retrieve XCom value and kill xcom sidecar container.
-
-        :param pod: the pod to read the XCom result from.
-        :param ignore_kill_failure: when True (the default), a failure to kill the sidecar
-            container is logged as a warning and the successfully read XCom value is still
-            returned. Set it to False when the caller cannot tolerate a sidecar that keeps
-            running, for example ``KubernetesJobOperator``, whose Job can never reach a
-            terminal state while the sidecar is alive.
-        """
+    def extract_xcom(self, pod: V1Pod) -> str:
+        """Retrieve XCom value and kill xcom sidecar container."""
         # make sure that xcom sidecar container is still running
         if not self.container_is_running(pod, PodDefaults.SIDECAR_CONTAINER_NAME):
             raise XComRetrievalError(
@@ -1013,16 +971,7 @@ class PodManager(LoggingMixin):
             result = self.extract_xcom_json(pod)
             return result
         finally:
-            try:
-                self.extract_xcom_kill(pod)
-            except (PodCommandException, ApiException) as e:
-                if not ignore_kill_failure:
-                    raise
-                self.log.warning(
-                    "Failed to kill xcom sidecar container in pod %s, leaving it running: %s",
-                    pod.metadata.name,
-                    e,
-                )
+            self.extract_xcom_kill(pod)
 
     @generic_api_retry
     def extract_xcom_json(self, pod: V1Pod) -> str:
@@ -1159,17 +1108,12 @@ def parse_log_line(line: str) -> tuple[DateTime | None, str]:
     :param line: k8s log line
     :return: timestamp and log message
     """
-    # Strip only the trailing newline so an empty container write (which
-    # kubelet streams back as "<rfc3339-ts> \n" under ``timestamps=True``)
-    # keeps the separator space and is recognised as a real log line, not a
-    # continuation of the previous one (#36571). When kubelet emits "<ts>\n"
-    # with no trailing space, ``partition`` returns the whole line as
-    # ``timestamp`` and ``message`` as ``""`` -- the parse below handles both.
-    stripped = line.rstrip("\n")
-    timestamp, _, message = stripped.partition(" ")
+    timestamp, sep, message = line.strip().partition(" ")
+    if not sep:
+        return None, line
     try:
         last_log_time = cast("DateTime", pendulum.parse(timestamp))
-    except (ParserError, ValueError):
+    except ParserError:
         return None, line
     return last_log_time, message
 
@@ -1210,28 +1154,19 @@ class AsyncPodManager(LoggingMixin):
         )
 
     async def watch_pod_events(self, pod: V1Pod, startup_check_interval: float = 30) -> None:
-        """
-        Watch pod events and write to log.
-
-        Best-effort: any error logs one warning and stops the watch, so a struggling API server
-        is not polled again for this pod.
-        """
+        """Watch pod events and write to log."""
         seen_events: set[str] = set()
         resource_version = None
         while not self.stop_watching_events:
-            try:
-                async for event in self._hook.watch_pod_events(
-                    name=pod.metadata.name,
-                    namespace=pod.metadata.namespace,
-                    resource_version=resource_version,
-                    timeout_seconds=startup_check_interval,
-                ):
-                    if event:
-                        log_pod_event(self, event, seen_events)
-                        resource_version = event.metadata.resource_version
-            except Exception as e:
-                self.log.warning("Stopped watching events of pod %s: %s", pod.metadata.name, e, exc_info=True)
-                return
+            async for event in self._hook.watch_pod_events(
+                name=pod.metadata.name,
+                namespace=pod.metadata.namespace,
+                resource_version=resource_version,
+                timeout_seconds=startup_check_interval,
+            ):
+                if event:
+                    log_pod_event(self, event, seen_events)
+                    resource_version = event.metadata.resource_version
 
     async def await_pod_start(
         self, pod: V1Pod, schedule_timeout: int = 120, startup_timeout: int = 120, check_interval: float = 1
@@ -1275,11 +1210,6 @@ class AsyncPodManager(LoggingMixin):
             container_name=container_name,
             since_seconds=(math.ceil((now - since_time).total_seconds()) if since_time else None),
         )
-        # CPU-bound per-line parse/emit, offloaded so it can't block the triggerer event loop.
-        await asyncio.to_thread(self._emit_container_logs, logs, now, container_name)
-        return now  # Return the current time as the last log time to ensure logs from the current second are read in the next fetch.
-
-    def _emit_container_logs(self, logs: list[str], now: DateTime, container_name: str) -> None:
         message_to_log = None
         try:
             now_seconds = now.replace(microsecond=0)
@@ -1290,11 +1220,6 @@ class AsyncPodManager(LoggingMixin):
                 if line_timestamp and line_timestamp.replace(microsecond=0) == now_seconds:
                     break
                 if line_timestamp:  # detect new log line
-                    if not message:
-                        # Empty container write -- drop it instead of letting
-                        # it overwrite the buffered message with "" or be
-                        # emitted as a noisy ``[base] `` row (#36571).
-                        continue
                     if message_to_log is None:  # first line in the log
                         message_to_log = message
                     else:  # previous log line is complete
@@ -1315,3 +1240,4 @@ class AsyncPodManager(LoggingMixin):
                 else:
                     level = _parse_log_level(message_to_log)
                     self.log.log(level, "[%s] %s", container_name, message_to_log)
+        return now  # Return the current time as the last log time to ensure logs from the current second are read in the next fetch.

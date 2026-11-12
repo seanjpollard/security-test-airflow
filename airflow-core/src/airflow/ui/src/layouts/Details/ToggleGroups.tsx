@@ -20,7 +20,6 @@ import type { ButtonGroupProps } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
 
 import { ExpandCollapseButtons } from "src/components/ExpandCollapseButtons";
-
 import { useGroups } from "src/context/groups";
 
 export const ToggleGroups = (props: ButtonGroupProps) => {

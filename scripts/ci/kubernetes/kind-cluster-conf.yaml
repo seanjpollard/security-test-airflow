@@ -22,11 +22,10 @@ networking:
   apiServerAddress: "127.0.0.1"
   apiServerPort: {{API_SERVER_PORT}}
 nodes:
-  # A single node on purpose: kind drops the control-plane NoSchedule taint only for single-node
-  # clusters, so the Airflow and KubernetesPodOperator pods are scheduled here.
   - role: control-plane
+  - role: worker
     extraPortMappings:
-      - containerPort: {{FORWARDED_NODE_PORT}}
+      - containerPort: 30007
         hostPort: {{FORWARDED_PORT_NUMBER}}
         listenAddress: "127.0.0.1"
         protocol: TCP

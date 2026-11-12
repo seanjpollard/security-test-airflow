@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import "@testing-library/jest-dom/vitest";
+import "@testing-library/jest-dom";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -42,16 +42,16 @@ describe("LogSearchInput", () => {
 
     it("does not show match counter or navigation buttons when searchQuery is empty", () => {
       render(<LogSearchInput {...defaultProps} />, { wrapper: Wrapper });
-      expect(screen.queryByRole("button", { name: /nextMatch/u })).toBeNull();
-      expect(screen.queryByRole("button", { name: /previousMatch/u })).toBeNull();
+      expect(screen.queryByRole("button", { name: /next match/iu })).toBeNull();
+      expect(screen.queryByRole("button", { name: /previous match/iu })).toBeNull();
     });
 
     it("shows match counter and navigation buttons when searchQuery is non-empty", () => {
       render(<LogSearchInput {...defaultProps} searchQuery="error" totalMatches={3} />, {
         wrapper: Wrapper,
       });
-      expect(screen.getByRole("button", { name: /nextMatch/u })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /previousMatch/u })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /next match/iu })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /previous match/iu })).toBeInTheDocument();
     });
   });
 
@@ -118,7 +118,7 @@ describe("LogSearchInput", () => {
         },
       );
 
-      fireEvent.click(screen.getByRole("button", { name: /nextMatch/u }));
+      fireEvent.click(screen.getByRole("button", { name: /next match/iu }));
       expect(onSearchNext).toHaveBeenCalledTimes(1);
     });
 
@@ -137,7 +137,7 @@ describe("LogSearchInput", () => {
         },
       );
 
-      fireEvent.click(screen.getByRole("button", { name: /previousMatch/u }));
+      fireEvent.click(screen.getByRole("button", { name: /previous match/iu }));
       expect(onSearchPrevious).toHaveBeenCalledTimes(1);
     });
 
@@ -146,8 +146,8 @@ describe("LogSearchInput", () => {
         wrapper: Wrapper,
       });
 
-      expect(screen.getByRole("button", { name: /nextMatch/u })).toBeDisabled();
-      expect(screen.getByRole("button", { name: /previousMatch/u })).toBeDisabled();
+      expect(screen.getByRole("button", { name: /next match/iu })).toBeDisabled();
+      expect(screen.getByRole("button", { name: /previous match/iu })).toBeDisabled();
     });
   });
 

@@ -23,7 +23,7 @@
 DatabricksSubmitRunOperator
 ===========================
 
-Use the :class:`~airflow.providers.databricks.operators.databricks.DatabricksSubmitRunOperator` to submit
+Use the :class:`~airflow.providers.databricks.operators.DatabricksSubmitRunOperator` to submit
 a new Databricks job via Databricks `api/2.2/jobs/runs/submit <https://docs.databricks.com/dev-tools/api/latest/jobs.html#operation/JobsRunsSubmit>`_ API endpoint.
 
 
@@ -46,7 +46,7 @@ execution of Databricks jobs with multiple tasks, but it's harder to detect erro
   notebook_run = DatabricksSubmitRunOperator(task_id="notebook_run", json=json)
 
 The second way to accomplish the same thing is to use the named parameters of the ``DatabricksSubmitRunOperator`` directly. Note that there is exactly
-one named parameter for each top level parameter in the ``runs/submit`` endpoint.  When using named parameters you must specify the following:
+one named parameter for each top level parameter in the ``runs/submit`` endpoint.  When using named parameters you must to specify following:
 
 * Task specification - it should be one of:
 
@@ -78,10 +78,8 @@ Currently the named parameters that ``DatabricksSubmitRunOperator`` supports are
     - ``new_cluster``
     - ``existing_cluster_id``
     - ``libraries``
-    - ``environments``
     - ``run_name``
     - ``timeout_seconds``
-    - ``performance_target``
 
 .. code-block:: python
 
@@ -105,57 +103,6 @@ Another way to do is use the param tasks to pass array of objects to instantiate
   ]
   notebook_run = DatabricksSubmitRunOperator(task_id="notebook_run", tasks=tasks)
 
-
-Forwarding Airflow Dag params as task parameters
-------------------------------------------------
-
-Unlike ``api/2.2/jobs/create`` and ``api/2.2/jobs/run-now``, the
-``api/2.2/jobs/runs/submit`` endpoint has no top-level parameter slot — each task in
-``tasks`` carries its own parameters whose shape depends on the task type.
-
-If the operator's ``params`` dict is non-empty, it is forwarded as-is into the
-dict-shaped parameter slot of every task in ``json`` whose corresponding field is empty:
-
-* ``notebook_task.base_parameters`` (e.g. for ``notebook_task``)
-* ``python_wheel_task.named_parameters``
-* ``sql_task.parameters``
-* ``run_job_task.job_parameters``
-
-Tasks whose only parameter slot is ``List[str]`` (``spark_jar_task``, ``spark_python_task``,
-``spark_submit_task``) are skipped because there is no canonical mapping from a key/value
-dict to a positional argument list — pass those parameters explicitly via the ``json``
-or ``tasks`` argument.
-
-Params whose value resolves to ``None`` are skipped, since Databricks has no value to
-receive for them.
-
-.. code-block:: python
-
-  notebook_run = DatabricksSubmitRunOperator(
-      task_id="notebook_run",
-      notebook_task={"notebook_path": "/Users/airflow@example.com/PrepareData"},
-      new_cluster={"spark_version": "15.4.x-scala2.12", "num_workers": 2},
-      params={"env": "dev", "shard": "1"},
-  )
-  # The submitted run's notebook_task.base_parameters becomes:
-  #   {"env": "dev", "shard": "1"}
-  # i.e. the same dict, copied into the task's dict-shaped parameter slot.
-
-
-OpenLineage parent context
---------------------------
-
-Set ``openlineage_inject_parent_job_info=True`` to inject the standardized OpenLineage context into
-the dict-shaped parameter slot of each supported task. The context is passed under the
-``OPENLINEAGE_CONTEXT`` key and includes the Airflow task as a ``BATCH/AIRFLOW/TASK`` parent. The root
-job is marked as ``BATCH/AIRFLOW/DAG`` when it is the current Airflow Dag. For a root inherited
-through ``DagRun.conf``, its job type is copied from
-``conf["openlineage"]["rootParentJobType"]`` when available and otherwise omitted.
-
-For tasks with a ``new_cluster``, the operator also retains the existing injection into
-``new_cluster.spark_conf``. Tasks that only accept positional list parameters
-(``spark_jar_task``, ``spark_python_task``, or ``spark_submit_task``) receive the context only when
-their Spark configuration can be injected.
 
 
 Examples
@@ -181,108 +128,9 @@ You can also use named parameters to initialize the operator and run the job.
     :start-after: [START howto_operator_databricks_named]
     :end-before: [END howto_operator_databricks_named]
 
-Durable execution
------------------
-
-``DatabricksSubmitRunOperator`` submits a run and then polls it to completion on the worker.
-By default the operator runs in a *durable* mode that makes the runs crash-safe: the Databricks
-run id is persisted to :doc:`task state store <apache-airflow:core-concepts/task-state-store>`
-before polling begins, so if the worker crashes or is preempted and the task is retried, the
-operator reconnects to the run that is already executing on Databricks instead of submitting a
-duplicate.
-
-On retry the operator checks the prior run's state:
-
-* if it is still running, the operator reconnects and continues polling
-* if it already succeeded, the operator returns immediately without resubmitting
-* if it failed terminally, the operator submits a fresh run
-
-This avoids redundant Databricks job submissions when a worker is lost mid-run, which is common for
-long-running jobs.
-
-Durable execution requires Airflow 3.3 or newer, since it relies on the task state store. On
-earlier Airflow versions the flag is a no-op and the operator always submits a fresh
-run on retry, exactly as before. If the task state store is unavailable at runtime, the
-operator logs that crash recovery is disabled and behaves the same way.
-
-Like the persisted state itself, the stored run id isn't deleted automatically, that only happens
-when someone runs ``airflow state-store clean``. If a task's ``retry_delay`` is longer than
-``[state_store] default_retention_days`` (30 days by default) and cleanup runs in between, the
-run id won't be there for the next retry, and the operator will submit a fresh run instead of
-reconnecting. Avoid running cleanup on a schedule shorter than your longest ``retry_delay``.
-
-Clearing a task is treated the same as a retry, which matters specifically for a task whose run
-already succeeded: clearing does not delete the stored run id, so the next attempt reads it back
-and returns immediately without submitting a new run. See
-:doc:`apache-airflow:core-concepts/resumable-tasks` for why, and for the
-``[state_store] clear_on_success`` setting that restores "clearing always resubmits."
-
-This is most reliable for deferred tasks (``deferrable=True``); clearing a task that's actively
-polling synchronously can cancel the run via ``on_kill`` before the next attempt gets a chance to
-reconnect -- see :doc:`apache-airflow:core-concepts/resumable-tasks` for why.
-
-To opt out and always submit a fresh run on retry, set ``durable=False``:
-
-.. code-block:: python
-
-  notebook_run = DatabricksSubmitRunOperator(
-      task_id="notebook_run",
-      notebook_task={"notebook_path": "/Users/airflow@example.com/PrepareData"},
-      new_cluster={"spark_version": "15.4.x-scala2.12", "num_workers": 2},
-      durable=False,
-  )
-
-Durable execution applies to the synchronous path. When ``deferrable=True`` is set, the
-Triggerer already tracks the run across the wait, so deferrable mode takes precedence and
-``durable`` has no effect.
-
-Durable execution requires Airflow 3.3 or newer, since it relies on the task state store. Below
-3.3, ``durable`` has no effect either way: setting it explicitly only emits a warning, and the
-operator always submits a fresh run on retry, exactly as before this feature existed.
-
-
 DatabricksSubmitRunDeferrableOperator
 =====================================
 
-Deferrable version of the :class:`~airflow.providers.databricks.operators.databricks.DatabricksSubmitRunOperator` operator.
+Deferrable version of the :class:`~airflow.providers.databricks.operators.DatabricksSubmitRunOperator` operator.
 
 It allows to utilize Airflow workers more effectively using `new functionality introduced in Airflow 2.2.0 <https://airflow.apache.org/docs/apache-airflow/2.2.0/concepts/deferring.html#triggering-deferral>`_
-
-.. _howto/operator:DatabricksSubmitRunOperator:retry-args:
-
-Retry args in deferrable mode
------------------------------
-
-When ``deferrable=True``, the ``databricks_retry_args`` dictionary is serialized across the
-trigger boundary and must contain only values that Airflow serde can serialize. Primitive
-values such as ``int``, ``float``, ``str``, ``bool``, ``None``, ``dict``, and ``list`` are
-the common safe choices.
-
-For controlling attempt count and delay in deferrable mode, leave
-``databricks_retry_args`` unset and use the dedicated operator parameters
-``databricks_retry_limit`` and ``databricks_retry_delay``. When ``databricks_retry_args`` is
-set, these dedicated parameters are ignored for the hook retry policy.
-
-Serialization validation only verifies that values can cross the trigger boundary; it does
-not verify that the supplied keys and values are valid or meaningful ``tenacity.Retrying``
-keyword arguments. Custom tenacity strategy objects (``stop``, ``wait``, ``before``, etc.)
-require callable objects, which are not serialization-safe in deferrable mode. The hook always
-replaces supplied ``retry`` and ``after`` values, so setting them has no effect in either mode.
-
-**Not supported** in deferrable mode (will raise ``ValueError`` when the task defers; the
-Databricks run has already been submitted at that point):
-
-.. code-block:: python
-
-    from tenacity import stop_after_attempt, wait_incrementing
-
-    # Tenacity strategy objects — NOT serializable
-    databricks_retry_args = {"stop": stop_after_attempt(3)}
-    databricks_retry_args = {"wait": wait_incrementing(start=30, increment=30)}
-
-If you need custom ``stop`` or ``wait`` strategies, use the non-deferrable
-:class:`~airflow.providers.databricks.operators.databricks.DatabricksSubmitRunOperator` (``deferrable=False``).
-Setting non-empty ``databricks_retry_args`` replaces the hook's default retry policy rather
-than merging with it, so supply both ``stop`` and ``wait``. Otherwise, Tenacity defaults to
-``stop_never`` and ``wait_none()``, which retries persistently retryable API errors forever
-without backoff.

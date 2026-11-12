@@ -22,7 +22,7 @@ import re
 import subprocess
 import tempfile
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from subprocess import check_call, check_output
 from typing import Literal
@@ -100,7 +100,7 @@ class BaseK8STest:
         with open(output_file_path, "w") as output_file:
             print("=" * 80, file=output_file)
             print(f"Describe resources for namespace {namespace}", file=output_file)
-            print(f"Datetime: {datetime.now(tz=UTC)}", file=output_file)
+            print(f"Datetime: {datetime.now(tz=timezone.utc)}", file=output_file)
             print("=" * 80, file=output_file)
             print("Describing pods", file=output_file)
             print("-" * 80, file=output_file)
@@ -242,32 +242,6 @@ class BaseK8STest:
             print(f"The expected state is wrong {state} != {expected_final_state} (expected)!")
         assert state == expected_final_state
 
-    def wait_until_task_in_executor(self, host, dag_run_id, dag_id, task_id, timeout=60):
-        """Poll until the task instance has been handed to the executor.
-
-        Once the state is ``queued`` (or any post-queued state), the scheduler
-        has already pushed the task to the executor queue, so a subsequent
-        scheduler crash does not race with the very first scheduling step.
-        """
-        deadline = time.monotonic() + timeout
-        post_queued_states = {"queued", "running", "success", "failed", "upstream_failed", "removed"}
-        get_string = f"http://{host}/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}"
-        state: str | None = None
-        while time.monotonic() < deadline:
-            try:
-                result = self.session.get(get_string)
-                if result.status_code == 200:
-                    state = result.json().get("state")
-                    print(f"[wait_until_task_in_executor] {task_id} state={state}")
-                    if state in post_queued_states:
-                        return state
-            except requests.exceptions.ConnectionError as exc:
-                print(f"[wait_until_task_in_executor] api call failed, retrying. error={exc}")
-            time.sleep(2)
-        raise AssertionError(
-            f"task {task_id} did not reach a post-queued state within {timeout}s (last seen state: {state})"
-        )
-
     @staticmethod
     def ensure_resource_health(
         resource_name: str,
@@ -349,7 +323,7 @@ class BaseK8STest:
         post_string = f"http://{host}/dags/{dag_id}/dagRuns"
         print(f"Calling [start_dag]#2 {post_string}")
 
-        logical_date = datetime.now(UTC).isoformat()
+        logical_date = datetime.now(timezone.utc).isoformat()
         # Trigger a new dagrun
         result = self.session.post(post_string, json={"logical_date": logical_date})
         try:

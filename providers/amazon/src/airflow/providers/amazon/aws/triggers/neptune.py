@@ -58,7 +58,6 @@ class NeptuneClusterAvailableTrigger(AwsBaseWaiterTrigger):
             waiter_delay=waiter_delay,
             waiter_max_attempts=waiter_max_attempts,
             aws_conn_id=aws_conn_id,
-            region_name=region_name,
             **kwargs,
         )
 
@@ -104,7 +103,6 @@ class NeptuneClusterStoppedTrigger(AwsBaseWaiterTrigger):
             waiter_delay=waiter_delay,
             waiter_max_attempts=waiter_max_attempts,
             aws_conn_id=aws_conn_id,
-            region_name=region_name,
             **kwargs,
         )
 
@@ -150,7 +148,6 @@ class NeptuneClusterInstancesAvailableTrigger(AwsBaseWaiterTrigger):
             waiter_delay=waiter_delay,
             waiter_max_attempts=waiter_max_attempts,
             aws_conn_id=aws_conn_id,
-            region_name=region_name,
             **kwargs,
         )
 

@@ -84,6 +84,8 @@ class AppflowBaseOperator(AwsBaseOperator[AppflowHook]):
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
+        if source is not None and source not in SUPPORTED_SOURCES:
+            raise ValueError(f"{source} is not a supported source (options: {SUPPORTED_SOURCES})!")
         self.filter_date = filter_date
         self.flow_name = flow_name
         self.source = source
@@ -94,8 +96,6 @@ class AppflowBaseOperator(AwsBaseOperator[AppflowHook]):
         self.wait_for_completion = wait_for_completion
 
     def execute(self, context: Context) -> None:
-        self._validate_source()
-        self._validate_filter_date()
         self.filter_date_parsed: datetime | None = (
             datetime.fromisoformat(self.filter_date) if self.filter_date else None
         )
@@ -108,13 +108,6 @@ class AppflowBaseOperator(AwsBaseOperator[AppflowHook]):
             time.sleep(AppflowBaseOperator.UPDATE_PROPAGATION_TIME)
 
         self._run_flow(context)
-
-    def _validate_source(self) -> None:
-        if self.source is not None and self.source not in SUPPORTED_SOURCES:
-            raise ValueError(f"{self.source} is not a supported source (options: {SUPPORTED_SOURCES})!")
-
-    def _validate_filter_date(self) -> None:
-        pass
 
     def _get_connector_type(self) -> str:
         response = self.hook.conn.describe_flow(flowName=self.flow_name)
@@ -197,6 +190,8 @@ class AppflowRunFullOperator(AppflowBaseOperator):
         wait_for_completion: bool = True,
         **kwargs,
     ) -> None:
+        if source not in {"salesforce", "zendesk"}:
+            raise ValueError(NOT_SUPPORTED_SOURCE_MSG.format(source=source, entity="AppflowRunFullOperator"))
         super().__init__(
             source=source,
             flow_name=flow_name,
@@ -207,12 +202,6 @@ class AppflowRunFullOperator(AppflowBaseOperator):
             wait_for_completion=wait_for_completion,
             **kwargs,
         )
-
-    def _validate_source(self) -> None:
-        if self.source not in {"salesforce", "zendesk"}:
-            raise ValueError(
-                NOT_SUPPORTED_SOURCE_MSG.format(source=self.source, entity="AppflowRunFullOperator")
-            )
 
 
 class AppflowRunBeforeOperator(AppflowBaseOperator):
@@ -247,6 +236,12 @@ class AppflowRunBeforeOperator(AppflowBaseOperator):
         wait_for_completion: bool = True,
         **kwargs,
     ) -> None:
+        if not filter_date:
+            raise ValueError(MANDATORY_FILTER_DATE_MSG.format(entity="AppflowRunBeforeOperator"))
+        if source != "salesforce":
+            raise ValueError(
+                NOT_SUPPORTED_SOURCE_MSG.format(source=source, entity="AppflowRunBeforeOperator")
+            )
         super().__init__(
             source=source,
             flow_name=flow_name,
@@ -257,16 +252,6 @@ class AppflowRunBeforeOperator(AppflowBaseOperator):
             wait_for_completion=wait_for_completion,
             **kwargs,
         )
-
-    def _validate_source(self) -> None:
-        if self.source != "salesforce":
-            raise ValueError(
-                NOT_SUPPORTED_SOURCE_MSG.format(source=self.source, entity="AppflowRunBeforeOperator")
-            )
-
-    def _validate_filter_date(self) -> None:
-        if not self.filter_date:
-            raise ValueError(MANDATORY_FILTER_DATE_MSG.format(entity="AppflowRunBeforeOperator"))
 
     def _update_flow(self) -> None:
         if not self.filter_date_parsed:
@@ -313,6 +298,10 @@ class AppflowRunAfterOperator(AppflowBaseOperator):
         wait_for_completion: bool = True,
         **kwargs,
     ) -> None:
+        if not filter_date:
+            raise ValueError(MANDATORY_FILTER_DATE_MSG.format(entity="AppflowRunAfterOperator"))
+        if source not in {"salesforce", "zendesk"}:
+            raise ValueError(NOT_SUPPORTED_SOURCE_MSG.format(source=source, entity="AppflowRunAfterOperator"))
         super().__init__(
             source=source,
             flow_name=flow_name,
@@ -323,16 +312,6 @@ class AppflowRunAfterOperator(AppflowBaseOperator):
             wait_for_completion=wait_for_completion,
             **kwargs,
         )
-
-    def _validate_source(self) -> None:
-        if self.source not in {"salesforce", "zendesk"}:
-            raise ValueError(
-                NOT_SUPPORTED_SOURCE_MSG.format(source=self.source, entity="AppflowRunAfterOperator")
-            )
-
-    def _validate_filter_date(self) -> None:
-        if not self.filter_date:
-            raise ValueError(MANDATORY_FILTER_DATE_MSG.format(entity="AppflowRunAfterOperator"))
 
     def _update_flow(self) -> None:
         if not self.filter_date_parsed:
@@ -379,6 +358,10 @@ class AppflowRunDailyOperator(AppflowBaseOperator):
         wait_for_completion: bool = True,
         **kwargs,
     ) -> None:
+        if not filter_date:
+            raise ValueError(MANDATORY_FILTER_DATE_MSG.format(entity="AppflowRunDailyOperator"))
+        if source != "salesforce":
+            raise ValueError(NOT_SUPPORTED_SOURCE_MSG.format(source=source, entity="AppflowRunDailyOperator"))
         super().__init__(
             source=source,
             flow_name=flow_name,
@@ -389,16 +372,6 @@ class AppflowRunDailyOperator(AppflowBaseOperator):
             wait_for_completion=wait_for_completion,
             **kwargs,
         )
-
-    def _validate_source(self) -> None:
-        if self.source != "salesforce":
-            raise ValueError(
-                NOT_SUPPORTED_SOURCE_MSG.format(source=self.source, entity="AppflowRunDailyOperator")
-            )
-
-    def _validate_filter_date(self) -> None:
-        if not self.filter_date:
-            raise ValueError(MANDATORY_FILTER_DATE_MSG.format(entity="AppflowRunDailyOperator"))
 
     def _update_flow(self) -> None:
         if not self.filter_date_parsed:

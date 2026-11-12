@@ -31,10 +31,10 @@ from airflow.providers.common.compat.sdk import AirflowException, BaseHook
 from airflow.providers.google.common.hooks.base_google import get_field
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-    import proto
-    from google.protobuf.message import Message as ProtobufMessage
+    from google.ads.googleads.v21.services.services.customer_service import CustomerServiceClient
+    from google.ads.googleads.v21.services.services.google_ads_service import GoogleAdsServiceClient
+    from google.ads.googleads.v21.services.services.google_ads_service.pagers import SearchPager
+    from google.ads.googleads.v21.services.types.google_ads_service import GoogleAdsRow
 
 
 class GoogleAdsHook(BaseHook):
@@ -111,8 +111,7 @@ class GoogleAdsHook(BaseHook):
 
     :param gcp_conn_id: The connection ID with the service account details.
     :param google_ads_conn_id: The connection ID with the details of Google Ads config.yaml file.
-    :param api_version: The Google Ads API version to use. If not set, the hook uses the default
-        version of the installed ``google-ads`` library.
+    :param api_version: The Google Ads API version to use.
     """
 
     conn_name_attr = "google_ads_conn_id"
@@ -163,7 +162,7 @@ class GoogleAdsHook(BaseHook):
         self.google_ads_config: dict[str, Any] = {}
         self.authentication_method: Literal["service_account", "developer_token"] = "service_account"
 
-    def search(self, client_ids: list[str], query: str, **kwargs) -> list[ProtobufMessage]:
+    def search(self, client_ids: list[str], query: str, **kwargs) -> list[GoogleAdsRow]:
         """
         Pull data from the Google Ads API.
 
@@ -186,7 +185,7 @@ class GoogleAdsHook(BaseHook):
 
         return data_native_pb
 
-    def search_proto_plus(self, client_ids: list[str], query: str, **kwargs) -> list[proto.Message]:
+    def search_proto_plus(self, client_ids: list[str], query: str, **kwargs) -> list[GoogleAdsRow]:
         """
         Pull data from the Google Ads API.
 
@@ -227,11 +226,9 @@ class GoogleAdsHook(BaseHook):
             raise
 
     @cached_property
-    def _get_service(self) -> Any:
+    def _get_service(self) -> GoogleAdsServiceClient:
         """Connect and authenticate with the Google Ads API using a service account."""
         client = self._get_client
-        if self.api_version is None:
-            return client.get_service("GoogleAdsService")
         return client.get_service("GoogleAdsService", version=self.api_version)
 
     @cached_property
@@ -250,7 +247,7 @@ class GoogleAdsHook(BaseHook):
                 raise
 
     @cached_property
-    def _get_customer_service(self) -> Any:
+    def _get_customer_service(self) -> CustomerServiceClient:
         """Connect and authenticate with the Google Ads API using a service account."""
         with NamedTemporaryFile("w", suffix=".json") as secrets_temp:
             self._get_config()
@@ -259,8 +256,6 @@ class GoogleAdsHook(BaseHook):
                 self._update_config_with_secret(secrets_temp)
             try:
                 client = GoogleAdsClient.load_from_dict(self.google_ads_config)
-                if self.api_version is None:
-                    return client.get_service("CustomerService")
                 return client.get_service("CustomerService", version=self.api_version)
             except GoogleAuthError as e:
                 self.log.error("Google Auth Error: %s", e)
@@ -320,7 +315,7 @@ class GoogleAdsHook(BaseHook):
 
         self.google_ads_config["json_key_file_path"] = secrets_temp.name
 
-    def _search(self, client_ids: list[str], query: str, **kwargs) -> list[proto.Message]:
+    def _search(self, client_ids: list[str], query: str, **kwargs) -> list[GoogleAdsRow]:
         """
         Pull data from the Google Ads API.
 
@@ -340,7 +335,7 @@ class GoogleAdsHook(BaseHook):
 
         return self._extract_rows(iterators)
 
-    def _extract_rows(self, iterators: list[Iterable[proto.Message]]) -> list[proto.Message]:
+    def _extract_rows(self, iterators: list[SearchPager]) -> list[GoogleAdsRow]:
         """
         Convert Google Page Iterator (SearchPager) objects to Google Ads Rows.
 

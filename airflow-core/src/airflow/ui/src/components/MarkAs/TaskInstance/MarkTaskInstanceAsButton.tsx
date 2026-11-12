@@ -16,97 +16,99 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { Box, HStack, IconButton, useDisclosure } from "@chakra-ui/react";
 import { useState } from "react";
-
-import type { ButtonProps } from "@chakra-ui/react";
-import { HStack, useDisclosure } from "@chakra-ui/react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { useTranslation } from "react-i18next";
 import { FiX } from "react-icons/fi";
 import { LuCheck } from "react-icons/lu";
 
 import type { TaskInstanceResponse, TaskInstanceState } from "openapi/requests/types.gen";
-
-import { IconButton, Menu, Tooltip } from "src/system-components";
-
 import { StateBadge } from "src/components/StateBadge";
+import { Menu, Tooltip } from "src/components/ui";
 
-import { SHORTCUTS } from "src/context/keyboardShortcuts";
-import { useShortcut } from "src/hooks/useShortcut";
-
-import { allowedStates, canMarkTaskInstanceAsSkipped } from "../utils";
+import { allowedStates } from "../utils";
 import MarkTaskInstanceAsDialog from "./MarkTaskInstanceAsDialog";
 
 type Props = {
   readonly isHotkeyEnabled?: boolean;
   readonly taskInstance: TaskInstanceResponse;
-} & ButtonProps;
+};
 
-export const MarkTaskInstanceAsButton = ({ isHotkeyEnabled = false, taskInstance, ...rest }: Props) => {
+const MarkTaskInstanceAsButton = ({ isHotkeyEnabled = false, taskInstance }: Props) => {
   const { onClose, onOpen, open } = useDisclosure();
   const { t: translate } = useTranslation();
 
   const [state, setState] = useState<TaskInstanceState>("success");
 
-  useShortcut({
-    ...SHORTCUTS.runActions.markTaskFailed,
-    callback: () => {
+  useHotkeys(
+    "shift+f",
+    () => {
       setState("failed");
       onOpen();
     },
-    options: { enabled: isHotkeyEnabled },
-  });
+    { enabled: isHotkeyEnabled && taskInstance.state !== "failed" },
+  );
 
-  useShortcut({
-    ...SHORTCUTS.runActions.markTaskSuccess,
-    callback: () => {
+  useHotkeys(
+    "shift+s",
+    () => {
       setState("success");
       onOpen();
     },
-    options: { enabled: isHotkeyEnabled },
-  });
-
-  const label = translate("dags:runAndTaskActions.markAs.button", {
-    type: translate("taskInstance_one"),
-  });
-
-  const menuStates: Array<TaskInstanceState> = canMarkTaskInstanceAsSkipped(taskInstance.state)
-    ? [...allowedStates, "skipped"]
-    : allowedStates;
+    { enabled: isHotkeyEnabled && taskInstance.state !== "success" },
+  );
 
   return (
-    <div>
-      <Menu.Root positioning={{ gutter: 0, placement: "bottom" }} tooltipLabel={label}>
+    <Box>
+      <Menu.Root positioning={{ gutter: 0, placement: "bottom" }}>
         <Menu.Trigger asChild>
-          <IconButton {...rest} aria-label={label}>
-            <HStack gap={1} mx={1}>
-              <LuCheck />
-              <span>/</span>
-              <FiX />
-            </HStack>
-          </IconButton>
+          <div>
+            <Tooltip
+              content={translate("dags:runAndTaskActions.markAs.button", {
+                type: translate("taskInstance_one"),
+              })}
+            >
+              <IconButton
+                aria-label={translate("dags:runAndTaskActions.markAs.button", {
+                  type: translate("taskInstance_one"),
+                })}
+                colorPalette="brand"
+                size="md"
+                variant="ghost"
+              >
+                <HStack gap={1} mx={1}>
+                  <LuCheck />
+                  <span>/</span>
+                  <FiX />
+                </HStack>
+              </IconButton>
+            </Tooltip>
+          </div>
         </Menu.Trigger>
         <Menu.Content>
-          {menuStates.map((menuState) => {
-            const hasShortcut = menuState === "success" || menuState === "failed";
-            const content = hasShortcut
-              ? translate(`dags:runAndTaskActions.markAs.buttonTooltip.${menuState}`)
-              : undefined;
+          {allowedStates.map((menuState) => {
+            const content = translate(
+              `dags:runAndTaskActions.markAs.buttonTooltip.${menuState === "success" ? "success" : "failed"}`,
+            );
 
             return (
               <Tooltip
                 closeDelay={100}
                 content={content}
-                disabled={!isHotkeyEnabled || !hasShortcut}
+                disabled={!isHotkeyEnabled || taskInstance.state === menuState}
                 key={menuState}
                 openDelay={100}
               >
-                {/* Not disabled when state matches: re-applying lets users also flip upstream/downstream tasks */}
                 <Menu.Item
                   asChild
+                  disabled={taskInstance.state === menuState}
                   key={menuState}
                   onClick={() => {
-                    setState(menuState);
-                    onOpen();
+                    if (taskInstance.state !== menuState) {
+                      setState(menuState);
+                      onOpen();
+                    }
                   }}
                   value={menuState}
                 >
@@ -120,7 +122,11 @@ export const MarkTaskInstanceAsButton = ({ isHotkeyEnabled = false, taskInstance
         </Menu.Content>
       </Menu.Root>
 
-      <MarkTaskInstanceAsDialog onClose={onClose} open={open} state={state} taskInstance={taskInstance} />
-    </div>
+      {open ? (
+        <MarkTaskInstanceAsDialog onClose={onClose} open={open} state={state} taskInstance={taskInstance} />
+      ) : undefined}
+    </Box>
   );
 };
+
+export default MarkTaskInstanceAsButton;

@@ -22,10 +22,8 @@ Don't spell out **Directed Acyclic Graph** except for historical context.
 
 - Install prek: `uv tool install prek`
 - Enable commit hooks: `prek install`
-- Install breeze shim (one-time, per machine): `scripts/tools/setup_breeze` — installs `~/.local/bin/breeze` that runs breeze via `uv run --locked` from the current git worktree's `dev/breeze`, with dependencies pinned by `dev/breeze/uv.lock` (so each worktree, including ephemeral agent worktrees, gets its own breeze tied to its sources). See [ADR 0017](dev/breeze/doc/adr/0017-use-uvx-to-run-breeze-from-local-sources.md).
-- **Never run pytest, python, or airflow commands directly on the host** — always use `breeze`. The only exception is the `uv run --project <PROJECT> ...` commands listed below, run against the workspace sources.
-- **Local Kubernetes clusters also go through `breeze k8s`** — create, deploy to and delete kind clusters with `breeze k8s`, including clusters used only to check Kubernetes behaviour, with no Airflow deployed. Take the steps from the [typical testing pattern](contributing-docs/testing/k8s_tests.rst#typical-testing-pattern-for-kubernetes-tests) and the options and allowed values from `breeze k8s <command> --help`; Kubernetes versions take a `v` prefix (e.g. `--kubernetes-version v1.35.8`). Choose the Python and Kubernetes versions from the task, such as the versions in the issue being reproduced, and tell the user if breeze does not support them rather than substituting others. Do not run `kind create cluster`, or `helm install` this repo's Airflow chart. Run `kubectl` only through `breeze k8s shell` for that cluster, passing the command with `-c` instead of opening an interactive shell (e.g. `breeze k8s shell --python 3.12 --kubernetes-version v1.35.8 -c 'kubectl get pods -A'`), never from the host shell, so it cannot reach other clusters through the host's `~/.kube/config`.
-- If a step needs `breeze` and it cannot run (Docker missing, or its Docker calls refused by a sandbox or socket proxy), stop and tell the user which call failed. Do not build a substitute host environment instead, such as a virtualenv with a released Airflow version.
+- Install breeze shim (one-time, per machine): `scripts/tools/setup_breeze` — installs `~/.local/bin/breeze` that runs breeze via `uvx` from the current git worktree's `dev/breeze` (so each worktree, including ephemeral agent worktrees, gets its own breeze tied to its sources). See [ADR 0017](dev/breeze/doc/adr/0017-use-uvx-to-run-breeze-from-local-sources.md).
+- **Never run pytest, python, or airflow commands directly on the host** — always use `breeze`.
 - Place temporary scripts in `dev/` (mounted as `/opt/airflow/dev/` inside Breeze).
 
 ## Commands
@@ -33,7 +31,6 @@ Don't spell out **Directed Acyclic Graph** except for historical context.
 `<PROJECT>` is folder where pyproject.toml of the package you want to test is located. For example, `airflow-core` or `providers/amazon`.
 `<target_branch>` is the branch the PR will be merged into — usually `main`, but could be `v3-1-test` when creating a PR for the 3.1 branch.
 
-<!-- START generated-commands, please keep comment here to allow auto update -->
 - **Run a single test:** `uv run --project <PROJECT> pytest path/to/test.py::TestClass::test_method -xvs`
 - **Run a test file:** `uv run --project <PROJECT> pytest path/to/test.py -xvs`
 - **Run all tests in package:** `uv run --project <PROJECT> pytest path/to/package -xvs`
@@ -44,22 +41,19 @@ Don't spell out **Directed Acyclic Graph** except for historical context.
 - **Run core or provider non-db tests suite in parallel:** `breeze testing <test_group> --skip-db-tests --use-xdist` (test groups: `core-tests`, `providers-tests`)
 - **Run single provider complete test suite:** `breeze testing providers-tests --test-type "Providers[PROVIDERS_LIST]"` (e.g., `Providers[google]` or `Providers[amazon]` or "Providers[amazon,google]")
 - **Run Helm tests in parallel with xdist** `breeze testing helm-tests --use-xdist`
-- **Run Helm tests with specific K8s version:** `breeze testing helm-tests --use-xdist --kubernetes-version <version>` (bare version, e.g. `1.35.8`, unlike the `v`-prefixed `breeze k8s` versions; allowed versions in `breeze testing helm-tests --help`)
+- **Run Helm tests with specific K8s version:** `breeze testing helm-tests --use-xdist --kubernetes-version 1.35.0`
 - **Run specific Helm test type:** `breeze testing helm-tests --use-xdist --test-type <type>` (types: `airflow_aux`, `airflow_core`, `apiserver`, `dagprocessor`, `other`, `redis`, `security`, `statsd`, `webserver`)
 - **Run other suites of tests** `breeze testing <test_group>` (test groups: `airflow-ctl-tests`, `docker-compose-tests`, `task-sdk-tests`)
 - **Run scripts tests:** `uv run --project scripts pytest scripts/tests/ -xvs`
 - **Run Airflow CLI:** `breeze run airflow dags list`
-- **Run provider tests against a released Airflow version:** `breeze shell --use-airflow-version <VERSION> --mount-sources providers-and-tests`, then `pytest providers/<provider>/tests/...` inside the shell
 - **Type-check (non-providers):** run the prek hook — `prek run mypy-<project> --all-files` (e.g. `mypy-airflow-core`, `mypy-task-sdk`, `mypy-shared-logging`; each `shared/<dist>` workspace member has its own `mypy-shared-<dist>` hook). The hook uses a dedicated virtualenv and mypy cache under `.build/mypy-venvs/<hook>/` and `.build/mypy-caches/<hook>/`; mypy itself is installed from `uv.lock` via the `mypy` dependency group (`uv sync --group mypy`), so it never mutates your project `.venv`. The hook prefers `uv` from the project's main `.venv/bin/uv` (installed by `uv sync` — `uv` is part of the `dev` dependency group via the `all` extras) for a project-pinned uv version; it falls back to `uv` on `$PATH` with a warning if that binary is missing. Clear with `breeze down --cleanup-mypy-cache`.
 - **Type-check (providers):** `breeze run mypy path/to/code`
 - **Lint with ruff only:** `prek run ruff --from-ref <target_branch>`
 - **Format with ruff only:** `prek run ruff-format --from-ref <target_branch>`
 - **Run regular (fast) static checks:** `prek run --from-ref <target_branch> --stage pre-commit`
-- **Run manual (slower) checks:** `prek run --from-ref <target_branch> --stage manual --skip compile-ui-assets-dev --skip view-skill-eval --skip run-skill-eval-codex` (the skipped hooks start long-running local servers or provision the opt-in Codex environment rather than run checks that complete)
+- **Run manual (slower) checks:** `prek run --from-ref <target_branch> --stage manual`
 - **Build docs:** `breeze build-docs`
-- **List the local verification for your changes:** `breeze verify` (add `--full` for everything CI runs for the default matrix cell except static checks, `--json` for machine-readable output). It uses the same selective-checks logic as CI.
-- **Determine which tests to run based on changed files:** `breeze ci selective-check --commit-ref <commit_with_squashed_changes>`
-<!-- END generated-commands, please keep comment here to allow auto update -->
+- **Determine which tests to run based on changed files:** `breeze selective-checks --commit-ref <commit_with_squashed_changes>`
 
 SQLite is the default backend. Use `--backend postgres` or `--backend mysql` for integration tests that need those databases. If Docker networking fails, run `docker network prune`.
 
@@ -138,100 +132,261 @@ reported as such are described in "What is NOT considered a security vulnerabili
 
 - **Always format and check Python files with ruff immediately after writing or editing them:** `uv run ruff format <file_path>` and `uv run ruff check --fix <file_path>`. Do this for every Python file you create or modify, before moving on to the next step.
 - No `assert` in production code.
-- **Comment only when context is not readily apparent from the code.**
-  Generic purpose explanation do not qualify: `# Log for debugging` above `logging.debug(...)`,
-  `# Validate for safety`, `# Retry for reliability` and similar provide no useful information.
-  Useful comments record a specific constraint, invariant, compatibility quirk, or tradeoff.
-  Before adding a comment, identify the misunderstanding or incorrect change it would prevent.
-  If removing a comment will lose non-code-related context, omit it. Do not narrate code, repeat code,
-  or invent a rationale in comments. Keep necessary explanations short, precise and at the source of truth.
-  Do not repeat comments at each call site. Judge each comment value by the preserved context only.
 - `time.monotonic()` for durations, not `time.time()`.
 - In `airflow-core`, functions with a `session` parameter must not call `session.commit()`. Use keyword-only `session` parameters.
 - Imports at top of file. Valid exceptions: circular imports, lazy loading for worker isolation, `TYPE_CHECKING` blocks.
 - Guard heavy type-only imports (e.g., `kubernetes.client`) with `TYPE_CHECKING` in multi-process code paths.
-- Define dedicated exception classes or use existing exceptions such as `ValueError` instead of raising the broad `AirflowException` directly. Each error case should have a specific exception type that conveys what went wrong. **Never add new direct `raise AirflowException(...)` usages — the community is actively reducing them, not adding more, and the `check-no-new-airflow-exceptions` prek hook enforces this across `airflow-core`, `airflow-ctl`, `task-sdk`, `providers`, and `shared`.** Prefer a Python built-in (`ValueError`, `TypeError`, `OSError`, …) or a dedicated class in the appropriate `exceptions.py`. The only acceptable way an `AirflowException` line may move is relocating an already-existing one verbatim during a refactor (e.g. moving code between files) — that is not a new usage. When you touch code that already raises `AirflowException`, prefer narrowing it to a more specific exception rather than leaving or duplicating it.
-- Translate domain-layer exceptions to `HTTPException` at FastAPI route boundaries. In `airflow-core/src/airflow/api_fastapi/core_api/` route handlers, catch errors raised by domain code (e.g., `ValueError` from `airflow.state.metastore.MetastoreBackend` for a missing row or invalid input) and re-raise as `HTTPException` with the right status (`404` for not-found, `400` for invalid input). Otherwise they propagate as `500 Internal Server Error`, leaking internals and misleading clients.
-- Bulk `DELETE`/`UPDATE` in the scheduler loop or any synchronous interval task (e.g. `call_regular_interval` callbacks) must be batched with `LIMIT` and committed between batches — never issue a single unbounded bulk write against a user-driven table. Unbounded bulk writes hold row locks for the entire transaction (blocking concurrent writers) and stall the scheduler main loop. Filter columns used by the cleanup must be indexed. Follow the batching pattern in `airflow-core/src/airflow/utils/db_cleanup.py`.
-- Name functions and methods with action verbs: `get_`, `extract_`, `find_`, `compute_`, `build_`, etc. Avoid noun-only names like `_serialize_keys` or `_base_names` — they read as attributes, not callables. Predicates (`is_`, `has_`) are the one exception.
+- Define dedicated exception classes or use existing exceptions such as `ValueError` instead of raising the broad `AirflowException` directly. Each error case should have a specific exception type that conveys what went wrong.
 - Apache License header on all new files (prek enforces this).
-- **Keep selective-checks behaviour and its documentation in sync.** The CI optimisation logic lives in `dev/breeze/src/airflow_breeze/utils/selective_checks.py` (run-mode decisions, file-group matching, test-type selection, prek-hook skipping). Whenever you change a rule there — add/rename a file group, change what forces `full_tests_needed`/`all_versions`, alter how providers or test types are selected, or change which prek hooks are skipped — update [`dev/breeze/doc/ci/04_selective_checks.md`](dev/breeze/doc/ci/04_selective_checks.md) in the same PR (the decision-rules list, the diagrams, the outputs table, and the worked examples as applicable) and add/adjust tests in `dev/breeze/tests/test_selective_checks.py`. The doc is the human-facing explanation of that file; letting them drift makes CI behaviour impossible to reason about.
-- Newsfragments: the full rules are in [`contributing-docs/18_contribution_workflow.rst`](contributing-docs/18_contribution_workflow.rst#newsfragments). Do not add one by default. In `airflow-core/` use only `significant` newsfragments, and only for a change users must read before upgrading: a behavior change, a removal or a new default, or migration steps. `task-sdk/` has no release notes of its own (its changes are listed in the Airflow release notes), so its newsfragments go in `airflow-core/newsfragments/`. Never add one for an ordinary bug fix, feature, improvement or doc change, or for build/release tooling, CI, packaging, internal refactors, dev-only scripts and tests. In `chart/`, add one only for major or breaking changes. When unsure, leave it out: a maintainer will ask for one during review if it is needed. **Never add newsfragments for `providers/` or `airflow-ctl/`**. Their release managers regenerate the changelog from `git log` (see `dev/README_RELEASE_PROVIDERS.md` and `dev/README_RELEASE_AIRFLOWCTL.md`). For a user-visible note there, edit `providers/<provider>/docs/changelog.rst` or `airflow-ctl/RELEASE_NOTES.rst` directly.
+- Newsfragments are only used by distributions whose release process consumes them via towncrier — currently `airflow-core/newsfragments/`, `chart/newsfragments/`, and `dev/mypy/newsfragments/` — and only for major or breaking changes (usually coordinated during review; do not add by default). **Never add newsfragments for `providers/` or `airflow-ctl/`** — those distributions are released from `main` and their release managers regenerate the changelog from `git log`, so per-PR newsfragments are not consumed (see `dev/README_RELEASE_PROVIDERS.md` and `dev/README_RELEASE_AIRFLOWCTL.md`). For a user-visible note in those distributions, edit the changelog directly: `providers/<provider>/docs/changelog.rst` for providers, `airflow-ctl/RELEASE_NOTES.rst` for airflow-ctl. Changes to `task-sdk/` ship in `airflow-core` — use `airflow-core/newsfragments/`.
 
 ## Testing Standards
 
-- Target exactly 100% coverage of what the PR changes — no more, no less. Every changed or added behaviour must have a test; every test must fail without the PR's change. Do not add tests for pre-existing logic that was already present before the PR, and do not test standard-library or third-party functions. The exception is deliberate behaviour or integration tests, which may cross those boundaries by design.
+- Add tests for new behavior — cover success, failure, and edge cases.
 - Use pytest patterns, not `unittest.TestCase`.
 - Use `spec`/`autospec` when mocking.
-- Prefer `@mock.patch` decorators over `with mock.patch(...)` context managers for patching. Use `conf_vars` (from `tests_common.test_utils.config`) for Airflow config overrides — as a decorator when the value is fixed, as a context manager when it varies via `@pytest.mark.parametrize`.
 - Use `time_machine` for time-dependent tests. Do not use `datetime.now()`
-- Use `@pytest.mark.parametrize` for multiple similar inputs — consolidate tests that only differ in input/expected values into a single parametrized test.
+- Use `@pytest.mark.parametrize` for multiple similar inputs.
 - Use `@pytest.mark.db_test` for tests that require database access.
 - Test fixtures: `devel-common/src/tests_common/pytest_plugin.py`.
 - Test location mirrors source: `airflow/cli/cli_parser.py` → `tests/cli/test_cli_parser.py`.
-- Do not assert on raw log text (`caplog.text` for example), these are legacy string matching APIs planned for removal. Structured assertions via `caplog` (which resolves to `cap_structlog` under structlog) are fine and preferred: `"event name" in caplog` or `{"event": ..., "field": ...} in caplog`.
-
-## Output conventions
-
-- Put any files you generate (PR reviews, reports, scratch output) under `files/`.
-- Create `files/` if it doesn't exist.
+- Do not use `caplog` in tests, prefer checking logic and not log output.
 
 
 ## Commits and PRs
 
-Use the contribution skills below when available. If the runtime does not support
-skill discovery, read the linked `SKILL.md` directly. If either skill is
-unavailable, do not publish, push, create or modify GitHub issues or pull
-requests, or rename or add Git remotes. You may draft text or propose commands,
-but must state that the relevant skill could not be read and request confirmation
-before any remote-changing action.
+Write commit messages focused on user impact, not implementation details.
 
-- [Draft contribution text](.agents/skills/airflow-pr-draft-summary/SKILL.md):
-  commit messages, PR titles/descriptions, release notes and GitHub messages.
-- [Publish changes](.agents/skills/airflow-publish-changes/SKILL.md):
-  existing PR checks, remotes, pre-push review, publication and deferred-work issues.
+- **Good:** `Fix airflow dags test command failure without serialized Dags`
+- **Good:** `UI: Fix Grid view not refreshing after task actions`
+- **Bad:** `Initialize Dag bundles in CLI get_dag function`
 
-Before working on an issue, check for existing PRs. Push only to the user's fork,
-never upstream or `main`. Never list an agent as a commit co-author. Retain the
-required Gen-AI disclosure and GitHub-message attribution; do not tag individuals
-outside the exceptions in the message guidance. Drafting does not authorize posting.
+For `airflow-core` (and `chart/`, `dev/mypy/`) user-visible changes, add a newsfragment in that distribution's `newsfragments/` directory:
+`echo "Brief description" > airflow-core/newsfragments/{PR_NUMBER}.{bugfix|feature|improvement|doc|misc|significant}.rst`
 
-## apache-magpie framework
+**Do not add newsfragments for `providers/` or `airflow-ctl/`** — their release managers regenerate the changelog from `git log` and do not consume newsfragments. Update the changelog directly when needed: `providers/<provider>/docs/changelog.rst` (see `providers/AGENTS.md`) or `airflow-ctl/RELEASE_NOTES.rst`. Changes to `task-sdk/` use `airflow-core/newsfragments/` since task-sdk ships in airflow-core.
 
-This repo uses the [`apache/magpie`](https://github.com/apache/magpie)
-framework, installed from its plugin marketplace. The framework provides
-the `pr-management-*` skills (triage, code-review, stats, mentor) among
-others. Nothing framework-related is committed here — install it in your
-own agent harness. In Claude Code:
+- NEVER add Co-Authored-By with yourself as co-author of the commit. Agents cannot be authors, humans can be, Agents are assistants.
 
-```text
-/plugin marketplace add apache/magpie
-/plugin install magpie-pr-management@apache-magpie
+### Git remote naming conventions
+
+Airflow standardises on two git remote names, and the rest of this file, the
+contributing docs, and the release docs all assume them:
+
+- **`upstream`** — the canonical `apache/airflow` repository (fetch from here).
+- **`origin`** — the contributor's fork of `apache/airflow` (push PR branches here).
+
+Always push branches to `origin`. Never push directly to `upstream` (and never
+push directly to `main` on either remote).
+
+**Before running any remote-based command, run `git remote -v` and verify the
+names match this convention.** If they do not — for example, the upstream remote
+is called `apache`, or `origin` points at `apache/airflow` with the fork under a
+different name like `fork` — **do not silently go along with the existing
+names**. Surface the mismatch to the user and propose the exact rename commands
+to bring the checkout in line with the convention, then ask the user to confirm
+before running them. Examples:
+
+- Upstream is named `apache`, fork is `origin` (common legacy layout):
+
+  ```bash
+  git remote rename apache upstream
+  ```
+
+- `origin` points at `apache/airflow` and the fork is named `fork` (release-manager
+  / "cloned upstream directly" layout):
+
+  ```bash
+  git remote rename origin upstream
+  git remote rename fork origin
+  ```
+
+- Upstream is missing entirely:
+
+  ```bash
+  git remote add upstream https://github.com/apache/airflow.git
+  # or, for SSH:
+  git remote add upstream git@github.com:apache/airflow.git
+  ```
+
+- Fork is missing entirely:
+
+  ```bash
+  gh repo fork apache/airflow --remote --remote-name origin
+  ```
+
+After any rename/add, re-run `git remote -v` to confirm the new state before
+continuing with commands that assume `upstream` / `origin`.
+
+If a doc, script, or command you're about to run uses the old `apache` name (or
+any other variant), **translate it to the `upstream` convention** in what you
+propose to the user, rather than perpetuating the old name. Flag the stale
+documentation so it can be fixed in a follow-up.
+
+### Creating Pull Requests
+
+**Always push to the user's fork (`origin`)**, not to `upstream` (`apache/airflow`).
+Never push directly to `main`.
+
+Before pushing, confirm the remote setup matches the conventions above
+(`upstream` → `apache/airflow`, `origin` → your fork). Run `git remote -v` and,
+if the names don't match, propose renames as described in "Git remote naming
+conventions" — ask the user to confirm before running them.
+
+If the fork remote does not exist at all, create one:
+
+```bash
+gh repo fork apache/airflow --remote --remote-name origin
 ```
 
-`magpie@apache-magpie` installs every family at once; other families
-(`magpie-security`, `magpie-release-management`, …) install individually.
-`magpie-release-management` is in the project floor (`.apache-magpie.lock`):
-its `verify-rc` skill verifies a release candidate and, per
-[`.apache-magpie-overrides/release-verify-rc.md`](.apache-magpie-overrides/release-verify-rc.md),
-can test your own changes against a providers wave.
-The contributor-facing summary lives in the [Agent-assisted contribution
-section of `README.md`](README.md#agent-assisted-contribution-apache-magpie).
+Before pushing, perform a self-review of your changes following the Gen-AI review guidelines
+in [`contributing-docs/05_pull_requests.rst`](contributing-docs/05_pull_requests.rst) and the
+code review checklist in [`.github/instructions/code-review.instructions.md`](.github/instructions/code-review.instructions.md):
 
-Airflow-specific modifications to framework-skill workflows live in
-[`.apache-magpie-overrides/`](.apache-magpie-overrides/) — the installed
-plugin reads them at run time. Never edit the installed plugin itself;
-framework changes go via PR to
-[`apache/magpie`](https://github.com/apache/magpie).
+1. Review the full diff (`git diff main...HEAD`) and verify every change is intentional and
+   related to the task — remove any unrelated changes.
+2. Read `.github/instructions/code-review.instructions.md` and check your diff against every
+   rule — architecture boundaries, database correctness, code quality, testing requirements,
+   API correctness, and AI-generated code signals. Fix any violations before pushing.
+3. Confirm the code follows the project's coding standards and architecture boundaries
+   described in this file.
+4. Run regular (fast) static checks (`prek run --from-ref <target_branch> --stage pre-commit`)
+   and fix any failures. This includes mypy checks for non-provider projects (airflow-core, task-sdk, airflow-ctl, dev, scripts, devel-common).
+5. Run manual (slower) checks (`prek run --from-ref <target_branch> --stage manual`) and fix any failures.
+6. Run relevant individual tests and confirm they pass.
+7. Find which tests to run for the changes with selective-checks and run those tests in parallel to confirm they pass and check for CI-specific issues.
+8. Check for security issues — no secrets, no injection vulnerabilities, no unsafe patterns.
 
-### Reviewing pull requests
+Before pushing, always rebase your branch onto the latest target branch (usually `main`)
+to avoid merge conflicts and ensure CI runs against up-to-date code:
 
-With the `magpie-pr-management` plugin installed, use the
-`magpie-pr-management:pr-management-code-review` skill for PR code review.
-It posts findings as **inline review comments** anchored to `file:line`,
-presented **individually for accept/skip** before anything is submitted —
-prefer it over an ad-hoc review pass or a generic review command. A
-body-only review is the explicit opt-out (`inline:off`).
+```bash
+git fetch upstream <target_branch>
+git rebase upstream/<target_branch>
+```
+
+If there are conflicts, resolve them and continue the rebase. If the rebase is too complex,
+ask the user for guidance.
+
+Then push the branch to your fork (`origin`) and open the PR creation page in the browser
+with the body pre-filled (including the generative AI disclosure already checked):
+
+```bash
+git push -u origin <branch-name>
+gh pr create --web --title "Short title (under 70 chars)" --body "$(cat <<'EOF'
+Brief description of the changes.
+
+closes: #ISSUE  (if applicable)
+
+---
+
+##### Was generative AI tooling used to co-author this PR?
+
+- [X] Yes — <Agent Name and Version>
+
+Generated-by: <Agent Name and Version> following [the guidelines](https://github.com/apache/airflow/blob/main/contributing-docs/05_pull_requests.rst#gen-ai-assisted-contributions)
+
+EOF
+)"
+```
+
+The `--web` flag opens the browser so the user can review and submit. The `--body` flag
+pre-fills the PR template with the generative AI disclosure already completed.
+
+Remind the user to:
+
+1. Review the PR title — keep it short (under 70 chars) and focused on user impact.
+2. Add a brief description of the changes at the top of the body.
+3. Reference related issues when applicable (`closes: #ISSUE` or `related: #ISSUE`).
+
+### Tracking issues for deferred work
+
+When a PR applies a **workaround, version cap, mitigation, or partial fix**
+rather than solving the underlying problem (for example: upper-binding a
+dependency to avoid a breaking upstream release, disabling a feature
+behind a flag, reverting a change that needs a better replacement, or
+papering over a bug so a release can ship), the deferred work must be
+captured in a GitHub tracking issue **and** the tracking issue URL must
+appear as a comment at the workaround site in the code.
+
+1. **Open the tracking issue first**, before finalising the PR body.
+2. **Reference it in the PR body by number** — e.g. "full migration is
+   tracked in #65609" — so anyone reviewing the PR can see what was
+   deferred and why.
+3. **Add a link to the tracking issue as a comment at the workaround
+   itself**, so the reference survives after the PR merges and anyone
+   reading the source later can click straight through to the follow-up
+   work. Use the **full issue URL**, not bare `#NNNNN` — bare references
+   do not auto-link outside GitHub's web UI (e.g. when grepping in an
+   editor, browsing a checkout, or reading the file in a terminal).
+   For example:
+
+   ```toml
+   # pyproject.toml
+   # Remove the <1.0 cap after migrating to httpx 1.x;
+   # tracked at https://github.com/apache/airflow/issues/65609
+   "httpx>=0.27.0,<1.0",
+   ```
+
+   ```python
+   # some_module.py
+   # Delete this fallback once the new client is on all workers;
+   # tracked at https://github.com/apache/airflow/issues/65609
+   if old_client:
+       ...
+   ```
+
+4. **Do not** write vague forward-looking phrases like "will open a
+   tracking issue" or "to be filed later" in the PR body or in code
+   comments. Open the issue, link it in both places, then submit the PR.
+5. The tracking issue should describe: what the workaround is, why it
+   was chosen, the concrete follow-up work needed, and any acceptance
+   criteria for removing the workaround.
+
+If a PR you already opened has such forward-looking language, open the
+tracking issue, add a PR comment referencing the issue URL, and push a
+follow-up commit that adds the tracking-issue URL as a comment at the
+workaround site in the code.
+
+### GitHub messages drafted by agents
+
+Anything an agent drafts that ends up posted to GitHub on the user's
+account — PR / issue comments, PR-level reviews, line-level review
+comments, discussion replies — must end with an attribution footer.
+The footer is required whether or not a human reviewed the draft
+first; what changes between the two cases is the wording.
+
+Place the footer on its own paragraph at the end of the message,
+separated from the body by a blank line and a horizontal rule. Use
+the same agent name string used in `Generated-by:` on PR bodies (for
+example, `Claude Code (Opus 4.7)`).
+
+- **Agent draft, posted without prior human review** (autonomous /
+  routine work, scheduled triage, etc.):
+
+  ```
+  ---
+  Drafted-by: <Agent Name and Version> (no human review before posting)
+  ```
+
+- **Agent draft, reviewed and approved by a human maintainer before
+  posting:**
+
+  ```
+  ---
+  Drafted-by: <Agent Name and Version>; reviewed by @<github-handle> before posting
+  ```
+
+  The `@<github-handle>` is the human who actually read the draft
+  and said "post it as-is" (or similar). It is not the user the agent
+  is "running on behalf of" if no review took place — that case is the
+  first form, not this one.
+
+This footer is in addition to, not a replacement for, any per-tool
+disclosure rules (the PR body still keeps its own `Generated-by:`
+block under the AI-disclosure checkbox; commit messages still follow
+the no-self-as-co-author rule above). Do not skip the footer to
+shorten a message — attribution applies regardless of message length.
 
 ## Boundaries
 

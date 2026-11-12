@@ -26,7 +26,6 @@ from fastapi.routing import Mount
 from sqlalchemy import select
 
 from airflow.models.variable import Variable
-from airflow.process_context import force_server_context
 
 from tests_common.test_utils.db import clear_db_variables
 
@@ -97,24 +96,6 @@ class TestGetVariable:
         assert response.status_code == 200
         assert response.json() == {"key": "key1", "value": "VALUE"}
 
-    @mock.patch.dict("os.environ", {"AIRFLOW_VAR_KEY1": "VALUE"})
-    @mock.patch.dict(
-        "sys.modules",
-        {"airflow.sdk.execution_time.task_runner": mock.Mock(spec=["SUPERVISOR_COMMS"])},
-    )
-    @mock.patch(
-        "airflow.sdk.Variable.get",
-        side_effect=AssertionError(
-            "Execution API should not route through Task SDK Variable.get in server context"
-        ),
-    )
-    def test_variable_get_uses_server_path_when_supervisor_comms_exists(self, mock_sdk_get, client):
-        with force_server_context():
-            response = client.get("/execution/variables/key1")
-
-        assert response.status_code == 200
-        assert response.json() == {"key": "key1", "value": "VALUE"}
-
     @pytest.mark.parametrize(
         "key",
         [
@@ -176,26 +157,6 @@ class TestPutVariable:
         assert var_from_db.val == payload["value"]
         if "description" in payload:
             assert var_from_db.description == payload["description"]
-
-    @mock.patch.dict(
-        "sys.modules",
-        {"airflow.sdk.execution_time.task_runner": mock.Mock(spec=["SUPERVISOR_COMMS"])},
-    )
-    @mock.patch(
-        "airflow.sdk.Variable.set",
-        side_effect=AssertionError(
-            "Execution API should not route through Task SDK Variable.set in server context"
-        ),
-    )
-    def test_variable_put_uses_server_path_when_supervisor_comms_exists(self, mock_sdk_set, client, session):
-        with force_server_context():
-            response = client.put("/execution/variables/var_server_only", json={"value": "server_value"})
-
-        assert response.status_code == 201
-        assert response.json()["message"] == "Variable successfully set"
-        var_from_db = session.scalars(select(Variable).where(Variable.key == "var_server_only")).first()
-        assert var_from_db is not None
-        assert var_from_db.val == "server_value"
 
     @pytest.mark.parametrize(
         ("key", "payload", "error_type"),
@@ -283,70 +244,6 @@ class TestPutVariable:
         assert any(msg.startswith("Checking write access for task instance") for msg in caplog.messages)
 
 
-class TestGetVariableKeys:
-    @pytest.mark.parametrize(
-        ("prefix", "expected_keys"),
-        [
-            pytest.param(
-                None,
-                {"prod_db_url", "prod_api_key", "dev_debug", "prodXdb", "50%off", "50abc"},
-                id="no-prefix",
-            ),
-            pytest.param("prod_", {"prod_db_url", "prod_api_key"}, id="underscore-is-literal"),
-            pytest.param("50%", {"50%off"}, id="percent-is-literal"),
-            pytest.param("staging_", set(), id="no-match"),
-        ],
-    )
-    def test_get_variable_keys(self, client, session, prefix, expected_keys):
-        Variable.set(key="prod_db_url", value="postgres://...", session=session)
-        Variable.set(key="prod_api_key", value="secret", session=session)
-        Variable.set(key="dev_debug", value="true", session=session)
-        Variable.set(key="prodXdb", value="x", session=session)
-        Variable.set(key="50%off", value="x", session=session)
-        Variable.set(key="50abc", value="x", session=session)
-        session.commit()
-
-        params = {"prefix": prefix} if prefix is not None else {}
-        response = client.get("/execution/variables/keys", params=params)
-
-        assert response.status_code == 200
-        body = response.json()
-        assert set(body["keys"]) == expected_keys
-        assert body["total_entries"] == len(expected_keys)
-
-    def test_get_variable_keys_empty_db(self, client):
-        response = client.get("/execution/variables/keys")
-
-        assert response.status_code == 200
-        assert response.json() == {"keys": [], "total_entries": 0}
-
-    def test_get_variable_keys_paginates_with_limit_and_offset(self, client, session):
-        for i in range(5):
-            Variable.set(key=f"k{i}", value=str(i), session=session)
-        session.commit()
-
-        first = client.get("/execution/variables/keys", params={"limit": 2, "offset": 0})
-        second = client.get("/execution/variables/keys", params={"limit": 2, "offset": 2})
-        third = client.get("/execution/variables/keys", params={"limit": 2, "offset": 4})
-
-        # Order is stable (sorted by key) so pagination is deterministic.
-        assert first.json() == {"keys": ["k0", "k1"], "total_entries": 5}
-        assert second.json() == {"keys": ["k2", "k3"], "total_entries": 5}
-        assert third.json() == {"keys": ["k4"], "total_entries": 5}
-
-    @pytest.mark.parametrize(
-        ("params", "expected_status"),
-        [
-            pytest.param({"limit": 0}, 422, id="limit-below-min"),
-            pytest.param({"limit": 10_001}, 422, id="limit-above-max"),
-            pytest.param({"offset": -1}, 422, id="offset-negative"),
-        ],
-    )
-    def test_get_variable_keys_validates_pagination_bounds(self, client, params, expected_status):
-        response = client.get("/execution/variables/keys", params=params)
-        assert response.status_code == expected_status
-
-
 class TestDeleteVariable:
     @pytest.mark.parametrize(
         ("keys_to_create", "key_to_delete"),
@@ -381,27 +278,3 @@ class TestDeleteVariable:
 
         vars = session.scalars(select(Variable)).all()
         assert len(vars) == 1
-
-    def test_variable_delete_uses_server_path_when_supervisor_comms_exists(self, client, session):
-        # Patched below, not by decorator: this setup must run before ``SUPERVISOR_COMMS`` is visible.
-        Variable.set(key="var_server_delete", value="to_delete", session=session)
-        session.commit()
-
-        with (
-            force_server_context(),
-            mock.patch.dict(
-                "sys.modules",
-                {"airflow.sdk.execution_time.task_runner": mock.Mock(spec=["SUPERVISOR_COMMS"])},
-            ),
-            mock.patch(
-                "airflow.sdk.Variable.delete",
-                side_effect=AssertionError(
-                    "Execution API should not route through Task SDK Variable.delete in server context"
-                ),
-            ),
-        ):
-            response = client.delete("/execution/variables/var_server_delete")
-
-        assert response.status_code == 204
-        session.expire_all()
-        assert session.scalar(select(Variable).where(Variable.key == "var_server_delete")) is None

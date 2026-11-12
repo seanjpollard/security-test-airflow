@@ -71,7 +71,7 @@ Configuring the Connection
     * ``disable_ssl`` *(bool)* – Disable SSL/TLS entirely. Default ``false``.
     * ``disable_tls`` *(bool)* – Skip ``STARTTLS``. Default ``false``.
     * ``timeout`` *(int)* – Socket timeout (seconds). Default ``30``.
-    * ``retry_limit`` *(int)* – Number of retries after the first attempt before raising. Default ``5``.
+    * ``retry_limit`` *(int)* – Connection attempts before raising. Default ``5``.
     * ``ssl_context`` – ``"default"`` | ``"none"``
       See :ref:`howto/connection:smtp:ssl-context`.
 
@@ -233,10 +233,11 @@ connection via **CLI**:
      }'
 
 .. note::
-   Within this provider, the ``[smtp]`` section is used only by the email backend in
-   :mod:`airflow.providers.smtp.utils.emailer` (see :doc:`/email-backend`).
-   :class:`~airflow.providers.smtp.hooks.smtp.SmtpHook` and the SMTP notifier never read it;
-   they take all settings from the Connection.
+   The ``[smtp]`` section in ``airflow.cfg`` is used by the **core**
+   e-mail helper slated for deprecation.
+   When you switch to :class:`~airflow.providers.smtp.hooks.smtp.SmtpHook`
+   *and* supply a ``smtp_conn_id``, the hook's connection settings take
+   precedence and the global ``[smtp]`` options may be ignored.
 
 Using ``SmtpHook`` in a Dag
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^

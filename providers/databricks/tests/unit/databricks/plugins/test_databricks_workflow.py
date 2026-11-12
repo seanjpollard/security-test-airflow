@@ -168,7 +168,7 @@ def test_get_task_instance_airflow2():
         with patch(
             "airflow.providers.databricks.plugins.databricks_workflow.DagRun.find", return_value=[dag_run]
         ):
-            result = get_task_instance(operator, dttm, session=session)
+            result = get_task_instance(operator, dttm, session)
             assert result == dag_run
 
 

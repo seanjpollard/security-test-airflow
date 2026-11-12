@@ -27,7 +27,6 @@ from typing import TYPE_CHECKING, Any
 from airflow.providers.common.compat.sdk import AirflowException, BaseSensorOperator
 from airflow.providers.common.sql.hooks.handlers import fetch_all_handler
 from airflow.providers.databricks.hooks.databricks_sql import DatabricksSqlHook
-from airflow.providers.databricks.utils.query_tags import build_query_tags
 
 if TYPE_CHECKING:
     from airflow.providers.common.compat.sdk import Context
@@ -56,11 +55,6 @@ class DatabricksSqlSensor(BaseSensorOperator):
     :param sql: SQL statement to be executed.
     :param handler: Handler for DbApiHook.run() to return results, defaults to fetch_all_handler
     :param client_parameters: Additional parameters internal to Databricks SQL connector parameters.
-    :param query_tags: Optional dictionary of query tags to attach to Databricks SQL queries.
-        Tags are injected via the ``QUERY_TAGS`` Databricks session parameter so they appear in
-        ``system.query.history``. (templated)
-    :param include_airflow_query_tags: If True, add Airflow DAG/task/run metadata as query tags.
-        Defaults to True.
     """
 
     template_fields: Sequence[str] = (
@@ -69,7 +63,6 @@ class DatabricksSqlSensor(BaseSensorOperator):
         "catalog",
         "schema",
         "http_headers",
-        "query_tags",
     )
 
     template_ext: Sequence[str] = (".sql",)
@@ -88,8 +81,6 @@ class DatabricksSqlSensor(BaseSensorOperator):
         sql: str | Iterable[str],
         handler: Callable[[Any], Any] = fetch_all_handler,
         client_parameters: dict[str, Any] | None = None,
-        query_tags: dict[str, str | None] | None = None,
-        include_airflow_query_tags: bool = True,
         **kwargs,
     ) -> None:
         """Create DatabricksSqlSensor object using the specified input arguments."""
@@ -105,8 +96,6 @@ class DatabricksSqlSensor(BaseSensorOperator):
         self.client_parameters = client_parameters or {}
         self.hook_params = kwargs.pop("hook_params", {})
         self.handler = handler
-        self.query_tags = query_tags or {}
-        self.include_airflow_query_tags = include_airflow_query_tags
         super().__init__(**kwargs)
 
     @cached_property
@@ -120,7 +109,7 @@ class DatabricksSqlSensor(BaseSensorOperator):
             self.http_headers,
             self.catalog,
             self.schema,
-            caller=self.caller,
+            self.caller,
             **self.client_parameters,
             **self.hook_params,
         )
@@ -143,5 +132,4 @@ class DatabricksSqlSensor(BaseSensorOperator):
 
     def poke(self, context: Context) -> bool:
         """Sensor poke function to get and return results from the SQL sensor."""
-        self.hook.query_tags = build_query_tags(context, self.query_tags, self.include_airflow_query_tags)
         return self._get_results()

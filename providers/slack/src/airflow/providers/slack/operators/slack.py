@@ -50,8 +50,6 @@ class SlackAPIOperator(BaseOperator):
     :return: The Slack API response. Returned value is pushed to XCom for downstream tasks.
     """
 
-    template_fields: Sequence[str] = ("slack_conn_id",)
-
     def __init__(
         self,
         *,
@@ -138,15 +136,7 @@ class SlackAPIPostOperator(SlackAPIOperator):
         Returned value is pushed to XCom for downstream tasks.
     """
 
-    template_fields: Sequence[str] = (
-        "username",
-        "text",
-        "attachments",
-        "blocks",
-        "channel",
-        "thread_ts",
-        "slack_conn_id",
-    )
+    template_fields: Sequence[str] = ("username", "text", "attachments", "blocks", "channel", "thread_ts")
     ui_color = "#FFBA40"
 
     def __init__(
@@ -254,7 +244,6 @@ class SlackAPIFileOperator(SlackAPIOperator):
         "display_filename",
         "snippet_type",
         "thread_ts",
-        "slack_conn_id",
     )
     ui_color = "#44BEDF"
 
@@ -357,7 +346,6 @@ class SlackAPIConversationsHistoryOperator(SlackAPIOperator):
         "oldest",
         "latest",
         "cursor",
-        "slack_conn_id",
     )
     ui_color = "#5BC4E6"
 

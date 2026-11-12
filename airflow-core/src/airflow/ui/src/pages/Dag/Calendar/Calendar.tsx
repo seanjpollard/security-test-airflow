@@ -16,99 +16,50 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Box, HStack, Text } from "@chakra-ui/react";
+import { Box, HStack, IconButton, Text } from "@chakra-ui/react";
 import { keyframes } from "@emotion/react";
 import dayjs from "dayjs";
-import tz from "dayjs/plugin/timezone";
-import utc from "dayjs/plugin/utc";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FiChevronLeft, FiChevronRight } from "react-icons/fi";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
+import { useLocalStorage } from "usehooks-ts";
 
-import {
-  useCalendarServiceGetCalendar,
-  useCalendarServiceGetCalendarDeadlines,
-  useDagServiceGetDagDetails,
-} from "openapi/queries";
-
-import { IconButton, ButtonGroupToggle } from "src/system-components";
-
+import { useCalendarServiceGetCalendar, useDagServiceGetDagDetails } from "openapi/queries";
 import { ErrorAlert } from "src/components/ErrorAlert";
-
-import { SearchParamsKeys } from "src/constants/searchParams";
-import { useTimezone } from "src/context/timezone";
+import { ButtonGroupToggle } from "src/components/ui/ButtonGroupToggle";
+import { CALENDAR_GRANULARITY_KEY, CALENDAR_VIEW_MODE_KEY } from "src/constants/localStorage";
 
 import { CalendarLegend } from "./CalendarLegend";
 import { DailyCalendarView } from "./DailyCalendarView";
 import { HourlyCalendarView } from "./HourlyCalendarView";
-import { buildDeadlineDateMap, createCalendarScale } from "./calendarUtils";
+import { createCalendarScale } from "./calendarUtils";
 
 const spin = keyframes`
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 `;
 
-dayjs.extend(utc);
-dayjs.extend(tz);
-
 export const Calendar = () => {
   const { dagId = "" } = useParams();
   const { t: translate } = useTranslation("dag");
-
-  const [searchParams, setSearchParams] = useSearchParams();
-
-  const granularity: "daily" | "hourly" =
-    searchParams.get(SearchParamsKeys.CALENDAR_GRANULARITY) === "daily" ? "daily" : "hourly";
-  const viewMode: "failed" | "total" =
-    searchParams.get(SearchParamsKeys.CALENDAR_VIEW_MODE) === "failed" ? "failed" : "total";
-
-  const dateParam = searchParams.get(SearchParamsKeys.CALENDAR_DATE);
-  const selectedDate = dateParam !== null && dayjs(dateParam).isValid() ? dayjs(dateParam) : dayjs();
-
-  const setGranularity = (value: "daily" | "hourly") => {
-    setSearchParams((previous) => {
-      const next = new URLSearchParams(previous);
-
-      next.set(SearchParamsKeys.CALENDAR_GRANULARITY, value);
-
-      return next;
-    });
-  };
-
-  const setViewMode = (value: "failed" | "total") => {
-    setSearchParams((previous) => {
-      const next = new URLSearchParams(previous);
-
-      next.set(SearchParamsKeys.CALENDAR_VIEW_MODE, value);
-
-      return next;
-    });
-  };
-
-  const setSelectedDate = (value: dayjs.Dayjs) => {
-    setSearchParams((previous) => {
-      const next = new URLSearchParams(previous);
-
-      next.set(SearchParamsKeys.CALENDAR_DATE, value.format("YYYY-MM-DD"));
-
-      return next;
-    });
-  };
+  const [selectedDate, setSelectedDate] = useState(dayjs());
+  const [granularity, setGranularity] = useLocalStorage<"daily" | "hourly">(
+    CALENDAR_GRANULARITY_KEY,
+    "hourly",
+  );
+  const [viewMode, setViewMode] = useLocalStorage<"failed" | "total">(CALENDAR_VIEW_MODE_KEY, "total");
 
   const currentDate = dayjs();
-
-  const { selectedTimezone } = useTimezone();
 
   const { data: dag } = useDagServiceGetDagDetails({ dagId });
   const isPartitioned = dag?.timetable_partitioned ?? false;
 
-  // Compute the date range in the selected timezone, then convert to UTC for API
-  const tzDate = selectedDate.tz(selectedTimezone, true);
-  const startDate = granularity === "daily" ? tzDate.startOf("year") : tzDate.startOf("month");
-  const endDate = granularity === "daily" ? tzDate.endOf("year") : tzDate.endOf("month");
+  const startDate = granularity === "daily" ? selectedDate.startOf("year") : selectedDate.startOf("month");
+  const endDate = granularity === "daily" ? selectedDate.endOf("year") : selectedDate.endOf("month");
 
-  const gte = startDate.utc().format("YYYY-MM-DDTHH:mm:ss.SSS[Z]");
-  const lte = endDate.utc().format("YYYY-MM-DDTHH:mm:ss.SSS[Z]");
+  const gte = startDate.format("YYYY-MM-DD[T]HH:mm:ss[Z]");
+  const lte = endDate.format("YYYY-MM-DD[T]HH:mm:ss[Z]");
 
   const { data, error, isLoading } = useCalendarServiceGetCalendar(
     {
@@ -122,24 +73,7 @@ export const Calendar = () => {
     { enabled: Boolean(dagId) },
   );
 
-  const { data: deadlineData } = useCalendarServiceGetCalendarDeadlines(
-    {
-      dagId,
-      deadlineTimeGte: gte,
-      deadlineTimeLte: lte,
-      granularity,
-    },
-    undefined,
-    { enabled: Boolean(dagId) },
-  );
-
-  const deadlineMap = buildDeadlineDateMap(deadlineData?.deadlines ?? [], selectedTimezone, granularity);
-
-  const scale = createCalendarScale(data?.dag_runs ?? [], {
-    granularity,
-    timezone: selectedTimezone,
-    viewMode,
-  });
+  const scale = createCalendarScale(data?.dag_runs ?? [], viewMode, granularity);
 
   if (!data && !isLoading) {
     return (
@@ -159,6 +93,8 @@ export const Calendar = () => {
               <IconButton
                 aria-label={translate("calendar.navigation.previousYear")}
                 onClick={() => setSelectedDate(selectedDate.subtract(1, "year"))}
+                size="sm"
+                variant="ghost"
               >
                 <FiChevronLeft />
               </IconButton>
@@ -182,6 +118,8 @@ export const Calendar = () => {
               <IconButton
                 aria-label={translate("calendar.navigation.nextYear")}
                 onClick={() => setSelectedDate(selectedDate.add(1, "year"))}
+                size="sm"
+                variant="ghost"
               >
                 <FiChevronRight />
               </IconButton>
@@ -191,6 +129,8 @@ export const Calendar = () => {
               <IconButton
                 aria-label={translate("calendar.navigation.previousMonth")}
                 onClick={() => setSelectedDate(selectedDate.subtract(1, "month"))}
+                size="sm"
+                variant="ghost"
               >
                 <FiChevronLeft />
               </IconButton>
@@ -228,6 +168,8 @@ export const Calendar = () => {
               <IconButton
                 aria-label={translate("calendar.navigation.nextMonth")}
                 onClick={() => setSelectedDate(selectedDate.add(1, "month"))}
+                size="sm"
+                variant="ghost"
               >
                 <FiChevronRight />
               </IconButton>
@@ -289,34 +231,25 @@ export const Calendar = () => {
             <DailyCalendarView
               data={data?.dag_runs ?? []}
               data-testid="calendar-daily-view"
-              deadlineMap={deadlineMap}
               scale={scale}
               selectedYear={selectedDate.year()}
-              timezone={selectedTimezone}
               viewMode={viewMode}
             />
-            <CalendarLegend hasDeadlines={deadlineMap.size > 0} scale={scale} viewMode={viewMode} />
+            <CalendarLegend scale={scale} viewMode={viewMode} />
           </>
         ) : (
           <HStack align="start" gap={2}>
             <Box>
               <HourlyCalendarView
                 data={data?.dag_runs ?? []}
-                deadlineMap={deadlineMap}
                 scale={scale}
                 selectedMonth={selectedDate.month()}
                 selectedYear={selectedDate.year()}
-                timezone={selectedTimezone}
                 viewMode={viewMode}
               />
             </Box>
             <Box display="flex" flex="1" justifyContent="center" pt={16}>
-              <CalendarLegend
-                hasDeadlines={deadlineMap.size > 0}
-                scale={scale}
-                vertical
-                viewMode={viewMode}
-              />
+              <CalendarLegend scale={scale} vertical viewMode={viewMode} />
             </Box>
           </HStack>
         )}

@@ -21,13 +21,9 @@ import { useTranslation } from "react-i18next";
 import { Link as RouterLink } from "react-router-dom";
 
 import type { PoolResponse, TaskInstanceState } from "openapi/requests/types.gen";
-
-import { Tooltip } from "src/system-components";
-
 import { StateIcon } from "src/components/StateIcon";
-
+import { Tooltip } from "src/components/ui";
 import { SearchParamsKeys } from "src/constants/searchParams";
-import { formatNumber } from "src/utils";
 import { type Slots, slotConfigs } from "src/utils/slots";
 
 export const UNLIMITED_SLOTS = -1;
@@ -41,7 +37,7 @@ export const PoolBar = ({
   readonly poolsWithSlotType?: Slots;
   readonly totalSlots: number;
 }) => {
-  const { i18n, t: translate } = useTranslation();
+  const { t: translate } = useTranslation("common");
 
   const isUnlimited = totalSlots === UNLIMITED_SLOTS;
   const isDashboard = Boolean(poolsWithSlotType);
@@ -101,7 +97,7 @@ export const PoolBar = ({
               >
                 {slot.icon}
                 <Text fontSize="xs" fontWeight="bold" truncate>
-                  {slot.slotValue === Infinity ? "∞" : formatNumber(slot.slotValue, i18n.language)}
+                  {slot.slotValue === Infinity ? "∞" : slot.slotValue}
                 </Text>
               </Flex>
             </Tooltip>
@@ -130,7 +126,7 @@ export const PoolBar = ({
             <HStack gap={1} key={slot.key}>
               <StateIcon size={12} state={slot.slotType as TaskInstanceState} />
               <Text color="fg.muted" fontSize="xs" fontWeight="medium">
-                {slot.label}: {formatNumber(slot.slotValue, i18n.language)}
+                {slot.label}: {slot.slotValue}
               </Text>
             </HStack>
           ))}

@@ -33,7 +33,6 @@ export const STATE_PRIORITY: Array<string> = [
   "running",
   "restarting",
   "deferred",
-  "awaiting_input",
   "queued",
   "scheduled",
   "success",

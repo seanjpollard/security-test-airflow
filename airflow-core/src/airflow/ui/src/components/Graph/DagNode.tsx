@@ -16,32 +16,21 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Flex, HStack, LinkOverlay, Text } from "@chakra-ui/react";
+import { Flex, HStack, LinkOverlay } from "@chakra-ui/react";
 import type { NodeProps, Node as NodeType } from "@xyflow/react";
 import { Link as RouterLink } from "react-router-dom";
 
-import { useDagRunServiceGetDagRuns, useDagServiceGetDag } from "openapi/queries";
-
-import { TogglePause } from "src/components/TogglePause";
-
+import { useDagServiceGetDag } from "openapi/queries";
 import { DagIcon } from "src/assets/DagIcon";
-import { useAutoRefresh } from "src/utils";
+import { TogglePause } from "src/components/TogglePause";
 
 import { NodeWrapper } from "./NodeWrapper";
 import type { CustomNodeProps } from "./reactflowUtils";
 
 export const DagNode = ({
-  data: { height, isOpen, isSelected, label, team, width },
+  data: { height, isOpen, isSelected, label, width },
 }: NodeProps<NodeType<CustomNodeProps, "dag">>) => {
-  const refetchInterval = useAutoRefresh({ dagId: label });
-  const { data: dag } = useDagServiceGetDag({ dagId: label }, undefined, {
-    refetchInterval: (query) => query.state.data?.scheduling_state === "draining" && refetchInterval,
-  });
-  const { data: unfinishedRuns } = useDagRunServiceGetDagRuns(
-    { dagId: label, limit: 1, state: ["queued", "running"] },
-    undefined,
-    { enabled: dag?.scheduling_state === "active" },
-  );
+  const { data: dag } = useDagServiceGetDag({ dagId: label });
 
   return (
     <NodeWrapper>
@@ -62,27 +51,13 @@ export const DagNode = ({
           <TogglePause
             dagId={dag?.dag_id ?? label}
             disabled={!Boolean(dag)}
-            hasUnfinishedRuns={unfinishedRuns === undefined ? undefined : unfinishedRuns.dag_runs.length > 0}
             isPaused={dag?.is_paused}
-            schedulingState={dag?.scheduling_state}
             style={{ zIndex: 2 }}
           />
         </HStack>
         <LinkOverlay asChild>
           <RouterLink to={`/dags/${dag?.dag_id ?? label}`}>{dag?.dag_display_name ?? label}</RouterLink>
         </LinkOverlay>
-        {team !== undefined && team !== null ? (
-          <Text
-            color="fg.muted"
-            fontSize="xs"
-            fontStyle="italic"
-            overflow="hidden"
-            textOverflow="ellipsis"
-            whiteSpace="nowrap"
-          >
-            {team}
-          </Text>
-        ) : undefined}
       </Flex>
     </NodeWrapper>
   );

@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from google.cloud.spanner_v1.transaction import Transaction
     from google.longrunning.operations_grpc_pb2 import Operation
 
-    from airflow.providers.common.compat.sdk import Connection
+    from airflow.models.connection import Connection
 
 
 class SpannerConnectionParams(NamedTuple):

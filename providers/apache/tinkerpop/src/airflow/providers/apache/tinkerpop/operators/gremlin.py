@@ -16,7 +16,6 @@
 # under the License.
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from airflow.providers.apache.tinkerpop.hooks.gremlin import GremlinHook
@@ -34,10 +33,7 @@ class GremlinOperator(BaseOperator):
     :param gremlin_conn_id: The connection ID to use when connecting to Gremlin. Defaults to "gremlin_default".
     """
 
-    template_fields: Sequence[str] = (
-        "query",
-        "gremlin_conn_id",
-    )
+    template_fields = ("query",)
 
     def __init__(self, query: str, gremlin_conn_id: str = "gremlin_default", **kwargs) -> None:
         super().__init__(**kwargs)

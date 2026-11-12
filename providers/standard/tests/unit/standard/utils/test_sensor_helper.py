@@ -42,7 +42,10 @@ try:
     from airflow.sdk.definitions.taskgroup import TaskGroup
 except ImportError:  # Fallback for Airflow < 3.1
     from airflow.utils.task_group import TaskGroup  # type: ignore[no-redef]
-from airflow.providers.common.compat.sdk import timezone
+try:
+    from airflow.sdk import timezone
+except ImportError:  # Fallback for Airflow < 3.1
+    from airflow.utils import timezone  # type: ignore[attr-defined,no-redef]
 
 if TYPE_CHECKING:
     from sqlalchemy.orm.session import Session
@@ -111,7 +114,7 @@ class TestSensorHelper:
                 ti = dag_run.get_task_instance(task_id)
                 if TYPE_CHECKING:
                     assert ti
-                ti.set_state(task_state, session=session)
+                ti.set_state(task_state, session)
             session.flush()
 
     @pytest.mark.parametrize(
@@ -449,39 +452,6 @@ class TestSensorHelper:
             ["failed"],
             0,
             id="single_runid_with_no_success",
-        ),
-        pytest.param(
-            {
-                "run_id_1": {"task_id_1": "success", "task_id_2": None},
-            },
-            ["success"],
-            0,
-            id="single_runid_with_single_none",
-        ),
-        pytest.param(
-            {
-                "run_id_1": {},
-            },
-            ["success"],
-            0,
-            id="single_runid_with_empty",
-        ),
-        pytest.param(
-            {
-                "run_id_1": {"task_id_1": None, "task_id_2": None},
-            },
-            ["success"],
-            0,
-            id="single_runid_with_all_none",
-        ),
-        pytest.param(
-            {
-                "run_id_1": {"task_id_1": "success", "task_id_2": "success"},
-                "run_id_2": {"task_id_1": None, "task_id_2": None},
-            },
-            ["success"],
-            1,
-            id="single_runid_with_all_none_success",
         ),
     ],
 )

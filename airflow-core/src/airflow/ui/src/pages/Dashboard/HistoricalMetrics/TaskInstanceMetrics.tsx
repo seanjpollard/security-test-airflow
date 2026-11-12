@@ -24,9 +24,9 @@ import { MdOutlineTask } from "react-icons/md";
 import { MetricSection } from "./MetricSection";
 
 type TaskInstanceMetricsProps = {
-  readonly countsAreLowerBounds: boolean;
   readonly endDate?: string;
   readonly startDate: string;
+  readonly stateCountLimit: number;
   readonly taskInstanceStates: TaskInstanceStateCount;
 };
 
@@ -43,22 +43,17 @@ const TASK_STATES: Array<keyof TaskInstanceStateCount> = [
   "up_for_reschedule",
   "upstream_failed",
   "deferred",
-  "awaiting_input",
   "no_status",
 ];
 
 export const TaskInstanceMetrics = ({
-  countsAreLowerBounds,
   endDate,
   startDate,
+  stateCountLimit,
   taskInstanceStates,
 }: TaskInstanceMetricsProps) => {
   const { t: translate } = useTranslation();
   const total = Object.values(taskInstanceStates).reduce((sum, count) => sum + count, 0);
-  // The total is only a lower bound when the counts are, so percentages would be wrong.
-  const isTotalTruncated = countsAreLowerBounds;
-  // "0+" would be meaningless.
-  const isLowerBound = (count: number) => countsAreLowerBounds && count > 0;
 
   return (
     <Box borderRadius={5} borderWidth={1} mt={2} p={4}>
@@ -73,9 +68,8 @@ export const TaskInstanceMetrics = ({
         ).map((state) =>
           taskInstanceStates[state] > 0 ? (
             <MetricSection
-              capped={isLowerBound(taskInstanceStates[state])}
+              capped={taskInstanceStates[state] >= stateCountLimit}
               endDate={endDate}
-              isTotalTruncated={isTotalTruncated}
               key={state}
               kind="task_instances"
               runs={taskInstanceStates[state]}

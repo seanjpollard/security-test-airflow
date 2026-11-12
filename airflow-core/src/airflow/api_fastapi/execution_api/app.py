@@ -17,21 +17,19 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import time
-from typing import TYPE_CHECKING, Any, cast
+from contextlib import AsyncExitStack
+from functools import cached_property
+from typing import TYPE_CHECKING, Any
 
+import attrs
 import svcs
 from cadwyn import (
     Cadwyn,
-    current_dependency_solver,
-    generate_versioned_models,
 )
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-from fastapi.routing import APIRoute, iter_route_contexts
-from opentelemetry import context as otel_context, propagate as otel_propagate
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from airflow.api_fastapi.auth.tokens import (
@@ -40,12 +38,10 @@ from airflow.api_fastapi.auth.tokens import (
     get_sig_validation_args,
     get_signing_args,
 )
-from airflow.api_fastapi.common.telemetry import NATIVE_TELEMETRY_DISABLED
-from airflow.api_fastapi.execution_api.in_process import InProcessExecutionAPI
-from airflow.api_fastapi.execution_api.security import _REQUEST_SCOPE_TOKEN_KEY, require_auth
 
 if TYPE_CHECKING:
-    from airflow.models.dagbag import DBDagBag
+    import httpx
+    from fastapi.routing import APIRoute
 
 import structlog
 from structlog.contextvars import bind_contextvars
@@ -53,9 +49,7 @@ from structlog.contextvars import bind_contextvars
 logger = structlog.get_logger(logger_name=__name__)
 
 __all__ = [
-    "InProcessExecutionAPI",
     "create_task_execution_api_app",
-    "create_jwt_generator",
     "lifespan",
     "CorrelationIdMiddleware",
 ]
@@ -77,8 +71,7 @@ def _jwt_validator():
     return validator
 
 
-def create_jwt_generator() -> JWTGenerator:
-    """Create a signer using the Execution API's configured key, audience, and lifetime."""
+def _jwt_generator():
     from airflow.configuration import conf
 
     generator = JWTGenerator(
@@ -100,12 +93,9 @@ async def lifespan(app: FastAPI, registry: svcs.Registry):
     # record this here
     app.state.svcs_registry = registry
 
-    registry.register_factory(JWTGenerator, create_jwt_generator)
-
-    # InProcessExecutionAPI stubs out JWTValidator: don't re-register in that case.
-    if JWTValidator not in registry:
-        # Create an app scoped validator, so that we don't have to fetch it every time
-        registry.register_value(JWTValidator, _jwt_validator(), ping=JWTValidator.status)
+    registry.register_factory(JWTGenerator, _jwt_generator)
+    # Create an app scoped validator, so that we don't have to fetch it every time
+    registry.register_value(JWTValidator, _jwt_validator(), ping=JWTValidator.status)
 
     yield
 
@@ -142,25 +132,25 @@ class JWTReissueMiddleware(BaseHTTPMiddleware):
         response: Response = await call_next(request)
 
         refreshed_token: str | None = None
-        token = request.scope.get(_REQUEST_SCOPE_TOKEN_KEY)
-        if token:
+        auth_header = request.headers.get("authorization")
+        if auth_header and auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1]
             try:
-                claims = token.claims.model_dump()
+                async with svcs.Container(request.app.state.svcs_registry) as services:
+                    validator: JWTValidator = await services.aget(JWTValidator)
+                    claims = await validator.avalidated_claims(token, {})
 
-                # Only short-lived execution tokens are renewed here. Any other type has a
-                # lifetime set by its issuer (workload and callback tokens outlive queue waits,
-                # the dag_processor_session token is rotated by provisioning, and Job and parsing
-                # tokens are renewed by re-registering and re-exchanging), so a new type must
-                # not become renewable by default. Tokens without a scope are legacy execution tokens.
-                if claims.get("scope", "execution") != "execution":
-                    return response
+                    # Workload tokens are long-lived and meant to survive queue
+                    # wait times so avoid refreshing them. If avalidated_claims
+                    # raises for a workload token, the outer except handles it.
+                    if claims.get("scope") == "workload":
+                        return response
 
-                now = int(time.time())
-                token_lifetime = int(claims.get("exp", 0)) - int(claims.get("iat", 0))
-                refresh_when_less_than = max(int(token_lifetime * 0.20), 30)
-                valid_left = int(claims.get("exp", 0)) - now
-                if valid_left <= refresh_when_less_than:
-                    async with svcs.Container(request.app.state.svcs_registry) as services:
+                    now = int(time.time())
+                    token_lifetime = int(claims.get("exp", 0)) - int(claims.get("iat", 0))
+                    refresh_when_less_than = max(int(token_lifetime * 0.20), 30)
+                    valid_left = int(claims.get("exp", 0)) - now
+                    if valid_left <= refresh_when_less_than:
                         generator: JWTGenerator = await services.aget(JWTGenerator)
                         refreshed_token = generator.generate(claims)
             except Exception as err:
@@ -178,7 +168,7 @@ class CadwynWithOpenAPICustomization(Cadwyn):
     # Workaround lack of customzation https://github.com/zmievsa/cadwyn/issues/255
     async def openapi_jsons(self, req: Request) -> JSONResponse:
         resp = await super().openapi_jsons(req)
-        open_apischema = json.loads(cast("bytes", resp.body))
+        open_apischema = json.loads(resp.body)
         open_apischema = self.customize_openapi(open_apischema)
 
         resp.body = resp.render(open_apischema)
@@ -199,7 +189,7 @@ class CadwynWithOpenAPICustomization(Cadwyn):
         References:
             - https://fastapi.tiangolo.com/how-to/extending-openapi/#modify-the-openapi-schema
         """
-        extra_schemas = get_extra_schemas(openapi_schema["info"]["version"])
+        extra_schemas = get_extra_schemas()
         for schema_name, schema in extra_schemas.items():
             if schema_name not in openapi_schema["components"]["schemas"]:
                 openapi_schema["components"]["schemas"][schema_name] = schema
@@ -246,75 +236,16 @@ class CadwynWithOpenAPICustomization(Cadwyn):
         return openapi_schema
 
 
-async def _extract_w3c_trace_context(
-    request: Request,
-    dependency_solver=Depends(current_dependency_solver),
-):
-    # Cadwyn solves dependencies twice (the real request, then again to migrate the
-    # request body). Only act in the real "fastapi" pass so we attach/detach exactly
-    # once, in the context the endpoint runs in.
-    if dependency_solver != "fastapi":
-        yield
-        return
-    ctx = otel_propagate.extract(request.headers)
-    attached_in = asyncio.current_task()
-    token = otel_context.attach(ctx)
-    try:
-        yield
-    finally:
-        if asyncio.current_task() is attached_in:
-            otel_context.detach(token)
-
-
-def _is_trace_context_dep(dependency) -> bool:
-    return getattr(dependency, "dependency", None) is _extract_w3c_trace_context
-
-
-def _inject_trace_context_dep(routes, mode: str) -> None:
-    """
-    Add trace-context extraction to the authenticated routes in ``only-authenticated`` mode.
-
-    ``unsafe-always`` mode is handled with an app-level dependency instead, so extraction runs
-    before authentication declared on any enclosing router.
-    """
-    for context in iter_route_contexts(routes):
-        route = context.original_route
-        if not isinstance(route, APIRoute):
-            continue
-        # Idempotent: create_task_execution_api_app() runs more than once per process
-        # (cached_app + InProcessExecutionAPI), and execution_api_router is shared
-        # module state, so strip any prior injection first.
-        route.dependencies[:] = [d for d in route.dependencies if not _is_trace_context_dep(d)]
-        if mode != "only-authenticated":
-            continue
-        # context.dependencies also holds those of the enclosing routers and include_router() calls.
-        if any(getattr(d, "dependency", None) is require_auth for d in context.dependencies):
-            route.dependencies.append(Depends(_extract_w3c_trace_context))
-
-
-def create_task_execution_api_app(
-    lifespan: svcs.fastapi.lifespan = lifespan,
-    *,
-    dag_bag: DBDagBag | None = None,
-) -> FastAPI:
-    """
-    Create the Execution API app.
-
-    :param lifespan: Lifespan manager that registers the app's services.
-    :param dag_bag: Dag bag to use; a new one is created when omitted.
-    """
-    from airflow.api_fastapi.common.dagbag import create_dag_bag
-    from airflow.api_fastapi.common.exceptions import init_error_handlers
+def create_task_execution_api_app() -> FastAPI:
+    """Create FastAPI app for task execution API."""
     from airflow.api_fastapi.execution_api.routes import execution_api_router
     from airflow.api_fastapi.execution_api.versions import bundle
-    from airflow.configuration import conf
 
     def custom_generate_unique_id(route: APIRoute):
         # This is called only if the route doesn't provide an explicit operation ID
         return route.name
 
     # See https://docs.cadwyn.dev/concepts/version_changes/ for info about API versions
-    mode = conf.get("execution_api", "otel_trace_propagation", fallback="only-authenticated")
     app = CadwynWithOpenAPICustomization(
         title="Airflow Task Execution API",
         description="The private Airflow Task Execution API.",
@@ -323,19 +254,13 @@ def create_task_execution_api_app(
         api_version_parameter_name="Airflow-API-Version",
         api_version_default_value=bundle.versions[0].value,
         versions=bundle,
-        changelog_url=None,
-        dependencies=[Depends(_extract_w3c_trace_context)] if mode == "unsafe-always" else None,
-        telemetry=NATIVE_TELEMETRY_DISABLED,
     )
 
     # Add correlation-id middleware for request tracing
     app.add_middleware(CorrelationIdMiddleware)
     app.add_middleware(JWTReissueMiddleware)
 
-    _inject_trace_context_dep(execution_api_router.routes, mode)
-
     app.generate_and_include_versioned_routers(execution_api_router)
-    init_error_handlers(app)
 
     # As we are mounted as a sub app, we don't get any logs for unhandled exceptions without this!
     @app.exception_handler(Exception)
@@ -346,14 +271,12 @@ def create_task_execution_api_app(
             content["correlation-id"] = correlation_id
         return JSONResponse(status_code=500, content=content)
 
-    app.state.dag_bag = dag_bag if dag_bag is not None else create_dag_bag()
     return app
 
 
-def get_extra_schemas(version: str) -> dict[str, dict]:
+def get_extra_schemas() -> dict[str, dict]:
     """Get all the extra schemas that are not part of the main FastAPI app."""
     from airflow.api_fastapi.execution_api.datamodels.taskinstance import TaskInstance
-    from airflow.api_fastapi.execution_api.versions import bundle
     from airflow.executors.workloads import BundleInfo
     from airflow.serialization.enums import DagAttributeTypes
     from airflow.task.trigger_rule import TriggerRule
@@ -361,11 +284,7 @@ def get_extra_schemas(version: str) -> dict[str, dict]:
     from airflow.utils.state import TaskInstanceState, TerminalTIState
 
     return {
-        "TaskInstance": (
-            TaskInstance
-            if version == "unversioned"
-            else generate_versioned_models(bundle)[version][TaskInstance]
-        ).model_json_schema(),
+        "TaskInstance": TaskInstance.model_json_schema(),
         "BundleInfo": BundleInfo.model_json_schema(),
         # Include the combined state enum too. In the datamodels we separate out SUCCESS from the other states
         # as that has different payload requirements
@@ -379,3 +298,71 @@ def get_extra_schemas(version: str) -> dict[str, dict]:
             "x-enum-varnames": [DagAttributeTypes.OP.name, DagAttributeTypes.TASK_GROUP.name],
         },
     }
+
+
+@attrs.define()
+class InProcessExecutionAPI:
+    """
+    A helper class to make it possible to run the ExecutionAPI "in-process".
+
+    The sync version of this makes use of a2wsgi which runs the async loop in a separate thread. This is
+    needed so that we can use the sync httpx client
+    """
+
+    _app: FastAPI | None = None
+    _cm: AsyncExitStack | None = None
+
+    @cached_property
+    def app(self):
+        if not self._app:
+            from airflow.api_fastapi.common.dagbag import create_dag_bag
+            from airflow.api_fastapi.execution_api.datamodels.token import TIClaims, TIToken
+            from airflow.api_fastapi.execution_api.routes.connections import has_connection_access
+            from airflow.api_fastapi.execution_api.routes.variables import has_variable_access
+            from airflow.api_fastapi.execution_api.routes.xcoms import has_xcom_access
+            from airflow.api_fastapi.execution_api.security import _jwt_bearer
+
+            self._app = create_task_execution_api_app()
+
+            # Set up dag_bag in app state for dependency injection
+            self._app.state.dag_bag = create_dag_bag()
+
+            async def always_allow(request: Request):
+                from uuid import UUID
+
+                ti_id = UUID(
+                    request.path_params.get("task_instance_id", "00000000-0000-0000-0000-000000000000")
+                )
+                claims = TIClaims(scope="execution")
+                return TIToken(id=ti_id, claims=claims)
+
+            self._app.dependency_overrides[_jwt_bearer] = always_allow
+            self._app.dependency_overrides[has_connection_access] = always_allow
+            self._app.dependency_overrides[has_variable_access] = always_allow
+            self._app.dependency_overrides[has_xcom_access] = always_allow
+
+        return self._app
+
+    @cached_property
+    def transport(self) -> httpx.WSGITransport:
+        import asyncio
+
+        import httpx
+        from a2wsgi import ASGIMiddleware
+
+        middleware = ASGIMiddleware(self.app)
+
+        # https://github.com/abersheeran/a2wsgi/discussions/64
+        async def start_lifespan(cm: AsyncExitStack, app: FastAPI):
+            await cm.enter_async_context(app.router.lifespan_context(app))
+
+        self._cm = AsyncExitStack()
+
+        asyncio.run_coroutine_threadsafe(start_lifespan(self._cm, self.app), middleware.loop)
+        return httpx.WSGITransport(app=middleware)  # type: ignore[arg-type]
+
+    @cached_property
+    def atransport(self) -> httpx.ASGITransport:
+        import httpx
+
+        return httpx.ASGITransport(app=self.app)

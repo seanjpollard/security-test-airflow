@@ -176,7 +176,6 @@ with DAG(
         table_id=TABLE_1,
         max_results=10,
         selected_fields="value,name",
-        use_legacy_sql=False,
     )
     # [END howto_operator_bigquery_get_data]
 
@@ -217,7 +216,6 @@ with DAG(
         task_id="column_check",
         table=f"{DATASET_NAME}.{TABLE_1}",
         column_mapping={"value": {"null_check": {"equal_to": 0}}},
-        use_legacy_sql=False,
     )
     # [END howto_operator_bigquery_column_check]
 
@@ -226,7 +224,6 @@ with DAG(
         task_id="table_check",
         table=f"{DATASET_NAME}.{TABLE_1}",
         checks={"row_count_check": {"check_statement": "COUNT(*) = 4"}},
-        use_legacy_sql=False,
     )
     # [END howto_operator_bigquery_table_check]
 

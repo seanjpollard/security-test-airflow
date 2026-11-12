@@ -61,21 +61,6 @@ class TestMSGraphTrigger:
             assert actual[0].payload["type"] == "builtins.dict"
             assert actual[0].payload["response"] == json.dumps(users)
 
-    def test_run_refuses_a_cross_host_pagination_link(self):
-        with patch_hook_and_request_adapter(mock_json_response(200, {})) as (*_, mock_get_http_response):
-            trigger = MSGraphTrigger(
-                "https://attacker.example/v1.0/users",
-                conn_id="msgraph_api",
-                pagination_link=True,
-            )
-            actual = run_trigger(trigger)
-
-        assert mock_get_http_response.call_count == 0
-        assert len(actual) == 1
-        assert isinstance(actual[0], TriggerEvent)
-        assert actual[0].payload["status"] == "failure"
-        assert "attacker.example" in actual[0].payload["message"]
-
     def test_run_when_response_is_none(self):
         response = mock_json_response(200)
 
@@ -148,7 +133,6 @@ class TestMSGraphTrigger:
                 "scopes": [KiotaRequestAdapterHook.DEFAULT_SCOPE],
                 "api_version": APIVersion.v1.value,
                 "serializer": f"{ResponseSerializer.__module__}.{ResponseSerializer.__name__}",
-                "pagination_link": False,
             }
 
     def test_get_conn(self):

@@ -31,23 +31,12 @@ from airflow.sdk._shared.providers_discovery import (
     LazyDictWithCache,
     ProviderInfo,
 )
-from airflow.sdk.definitions.connection import Connection
-from airflow.sdk.providers_manager_runtime import ProvidersManagerTaskRuntime, RemoteLoggingInfo
+from airflow.sdk.providers_manager_runtime import ProvidersManagerTaskRuntime
 
 from tests_common.test_utils.markers import skip_if_force_lowest_dependencies_marker, skip_if_not_on_main
 from tests_common.test_utils.paths import AIRFLOW_ROOT_PATH
 
 PY313 = sys.version_info >= (3, 13)
-
-
-class FakeRemoteLogIO:
-    """Importable stub used by remote-logging discovery tests."""
-
-    processors: tuple = ()
-
-    @classmethod
-    def from_config(cls):
-        return cls()
 
 
 def test_cleanup_providers_manager_runtime(cleanup_providers_manager):
@@ -113,17 +102,8 @@ class TestProvidersManagerRuntime:
             )
             providers_manager._discover_hooks()
             _ = providers_manager._hooks_lazy_dict["wrong-connection-type"]
-        # 'wrong-connection-type' is also read back under a different name, so discovery
-        # warns about that as well. Both are expected, and no others.
-        assert len(self._caplog.entries) == 2
-        assert sum("Inconsistency!" in entry["event"] for entry in self._caplog.entries) == 1
-        assert (
-            sum("read back under a different name" in entry["event"] for entry in self._caplog.entries) == 1
-        )
-        assert all(
-            "Inconsistency!" in entry["event"] or "read back under a different name" in entry["event"]
-            for entry in self._caplog.entries
-        )
+        assert len(self._caplog.entries) == 1
+        assert "Inconsistency!" in self._caplog[0]["event"]
         assert "sftp" not in providers_manager._hooks_lazy_dict
 
     def test_warning_logs_not_generated(self):
@@ -173,131 +153,6 @@ class TestProvidersManagerRuntime:
             "different class names: 'airflow.providers.dummy.hooks.dummy.DummyHook'"
             " and 'airflow.providers.dummy.hooks.dummy.DummyHook2'."
         ) in msg
-
-    @staticmethod
-    def _provider_declaring(*connection_types: str) -> ProviderInfo:
-        return ProviderInfo(
-            version="0.0.1",
-            data={
-                "connection-types": [
-                    {
-                        "hook-class-name": f"airflow.providers.dummy.hooks.dummy.Hook{index}",
-                        "connection-type": connection_type,
-                    }
-                    for index, connection_type in enumerate(connection_types)
-                ],
-            },
-        )
-
-    @pytest.mark.parametrize(
-        ("declared", "read_back_as"),
-        [
-            # '-' is the URI-scheme encoding of '_', so it is decoded on the way back in.
-            pytest.param("dummy-vendor", "dummy_vendor", id="hyphen"),
-            # get_uri() lowercases the scheme.
-            pytest.param("DummyVendor", "dummyvendor", id="uppercase"),
-            # _normalize_conn_type also applies this alias, which is why the check asks it
-            # rather than restating the separator rule.
-            pytest.param("postgresql", "postgres", id="alias"),
-        ],
-    )
-    def test_warns_about_a_connection_type_read_back_under_another_name(self, declared, read_back_as):
-        """
-        Such a type registers verbatim and resolves for a connection created through the UI,
-        the REST API or the CLI, so nothing fails there. Every connection read from a URI or
-        from JSON presents the decoded name instead and never reaches the hook.
-        """
-        with self._caplog.at_level(logging.WARNING):
-            providers_manager = ProvidersManagerTaskRuntime()
-            providers_manager._provider_dict["apache-airflow-providers-dummy"] = self._provider_declaring(
-                declared
-            )
-            providers_manager._discover_hooks()
-
-        entries = [
-            entry for entry in self._caplog.entries if "read back under a different name" in entry["event"]
-        ]
-        assert len(entries) == 1
-        assert entries[0]["connection_types"] == [declared]
-        assert entries[0]["read_back_as"] == read_back_as
-        assert entries[0]["packages"] == ["apache-airflow-providers-dummy"]
-
-    def test_warns_about_a_connection_type_a_uri_cannot_carry(self):
-        """A type that is not a usable scheme is lost altogether rather than re-spelled."""
-        with self._caplog.at_level(logging.WARNING):
-            providers_manager = ProvidersManagerTaskRuntime()
-            providers_manager._provider_dict["apache-airflow-providers-dummy"] = self._provider_declaring(
-                "dummy vendor"
-            )
-            providers_manager._discover_hooks()
-
-        entries = [
-            entry
-            for entry in self._caplog.entries
-            if "cannot be carried in a connection URI" in entry["event"]
-        ]
-        assert len(entries) == 1
-        assert entries[0]["connection_types"] == ["dummy vendor"]
-
-    def test_warns_when_two_providers_declare_the_two_spellings_of_one_name(self):
-        """
-        This one resolves rather than failing, which is why get_hook() cannot report it: the
-        connection is handed whichever hook holds the decoded name, so it can belong to the
-        other provider.
-        """
-        with self._caplog.at_level(logging.WARNING):
-            providers_manager = ProvidersManagerTaskRuntime()
-            providers_manager._provider_dict["apache-airflow-providers-one"] = self._provider_declaring(
-                "shared-name"
-            )
-            providers_manager._provider_dict["apache-airflow-providers-two"] = self._provider_declaring(
-                "shared_name"
-            )
-            providers_manager._discover_hooks()
-
-        entries = [entry for entry in self._caplog.entries if "read back under one name" in entry["event"]]
-        assert len(entries) == 1
-        assert entries[0]["connection_types"] == ["shared-name", "shared_name"]
-        assert entries[0]["read_back_as"] == "shared_name"
-        assert entries[0]["packages"] == [
-            "apache-airflow-providers-one",
-            "apache-airflow-providers-two",
-        ]
-
-    def test_does_not_warn_about_a_connection_type_that_survives_being_stored(self):
-        with self._caplog.at_level(logging.WARNING):
-            providers_manager = ProvidersManagerTaskRuntime()
-            providers_manager._provider_dict["apache-airflow-providers-dummy"] = self._provider_declaring(
-                "dummy_vendor", "postgres", "s3", "a.b"
-            )
-            providers_manager._discover_hooks()
-
-        assert not self._caplog.entries
-
-    @pytest.mark.parametrize(
-        "declared",
-        [
-            "dummy_vendor",
-            "dummy-vendor",
-            "DummyVendor",
-            "postgres",
-            "postgresql",
-            "dummy vendor",
-            "a.b",
-            "a+b",
-            "foo-bar_baz",
-        ],
-    )
-    def test_stored_name_matches_a_real_connection_round_trip(self, declared):
-        """
-        The check models what get_uri() writes and what reading a connection back decodes,
-        so it has to agree with actually doing it. This fails if either side changes.
-        """
-        uri = Connection(conn_id="c", conn_type=declared, host="host").get_uri()
-
-        assert ProvidersManagerTaskRuntime._connection_type_as_stored(declared) == (
-            Connection.from_uri(uri, conn_id="c").conn_type
-        )
 
     def test_hooks(self):
         with warnings.catch_warnings(record=True) as warning_records:
@@ -422,61 +277,3 @@ class TestProvidersManagerRuntime:
             assert conf.get("test_sdk_provider", "test_option") == "provider-default"
         finally:
             conf.invalidate_cache()
-
-    def test_register_remote_logging_by_scheme(self):
-        providers_manager = ProvidersManagerTaskRuntime()
-        providers_manager._provider_dict = LazyDictWithCache()
-        providers_manager._provider_dict["fake.remote.logging"] = ProviderInfo(
-            version="0.0.1",
-            data={
-                "remote-logging": [
-                    {
-                        "classpath": f"{__name__}.FakeRemoteLogIO",
-                        "scheme": "fake",
-                    }
-                ]
-            },
-        )
-        providers_manager._discover_remote_logging()
-        assert len(providers_manager._remote_logging_info_list) == 1
-        assert providers_manager._remote_logging_by_scheme["fake"] == RemoteLoggingInfo(
-            classpath=f"{__name__}.FakeRemoteLogIO",
-            scheme="fake",
-            package_name="fake.remote.logging",
-        )
-
-    def test_register_remote_logging_duplicate_scheme_first_wins(self):
-        providers_manager = ProvidersManagerTaskRuntime()
-        providers_manager._provider_dict = LazyDictWithCache()
-        providers_manager._provider_dict["fake.remote.logging.first"] = ProviderInfo(
-            version="0.0.1",
-            data={"remote-logging": [{"classpath": f"{__name__}.FakeRemoteLogIO", "scheme": "dup"}]},
-        )
-        providers_manager._provider_dict["fake.remote.logging.second"] = ProviderInfo(
-            version="0.0.1",
-            data={"remote-logging": [{"classpath": f"{__name__}.FakeRemoteLogIO", "scheme": "dup"}]},
-        )
-        providers_manager._discover_remote_logging()
-        assert providers_manager._remote_logging_by_scheme["dup"].package_name == (
-            "fake.remote.logging.first"
-        )
-        assert len(providers_manager._remote_logging_info_list) == 1
-        assert providers_manager._remote_logging_info_list[0].package_name == "fake.remote.logging.first"
-
-    def test_register_remote_logging_bad_class_filtered(self):
-        providers_manager = ProvidersManagerTaskRuntime()
-        providers_manager._provider_dict = LazyDictWithCache()
-        providers_manager._provider_dict["fake.remote.logging"] = ProviderInfo(
-            version="0.0.1",
-            data={
-                "remote-logging": [
-                    {
-                        "classpath": "fake.module.does.not.exist.FakeRemoteLogIO",
-                        "scheme": "bad",
-                    }
-                ]
-            },
-        )
-        providers_manager._discover_remote_logging()
-        assert "bad" not in providers_manager._remote_logging_by_scheme
-        assert providers_manager._remote_logging_info_list == []

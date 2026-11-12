@@ -44,10 +44,7 @@ class DataprepGetJobsForJobGroupOperator(GoogleCloudBaseOperator):
     :param job_group_id The ID of the job group that will be requests
     """
 
-    template_fields: Sequence[str] = (
-        "job_group_id",
-        "dataprep_conn_id",
-    )
+    template_fields: Sequence[str] = ("job_group_id",)
 
     def __init__(
         self,
@@ -90,7 +87,6 @@ class DataprepGetJobGroupOperator(GoogleCloudBaseOperator):
         "job_group_id",
         "embed",
         "project_id",
-        "dataprep_conn_id",
     )
     operator_extra_links = (DataprepJobGroupLink(),)
 
@@ -148,10 +144,7 @@ class DataprepRunJobGroupOperator(GoogleCloudBaseOperator):
         where it's the identifier for the recipe to run
     """
 
-    template_fields: Sequence[str] = (
-        "body_request",
-        "dataprep_conn_id",
-    )
+    template_fields: Sequence[str] = ("body_request",)
     operator_extra_links = (DataprepJobGroupLink(),)
 
     def __init__(
@@ -199,7 +192,6 @@ class DataprepCopyFlowOperator(GoogleCloudBaseOperator):
         "name",
         "project_id",
         "description",
-        "dataprep_conn_id",
     )
     operator_extra_links = (DataprepFlowLink(),)
 
@@ -250,10 +242,7 @@ class DataprepDeleteFlowOperator(GoogleCloudBaseOperator):
     :param flow_id: ID of the flow to be copied
     """
 
-    template_fields: Sequence[str] = (
-        "flow_id",
-        "dataprep_conn_id",
-    )
+    template_fields: Sequence[str] = ("flow_id",)
 
     def __init__(
         self,
@@ -284,7 +273,6 @@ class DataprepRunFlowOperator(GoogleCloudBaseOperator):
     template_fields: Sequence[str] = (
         "flow_id",
         "project_id",
-        "dataprep_conn_id",
     )
     operator_extra_links = (DataprepJobGroupLink(),)
 

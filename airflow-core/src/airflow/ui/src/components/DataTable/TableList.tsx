@@ -16,97 +16,68 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Fragment, type ReactNode } from "react";
-
-import { Button, Icon, Table, Text } from "@chakra-ui/react";
-import { flexRender, type RowData, type Table as TanStackTable } from "@tanstack/react-table";
+import { Button, Table } from "@chakra-ui/react";
+import { flexRender, type Row, type Table as TanStackTable } from "@tanstack/react-table";
+import React, { Fragment } from "react";
 import { useTranslation } from "react-i18next";
 import { TiArrowSortedDown, TiArrowSortedUp, TiArrowUnsorted } from "react-icons/ti";
 
-import { Tooltip } from "src/system-components";
+import FilterMenuButton from "./FilterMenuButton";
 
-import type { DataTableFeatures } from "./features";
-
-type TableListProps<TData extends RowData> = {
-  readonly noRowsMessage?: ReactNode;
-  readonly renderSubComponent?: (row: TData) => ReactNode;
-  readonly table: TanStackTable<DataTableFeatures, TData>;
+type DataTableProps<TData> = {
+  readonly allowFiltering: boolean;
+  readonly renderSubComponent?: (props: { row: Row<TData> }) => React.ReactElement;
+  readonly table: TanStackTable<TData>;
 };
 
-export const TableList = <TData extends RowData>({
-  noRowsMessage,
-  renderSubComponent,
-  table,
-}: TableListProps<TData>) => {
+export const TableList = <TData,>({ allowFiltering, renderSubComponent, table }: DataTableProps<TData>) => {
   "use no memo"; // remove if https://github.com/TanStack/table/issues/5567 is resolved
   const { t: translate } = useTranslation("components");
-  const { rows } = table.getRowModel();
-  const isMultiSorted = table.store.state.sorting.length > 1;
 
   return (
-    <Table.Root data-testid="table-list" size="sm" striped>
+    <Table.Root data-testid="table-list" striped>
       <Table.Header bg="chakra-body-bg" position="sticky" top={0} zIndex={1}>
         {table.getHeaderGroups().map((headerGroup) => (
           <Table.Row key={headerGroup.id}>
-            {headerGroup.headers.map((header) => {
-              // v9 header methods live on the prototype, so `getContext` can't be destructured.
-              const { colSpan, column, id, isPlaceholder } = header;
+            {headerGroup.headers.map(({ colSpan, column, getContext, id, isPlaceholder }, index) => {
               const sort = column.getIsSorted();
               const canSort = column.getCanSort();
-              const text = flexRender(column.columnDef.header, header.getContext());
+              const text = flexRender(column.columnDef.header, getContext());
               let rightIcon;
+
+              const showFilters = allowFiltering && index === headerGroup.headers.length - 1;
 
               if (canSort) {
                 if (sort === "desc") {
-                  rightIcon = (
-                    <Icon aria-label={translate("sortedDescending")} as={TiArrowSortedDown} boxSize={3} />
-                  );
+                  rightIcon = <TiArrowSortedDown aria-label={translate("sortedDescending")} />;
                 } else if (sort === "asc") {
-                  rightIcon = (
-                    <Icon aria-label={translate("sortedAscending")} as={TiArrowSortedUp} boxSize={3} />
-                  );
+                  rightIcon = <TiArrowSortedUp aria-label={translate("sortedAscending")} />;
                 } else {
-                  rightIcon = (
-                    <Icon aria-label={translate("sortedUnsorted")} as={TiArrowUnsorted} boxSize={3} />
-                  );
+                  rightIcon = <TiArrowUnsorted aria-label={translate("sortedUnsorted")} />;
                 }
 
                 return (
-                  <Table.ColumnHeader colSpan={colSpan} key={id} paddingBlock={1} whiteSpace="nowrap">
+                  <Table.ColumnHeader colSpan={colSpan} key={id} whiteSpace="nowrap">
                     {isPlaceholder ? undefined : (
-                      <Tooltip
-                        content={translate("sortMultiColumnHint")}
-                        disabled={!column.getCanMultiSort()}
+                      <Button
+                        aria-label={translate("sort")}
+                        disabled={!canSort}
+                        onClick={column.getToggleSortingHandler()}
+                        variant="plain"
                       >
-                        <Button
-                          _focus={{ color: "brand.500" }}
-                          _hover={{ color: "brand.500" }}
-                          aria-label={translate("sort")}
-                          border={0}
-                          color={sort === false ? undefined : "brand.500"}
-                          disabled={!canSort}
-                          gap={1}
-                          onClick={column.getToggleSortingHandler()}
-                          p={0}
-                          variant="plain"
-                        >
-                          {text}
-                          {rightIcon}
-                          {isMultiSorted && sort !== false ? (
-                            <Text as="span" data-testid={`sort-index-${column.id}`} fontSize="xs">
-                              {column.getSortIndex() + 1}
-                            </Text>
-                          ) : undefined}
-                        </Button>
-                      </Tooltip>
+                        {text}
+                        {rightIcon}
+                      </Button>
                     )}
+                    {showFilters ? <FilterMenuButton table={table} /> : undefined}
                   </Table.ColumnHeader>
                 );
               }
 
               return (
-                <Table.ColumnHeader colSpan={colSpan} key={id} paddingBlock={1} whiteSpace="nowrap">
+                <Table.ColumnHeader colSpan={colSpan} key={id} whiteSpace="nowrap">
                   {isPlaceholder ? undefined : text}
+                  {showFilters ? <FilterMenuButton table={table} /> : undefined}
                 </Table.ColumnHeader>
               );
             })}
@@ -114,30 +85,26 @@ export const TableList = <TData extends RowData>({
         ))}
       </Table.Header>
       <Table.Body>
-        {rows.length === 0 ? (
-          <Table.Row data-testid="table-no-rows">
-            <Table.Cell colSpan={table.getVisibleLeafColumns().length}>{noRowsMessage}</Table.Cell>
-          </Table.Row>
-        ) : (
-          rows.map((row) => (
-            <Fragment key={row.id}>
+        {table.getRowModel().rows.map((row) => (
+          <Fragment key={row.id}>
+            <Table.Row>
+              {/* first row is a normal row */}
+              {row.getVisibleCells().map((cell) => (
+                <Table.Cell data-testid={`table-cell-${cell.column.id}`} key={cell.id}>
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </Table.Cell>
+              ))}
+            </Table.Row>
+            {row.getIsExpanded() && (
               <Table.Row>
-                {row.getVisibleCells().map((cell) => (
-                  <Table.Cell data-testid={`table-cell-${cell.column.id}`} key={cell.id}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </Table.Cell>
-                ))}
+                {/* 2nd row is a custom 1 cell row */}
+                <Table.Cell colSpan={row.getVisibleCells().length}>
+                  {renderSubComponent?.({ row })}
+                </Table.Cell>
               </Table.Row>
-              {renderSubComponent !== undefined && row.getIsExpanded() ? (
-                <Table.Row data-testid="table-sub-row">
-                  <Table.Cell colSpan={row.getVisibleCells().length}>
-                    {renderSubComponent(row.original)}
-                  </Table.Cell>
-                </Table.Row>
-              ) : undefined}
-            </Fragment>
-          ))
-        )}
+            )}
+          </Fragment>
+        ))}
       </Table.Body>
     </Table.Root>
   );

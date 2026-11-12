@@ -17,26 +17,14 @@
 # under the License.
 from __future__ import annotations
 
-import time
 from collections.abc import Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
 from azure.batch import models as batch_models
 
-from airflow.providers.common.compat.sdk import BaseOperator, conf
-from airflow.providers.microsoft.azure.exceptions import (
-    AzureBatchAutoScaleFormulaMissingError,
-    AzureBatchJobPreparationTaskMissingError,
-    AzureBatchLatestImageSpecIncompleteError,
-    AzureBatchPoolSizingConflictError,
-    AzureBatchPoolSizingMissingError,
-    AzureBatchRequiredParametersMissingError,
-    AzureBatchVmImageSpecIncompleteError,
-    AzureBatchVmPublisherMissingError,
-)
+from airflow.providers.common.compat.sdk import AirflowException, BaseOperator
 from airflow.providers.microsoft.azure.hooks.batch import AzureBatchHook
-from airflow.providers.microsoft.azure.triggers.batch import AzureBatchTrigger
 
 if TYPE_CHECKING:
     from airflow.sdk import Context
@@ -98,13 +86,11 @@ class AzureBatchOperator(BaseOperator):
     :param vm_version: The version of the virtual machine
     :param vm_version: str | None
     :param vm_node_agent_sku_id: The node agent sku id of the virtual machine
+    :param os_family: The Azure Guest OS family to be installed on the virtual machines in the Pool.
+    :param os_version: The OS family version
     :param timeout: The amount of time to wait for the job to complete in minutes. Default is 25
     :param should_delete_job: Whether to delete job after execution. Default is False
     :param should_delete_pool: Whether to delete pool after execution of jobs. Default is False
-    :param poll_interval: Polling interval in seconds for deferrable mode. Default is 30.
-        Determines how frequently the trigger checks task completion status when deferrable=True.
-    :param deferrable: Run operator in deferrable mode.
-
     """
 
     template_fields: Sequence[str] = (
@@ -113,7 +99,6 @@ class AzureBatchOperator(BaseOperator):
         "batch_job_id",
         "batch_task_id",
         "batch_task_command_line",
-        "azure_batch_conn_id",
     )
     ui_color = "#f0f0e4"
 
@@ -131,14 +116,16 @@ class AzureBatchOperator(BaseOperator):
         sku_starts_with: str | None = None,
         vm_sku: str | None = None,
         vm_version: str | None = None,
+        os_family: str | None = None,
+        os_version: str | None = None,
         batch_pool_display_name: str | None = None,
         batch_job_display_name: str | None = None,
-        batch_job_manager_task: batch_models.BatchJobManagerTask | None = None,
-        batch_job_preparation_task: batch_models.BatchJobPreparationTask | None = None,
-        batch_job_release_task: batch_models.BatchJobReleaseTask | None = None,
+        batch_job_manager_task: batch_models.JobManagerTask | None = None,
+        batch_job_preparation_task: batch_models.JobPreparationTask | None = None,
+        batch_job_release_task: batch_models.JobReleaseTask | None = None,
         batch_task_display_name: str | None = None,
-        batch_task_container_settings: batch_models.BatchTaskContainerSettings | None = None,
-        batch_start_task: batch_models.BatchStartTask | None = None,
+        batch_task_container_settings: batch_models.TaskContainerSettings | None = None,
+        batch_start_task: batch_models.StartTask | None = None,
         batch_max_retries: int = 3,
         batch_task_resource_files: list[batch_models.ResourceFile] | None = None,
         batch_task_output_files: list[batch_models.OutputFile] | None = None,
@@ -152,8 +139,6 @@ class AzureBatchOperator(BaseOperator):
         timeout: int = 25,
         should_delete_job: bool = False,
         should_delete_pool: bool = False,
-        poll_interval: int = 30,
-        deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -186,11 +171,11 @@ class AzureBatchOperator(BaseOperator):
         self.vm_sku = vm_sku
         self.vm_version = vm_version
         self.vm_node_agent_sku_id = vm_node_agent_sku_id
+        self.os_family = os_family
+        self.os_version = os_version
         self.timeout = timeout
         self.should_delete_job = should_delete_job
         self.should_delete_pool = should_delete_pool
-        self.poll_interval = poll_interval
-        self.deferrable = deferrable
 
     @cached_property
     def hook(self) -> AzureBatchHook:
@@ -198,19 +183,25 @@ class AzureBatchOperator(BaseOperator):
         return AzureBatchHook(self.azure_batch_conn_id)
 
     def _check_inputs(self) -> Any:
-        if not self.vm_publisher:
-            raise AzureBatchVmPublisherMissingError("You must specify vm_publisher")
+        if not self.os_family and not self.vm_publisher:
+            raise AirflowException("You must specify either vm_publisher or os_family")
+        if self.os_family and self.vm_publisher:
+            raise AirflowException(
+                "Cloud service configuration and virtual machine configuration "
+                "are mutually exclusive. You must specify either of os_family and"
+                " vm_publisher"
+            )
 
         if self.use_latest_image:
             if not self.vm_publisher or not self.vm_offer:
-                raise AzureBatchLatestImageSpecIncompleteError(
+                raise AirflowException(
                     f"If use_latest_image_and_sku is set to True then the parameters vm_publisher, "
                     f"vm_offer, must all be set. "
                     f"Found vm_publisher={self.vm_publisher}, vm_offer={self.vm_offer}"
                 )
         if self.vm_publisher:
             if not all([self.vm_sku, self.vm_offer, self.vm_node_agent_sku_id]):
-                raise AzureBatchVmImageSpecIncompleteError(
+                raise AirflowException(
                     "If vm_publisher is set, then the parameters vm_sku, vm_offer,"
                     "vm_node_agent_sku_id must be set. Found "
                     f"vm_publisher={self.vm_publisher}, vm_offer={self.vm_offer} "
@@ -219,23 +210,21 @@ class AzureBatchOperator(BaseOperator):
                 )
 
         if not self.target_dedicated_nodes and not self.enable_auto_scale:
-            raise AzureBatchPoolSizingMissingError(
+            raise AirflowException(
                 "Either target_dedicated_nodes or enable_auto_scale must be set. None was set"
             )
         if self.enable_auto_scale:
             if self.target_dedicated_nodes or self.target_low_priority_nodes:
-                raise AzureBatchPoolSizingConflictError(
+                raise AirflowException(
                     f"If enable_auto_scale is set, then the parameters target_dedicated_nodes and "
                     f"target_low_priority_nodes must not be set. Found "
                     f"target_dedicated_nodes={self.target_dedicated_nodes}, "
                     f"target_low_priority_nodes={self.target_low_priority_nodes}"
                 )
             if not self.auto_scale_formula:
-                raise AzureBatchAutoScaleFormulaMissingError(
-                    "The auto_scale_formula is required when enable_auto_scale is set"
-                )
+                raise AirflowException("The auto_scale_formula is required when enable_auto_scale is set")
         if self.batch_job_release_task and not self.batch_job_preparation_task:
-            raise AzureBatchJobPreparationTaskMissingError(
+            raise AirflowException(
                 "A batch_job_release_task cannot be specified without also "
                 " specifying a batch_job_preparation_task for the Job."
             )
@@ -248,12 +237,13 @@ class AzureBatchOperator(BaseOperator):
                 self.batch_task_command_line,
             ]
         ):
-            raise AzureBatchRequiredParametersMissingError(
+            raise AirflowException(
                 "Some required parameters are missing.Please you must set all the required parameters. "
             )
 
     def execute(self, context: Context) -> None:
         self._check_inputs()
+        self.hook.connection.config.retry_policy = self.batch_max_retries
 
         pool = self.hook.configure_pool(
             pool_id=self.batch_pool_id,
@@ -267,20 +257,21 @@ class AzureBatchOperator(BaseOperator):
             vm_sku=self.vm_sku,
             vm_version=self.vm_version,
             vm_node_agent_sku_id=self.vm_node_agent_sku_id,
+            os_family=self.os_family,
+            os_version=self.os_version,
             target_low_priority_nodes=self.target_low_priority_nodes,
             enable_auto_scale=self.enable_auto_scale,
             auto_scale_formula=self.auto_scale_formula,
             start_task=self.batch_start_task,
         )
         self.hook.create_pool(pool)
-
         # Wait for nodes to reach complete state
         self.hook.wait_for_all_node_state(
             self.batch_pool_id,
             {
-                batch_models.BatchNodeState.START_TASK_FAILED,
-                batch_models.BatchNodeState.UNUSABLE,
-                batch_models.BatchNodeState.IDLE,
+                batch_models.ComputeNodeState.start_task_failed,
+                batch_models.ComputeNodeState.unusable,
+                batch_models.ComputeNodeState.idle,
             },
         )
         # Create job if not already exist
@@ -305,29 +296,6 @@ class AzureBatchOperator(BaseOperator):
         )
         # Add task to job
         self.hook.add_single_task_to_job(job_id=self.batch_job_id, task=task)
-
-        if self.deferrable:
-            # Pre-deferral check (node readiness is already enforced by wait_for_all_node_state above)
-            current_pool = self.hook.connection.get_pool(self.batch_pool_id)
-            if current_pool.resize_errors:
-                raise RuntimeError(f"Pool resize errors: {current_pool.resize_errors}")
-
-            nodes = list(self.hook.connection.list_nodes(self.batch_pool_id))
-            self.log.debug("Deferral pre-check: %d nodes present in pool %s", len(nodes), self.batch_pool_id)
-            end_time = time.time() + (self.timeout * 60)
-
-            self.defer(
-                timeout=self.execution_timeout,
-                trigger=AzureBatchTrigger(
-                    job_id=self.batch_job_id,
-                    azure_batch_conn_id=self.azure_batch_conn_id,
-                    end_time=end_time,
-                    poll_interval=self.poll_interval,
-                ),
-                method_name="execute_complete",
-            )
-            return
-
         # Wait for tasks to complete
         fail_tasks = self.hook.wait_for_job_tasks_to_complete(job_id=self.batch_job_id, timeout=self.timeout)
         # Clean up
@@ -338,48 +306,13 @@ class AzureBatchOperator(BaseOperator):
             self.clean_up(self.batch_pool_id)
         # raise exception if any task fail
         if fail_tasks:
-            raise RuntimeError(f"Job fail. The failed task are: {fail_tasks}")
-
-    def execute_complete(self, context: Context, event: dict[str, Any] | None) -> None:
-        """
-        Return immediately - callback for when the trigger fires.
-
-        The trigger communicates the terminal Azure Batch job state
-        through the event payload.
-        """
-        if event is None:
-            raise RuntimeError("Trigger returned no event.")
-
-        status = event.get("status")
-        message = event.get("message", "No message returned from trigger.")
-        failed_tasks = event.get("failed_tasks")
-
-        try:
-            if status == "success":
-                self.log.info(message)
-                return
-
-            if status == "timeout":
-                raise RuntimeError(message)
-
-            if status == "error":
-                if failed_tasks:
-                    raise RuntimeError(f"{message} Failed tasks: {failed_tasks}")
-
-                raise RuntimeError(message)
-
-            raise RuntimeError(f"Unexpected trigger event received: {event}")
-
-        finally:
-            if self.should_delete_job:
-                self.clean_up(job_id=self.batch_job_id)
-
-            if self.should_delete_pool:
-                self.clean_up(pool_id=self.batch_pool_id)
+            raise AirflowException(f"Job fail. The failed task are: {fail_tasks}")
 
     def on_kill(self) -> None:
-        self.hook.connection.begin_terminate_job(self.batch_job_id).result()
-        self.log.info("Azure Batch job (%s) terminated", self.batch_job_id)
+        response = self.hook.connection.job.terminate(
+            job_id=self.batch_job_id, terminate_reason="Job killed by user"
+        )
+        self.log.info("Azure Batch job (%s) terminated: %s", self.batch_job_id, response)
 
     def clean_up(self, pool_id: str | None = None, job_id: str | None = None) -> None:
         """
@@ -391,7 +324,7 @@ class AzureBatchOperator(BaseOperator):
         """
         if job_id:
             self.log.info("Deleting job: %s", job_id)
-            self.hook.connection.begin_delete_job(job_id).result()
+            self.hook.connection.job.delete(job_id)
         if pool_id:
             self.log.info("Deleting pool: %s", pool_id)
-            self.hook.connection.begin_delete_pool(pool_id).result()
+            self.hook.connection.pool.delete(pool_id)

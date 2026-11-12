@@ -18,11 +18,8 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import os
-import socket
-import ssl
 import tempfile
 from asyncio import Future
 from unittest import mock
@@ -39,11 +36,9 @@ from kubernetes.config import ConfigException
 from kubernetes_asyncio import client as async_client
 
 from airflow.models import Connection
-from airflow.providers.cncf.kubernetes.exceptions import KubernetesApiPermissionError
 from airflow.providers.cncf.kubernetes.hooks.kubernetes import (
     AsyncKubernetesHook,
     KubernetesHook,
-    _split_log_bytes,
     _TimeoutAsyncK8sApiClient,
     _TimeoutK8sApiClient,
 )
@@ -98,12 +93,7 @@ class TestTimeoutK8sApiClient:
         ("kwargs", "expected_timeout"),
         [
             pytest.param({}, API_TIMEOUT, id="default-timeout"),
-            # Generated kubernetes client methods always pass _request_timeout=None explicitly,
-            # so setdefault() is a no-op. The fix must coerce None to the default timeout.
-            pytest.param({"_request_timeout": None}, API_TIMEOUT, id="explicit-none-timeout"),
             pytest.param({"timeout_seconds": 5678, "_request_timeout": 1234}, 1234, id="explicit-timeout"),
-            # Log-streaming path passes a (connection, read) tuple; it must not be clobbered.
-            pytest.param({"_request_timeout": (1800, 300)}, (1800, 300), id="explicit-tuple-preserved"),
             pytest.param(
                 {"timeout_seconds": API_TIMEOUT - API_TIMEOUT_OFFSET_SERVER_SIDE},
                 API_TIMEOUT,
@@ -137,12 +127,7 @@ class TestTimeoutAsyncK8sApiClient:
         ("kwargs", "expected_timeout"),
         [
             pytest.param({}, API_TIMEOUT, id="default-timeout"),
-            # Generated kubernetes_asyncio client methods always pass _request_timeout=None explicitly,
-            # so setdefault() is a no-op. The fix must coerce None to the default timeout.
-            pytest.param({"_request_timeout": None}, API_TIMEOUT, id="explicit-none-timeout"),
             pytest.param({"timeout_seconds": 5678, "_request_timeout": 1234}, 1234, id="explicit-timeout"),
-            # Log-streaming path passes a (connection, read) tuple; it must not be clobbered.
-            pytest.param({"_request_timeout": (1800, 300)}, (1800, 300), id="explicit-tuple-preserved"),
             pytest.param(
                 {"timeout_seconds": API_TIMEOUT - API_TIMEOUT_OFFSET_SERVER_SIDE},
                 API_TIMEOUT,
@@ -242,19 +227,6 @@ class TestKubernetesHook:
                 },
             ),
             ("sidecar_container_resources_empty", {"xcom_sidecar_container_resources": ""}),
-            (
-                "sidecar_container_security_context",
-                {
-                    "xcom_sidecar_container_security_context": json.dumps(
-                        {
-                            "allowPrivilegeEscalation": False,
-                            "readOnlyRootFilesystem": True,
-                            "seccompProfile": {"type": "RuntimeDefault"},
-                        }
-                    ),
-                },
-            ),
-            ("sidecar_container_security_context_empty", {"xcom_sidecar_container_security_context": ""}),
         ]
         for conn_id, extra in connections:
             create_connection_without_db(
@@ -432,7 +404,7 @@ class TestKubernetesHook:
         ),
     )
     @patch("kubernetes.config.incluster_config.InClusterConfigLoader", new=MagicMock())
-    @patch("airflow.providers.cncf.kubernetes.kube_client.configure_tcp_keepalive", autospec=True)
+    @patch(f"{HOOK_MODULE}._enable_tcp_keepalive")
     def test_disable_tcp_keepalive(
         self,
         mock_enable,
@@ -448,37 +420,6 @@ class TestKubernetesHook:
         api_conn = kubernetes_hook.get_conn()
         assert mock_enable.called is expected
         assert isinstance(api_conn, kubernetes.client.api_client.ApiClient)
-
-    @pytest.mark.platform("linux")
-    @pytest.mark.parametrize(
-        "config_source",
-        [
-            pytest.param("config_dict", id="config_dict"),
-            pytest.param("default_client", id="default_client"),
-        ],
-    )
-    @pytest.mark.parametrize(
-        ("disable_tcp_keepalive", "expected"),
-        [(True, False), (False, True)],
-    )
-    @patch("kubernetes.config.incluster_config.InClusterConfigLoader", new=MagicMock())
-    @patch("kubernetes.config.kube_config.KubeConfigLoader", new=MagicMock())
-    @patch("kubernetes.config.kube_config.KubeConfigMerger", new=MagicMock())
-    def test_tcp_keepalive_reaches_client(self, config_source, disable_tcp_keepalive, expected):
-        """The keepalive socket options must end up on the client configuration, not only be requested."""
-        if config_source == "config_dict":
-            kubernetes_hook = KubernetesHook(
-                config_dict={"apiVersion": "v1", "kind": "Config"},
-                disable_tcp_keepalive=disable_tcp_keepalive,
-            )
-        else:
-            kubernetes_hook = KubernetesHook(disable_tcp_keepalive=disable_tcp_keepalive)
-
-        api_conn = kubernetes_hook.get_conn()
-
-        keepalive = (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        options = api_conn.configuration.socket_options or []
-        assert (keepalive in options) is expected
 
     @pytest.mark.parametrize(
         ("config_path_param", "conn_id", "call_path"),
@@ -619,27 +560,6 @@ class TestKubernetesHook:
         hook = KubernetesHook(conn_id=conn_id)
         assert hook.get_xcom_sidecar_container_resources() == expected
 
-    @pytest.mark.parametrize(
-        ("conn_id", "expected"),
-        (
-            pytest.param(
-                "sidecar_container_security_context",
-                {
-                    "allowPrivilegeEscalation": False,
-                    "readOnlyRootFilesystem": True,
-                    "seccompProfile": {"type": "RuntimeDefault"},
-                },
-                id="sidecar-with-security-context",
-            ),
-            pytest.param(
-                "sidecar_container_security_context_empty", None, id="sidecar-without-security-context"
-            ),
-        ),
-    )
-    def test_get_xcom_sidecar_container_security_context(self, conn_id, expected):
-        hook = KubernetesHook(conn_id=conn_id)
-        assert hook.get_xcom_sidecar_container_security_context() == expected
-
     @patch("kubernetes.config.kube_config.KubeConfigLoader")
     @patch("kubernetes.config.kube_config.KubeConfigMerger")
     def test_client_types(self, mock_kube_config_merger, mock_kube_config_loader):
@@ -654,9 +574,7 @@ class TestKubernetesHook:
         with mock.patch.dict("os.environ", AIRFLOW_CONN_KUBERNETES_DEFAULT=conn_uri):
             kubernetes_hook = KubernetesHook(conn_id="kubernetes_default")
             kubernetes_hook.get_conn()
-            mock_get_client.assert_called_with(
-                cluster_context="test", disable_verify_ssl=None, enable_tcp_keepalive=True
-            )
+            mock_get_client.assert_called_with(cluster_context="test", disable_verify_ssl=None)
             assert kubernetes_hook.get_namespace() == "test"
 
     def test_missing_default_connection_is_ok(self, remove_default_conn, sdk_connection_not_found):
@@ -1062,35 +980,6 @@ class TestAsyncKubernetesHook:
     KUBE_API = "kubernetes_asyncio.client.api.core_v1_api.CoreV1Api.{}"
     KUBE_BATCH_API = "kubernetes_asyncio.client.api.batch_v1_api.BatchV1Api.{}"
     KUBE_ASYNC_HOOK = HOOK_MODULE + ".AsyncKubernetesHook.{}"
-    SSL_CREATE = "kubernetes_asyncio.client.rest.ssl.create_default_context"
-
-    STATIC_AUTH_CONFIG_DICT = {
-        "apiVersion": "v1",
-        "kind": "Config",
-        "clusters": [{"name": "test", "cluster": {"server": "https://k8s.invalid:6443"}}],
-        "users": [{"name": "test", "user": {"token": "static-token"}}],
-        "contexts": [{"name": "test", "context": {"cluster": "test", "user": "test"}}],
-        "current-context": "test",
-    }
-
-    EXEC_AUTH_CONFIG_DICT = {
-        "apiVersion": "v1",
-        "kind": "Config",
-        "clusters": [{"name": "test", "cluster": {"server": "https://k8s.invalid:6443"}}],
-        "users": [
-            {
-                "name": "test",
-                "user": {
-                    "exec": {
-                        "apiVersion": "client.authentication.k8s.io/v1beta1",
-                        "command": "aws",
-                    }
-                },
-            }
-        ],
-        "contexts": [{"name": "test", "context": {"cluster": "test", "user": "test"}}],
-        "current-context": "test",
-    }
 
     @staticmethod
     def mock_await_result(return_value):
@@ -1117,17 +1006,6 @@ class TestAsyncKubernetesHook:
         )
         yield
         clear_test_connections()
-
-    @pytest_asyncio.fixture
-    async def hook(self):
-        hook = AsyncKubernetesHook(
-            conn_id=None,
-            in_cluster=False,
-            config_file=None,
-            cluster_context=None,
-        )
-        yield hook
-        await hook.close()
 
     @pytest.mark.asyncio
     @mock.patch(INCLUSTER_CONFIG_LOADER)
@@ -1333,7 +1211,7 @@ class TestAsyncKubernetesHook:
         }
         hook = AsyncKubernetesHook(conn_id=None, in_cluster=False, config_dict=exec_config)
         await hook._load_config()
-        assert hook._client_cacheable is False
+        assert hook._config_loaded is False
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1372,7 +1250,7 @@ class TestAsyncKubernetesHook:
             side_effect=lambda field: str(kubeconfig_file) if field == "kube_config_path" else None
         )
         await hook._load_config()
-        assert hook._client_cacheable is expected_cached
+        assert hook._config_loaded is expected_cached
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1422,113 +1300,12 @@ class TestAsyncKubernetesHook:
                 side_effect=lambda field: kubeconfig if field == "kube_config" else None
             )
         await hook._load_config()
-        assert hook._client_cacheable is expected_cached
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("kubeconfig_content", "extra_default_paths", "expected_cached"),
-        [
-            pytest.param(
-                (
-                    "current-context: ctx1\n"
-                    "contexts:\n- name: ctx1\n  context:\n    user: user1\n"
-                    "users:\n- name: user1\n  user:\n    exec:\n      command: aws eks get-token\n"
-                ),
-                0,
-                False,
-                id="default_kubeconfig_with_exec",
-            ),
-            pytest.param(
-                (
-                    "current-context: ctx1\n"
-                    "contexts:\n- name: ctx1\n  context:\n    user: user1\n"
-                    "users:\n- name: user1\n  user:\n    token: static-token\n"
-                ),
-                0,
-                True,
-                id="default_kubeconfig_no_exec",
-            ),
-            pytest.param(
-                (
-                    "current-context: ctx1\n"
-                    "contexts:\n- name: ctx1\n  context:\n    user: user1\n"
-                    "users:\n- name: user1\n  user:\n    token: static-token\n"
-                ),
-                1,
-                False,
-                id="default_kubeconfig_merged_from_several_files",
-            ),
-        ],
-    )
-    @mock.patch("airflow.providers.cncf.kubernetes.hooks.kubernetes.async_config.load_kube_config")
-    async def test_load_config_caching_behavior_default_kubeconfig(
-        self, mock_load_file, tmp_path, kubeconfig_content, extra_default_paths, expected_cached
-    ):
-        mock_load_file.return_value = None
-        kubeconfig_file = tmp_path / "config"
-        kubeconfig_file.write_text(kubeconfig_content)
-        extra_files = []
-        for index in range(extra_default_paths):
-            extra_file = tmp_path / f"extra{index}.yaml"
-            extra_file.write_text(kubeconfig_content)
-            extra_files.append(str(extra_file))
-        default_location = os.pathsep.join([str(kubeconfig_file), *extra_files])
-
-        hook = AsyncKubernetesHook(conn_id=None, in_cluster=False)
-        hook._get_field = mock.AsyncMock(return_value=None)
-        with mock.patch(f"{HOOK_MODULE}.async_config.KUBE_CONFIG_DEFAULT_LOCATION", default_location):
-            await hook._load_config()
-
-        mock_load_file.assert_awaited_once()
-        assert hook._client_cacheable is expected_cached
-
-    @pytest.mark.asyncio
-    @mock.patch("airflow.providers.cncf.kubernetes.hooks.kubernetes.async_config.load_kube_config")
-    async def test_load_config_default_kubeconfig_ignores_paths_that_do_not_exist(
-        self, mock_load_file, tmp_path
-    ):
-        mock_load_file.return_value = None
-        kubeconfig_file = tmp_path / "config"
-        kubeconfig_file.write_text(
-            "current-context: ctx1\n"
-            "contexts:\n- name: ctx1\n  context:\n    user: user1\n"
-            "users:\n- name: user1\n  user:\n    token: static-token\n"
-        )
-        default_location = os.pathsep.join([str(kubeconfig_file), str(tmp_path / "missing.yaml")])
-
-        hook = AsyncKubernetesHook(conn_id=None, in_cluster=False)
-        hook._get_field = mock.AsyncMock(return_value=None)
-        with mock.patch(f"{HOOK_MODULE}.async_config.KUBE_CONFIG_DEFAULT_LOCATION", default_location):
-            await hook._load_config()
-
-        assert hook._client_cacheable is True
-
-    @pytest.mark.asyncio
-    @mock.patch("airflow.providers.cncf.kubernetes.hooks.kubernetes.async_config.load_kube_config")
-    async def test_load_config_default_kubeconfig_expands_home_directory(
-        self, mock_load_file, tmp_path, monkeypatch
-    ):
-        mock_load_file.return_value = None
-        kube_dir = tmp_path / ".kube"
-        kube_dir.mkdir()
-        (kube_dir / "config").write_text(
-            "current-context: ctx1\n"
-            "contexts:\n- name: ctx1\n  context:\n    user: user1\n"
-            "users:\n- name: user1\n  user:\n    token: static-token\n"
-        )
-        monkeypatch.setenv("HOME", str(tmp_path))
-
-        hook = AsyncKubernetesHook(conn_id=None, in_cluster=False)
-        hook._get_field = mock.AsyncMock(return_value=None)
-        with mock.patch(f"{HOOK_MODULE}.async_config.KUBE_CONFIG_DEFAULT_LOCATION", "~/.kube/config"):
-            await hook._load_config()
-
-        assert hook._client_cacheable is True
+        assert hook._config_loaded is expected_cached
 
     @pytest.mark.asyncio
     @mock.patch(KUBE_API.format("list_namespaced_event"))
     async def test_async_get_pod_events_with_resource_version(
-        self, mock_list_namespaced_event, kube_config_loader, hook
+        self, mock_list_namespaced_event, kube_config_loader
     ):
         """Test getting pod events with resource_version parameter."""
         mock_event = mock.Mock()
@@ -1536,6 +1313,13 @@ class TestAsyncKubernetesHook:
         mock_events = mock.Mock()
         mock_events.items = [mock_event]
         mock_list_namespaced_event.return_value = self.mock_await_result(mock_events)
+
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
 
         result = await hook.get_pod_events(name=POD_NAME, namespace=NAMESPACE, resource_version="12345")
 
@@ -1550,7 +1334,7 @@ class TestAsyncKubernetesHook:
     @pytest.mark.asyncio
     @mock.patch(KUBE_API.format("list_namespaced_event"))
     async def test_async_get_pod_events_without_resource_version(
-        self, mock_list_namespaced_event, kube_config_loader, hook
+        self, mock_list_namespaced_event, kube_config_loader
     ):
         """Test getting pod events without resource_version parameter."""
         mock_event = mock.Mock()
@@ -1558,6 +1342,13 @@ class TestAsyncKubernetesHook:
         mock_events = mock.Mock()
         mock_events.items = [mock_event]
         mock_list_namespaced_event.return_value = self.mock_await_result(mock_events)
+
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
 
         result = await hook.get_pod_events(name=POD_NAME, namespace=NAMESPACE)
 
@@ -1572,7 +1363,7 @@ class TestAsyncKubernetesHook:
     @mock.patch("kubernetes_asyncio.watch.Watch")
     @mock.patch(KUBE_API.format("list_namespaced_event"))
     async def test_async_watch_pod_events(
-        self, mock_list_namespaced_event, mock_watch_class, mock_get_pod, kube_config_loader, hook
+        self, mock_list_namespaced_event, mock_watch_class, mock_get_pod, kube_config_loader
     ):
         """Test watching pod events using Watch API."""
         mock_event1 = mock.Mock()
@@ -1591,6 +1382,13 @@ class TestAsyncKubernetesHook:
         mock_pod = mock.MagicMock()
         mock_pod.status.phase = "Running"
         mock_get_pod.return_value = mock_pod
+
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
 
         events = []
         async_event_generator = hook.watch_pod_events(
@@ -1614,7 +1412,7 @@ class TestAsyncKubernetesHook:
     @mock.patch("kubernetes_asyncio.watch.Watch")
     @mock.patch(KUBE_API.format("list_namespaced_event"))
     async def test_async_watch_pod_events_permission_error_fallback(
-        self, mock_list_namespaced_event, mock_watch_class, mock_get_pod, kube_config_loader, hook
+        self, mock_list_namespaced_event, mock_watch_class, mock_get_pod, kube_config_loader
     ):
         """Test fallback to polling when watch permission is denied."""
 
@@ -1638,6 +1436,13 @@ class TestAsyncKubernetesHook:
         mock_pod.status.phase = "Running"
         mock_get_pod.return_value = mock_pod
 
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
+
         events = []
         async for event in hook.watch_pod_events(
             name=POD_NAME, namespace=NAMESPACE, resource_version="12345", timeout_seconds=30
@@ -1653,7 +1458,7 @@ class TestAsyncKubernetesHook:
     @mock.patch(KUBE_API.format("list_namespaced_event"))
     @mock.patch("asyncio.sleep", new_callable=mock.AsyncMock)
     async def test_async_watch_pod_events_polling_fallback(
-        self, mock_sleep, mock_list_namespaced_event, kube_config_loader, hook
+        self, mock_sleep, mock_list_namespaced_event, kube_config_loader
     ):
         """Test polling fallback method."""
         mock_event1 = mock.Mock()
@@ -1663,6 +1468,13 @@ class TestAsyncKubernetesHook:
         mock_events = mock.Mock()
         mock_events.items = [mock_event1, mock_event2]
         mock_list_namespaced_event.return_value = self.mock_await_result(mock_events)
+
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
 
         events = []
         async for event in hook.watch_pod_events_polling_fallback(
@@ -1685,9 +1497,16 @@ class TestAsyncKubernetesHook:
     @mock.patch("kubernetes_asyncio.watch.Watch")
     @mock.patch(KUBE_API.format("list_namespaced_event"))
     async def test_async_watch_pod_events_uses_fallback_if_already_set(
-        self, mock_list_namespaced_event, mock_watch_class, kube_config_loader, hook
+        self, mock_list_namespaced_event, mock_watch_class, kube_config_loader
     ):
         """Test that watch uses polling fallback if flag is already set."""
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
+
         hook._event_polling_fallback = True
 
         mock_event = mock.Mock()
@@ -1715,7 +1534,6 @@ class TestAsyncKubernetesHook:
         mock_get_pod,
         mock_watch_class,
         kube_config_loader,
-        hook,
     ):
         """
         The watch should reconnect when the watch stream ends (e.g. timeout)
@@ -1749,6 +1567,13 @@ class TestAsyncKubernetesHook:
 
         mock_watch_class.side_effect = [watch_instance1, watch_instance2]
 
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
+
         events = []
 
         async for event in hook.watch_pod_events(
@@ -1769,7 +1594,6 @@ class TestAsyncKubernetesHook:
         mock_get_pod,
         mock_watch_class,
         kube_config_loader,
-        hook,
     ):
         """
         When the Kubernetes API reports resourceVersion too old (410),
@@ -1802,6 +1626,13 @@ class TestAsyncKubernetesHook:
 
         mock_watch_class.side_effect = [watch_instance1, watch_instance2]
 
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
+
         events = []
         async for event in hook.watch_pod_events(
             name=POD_NAME, namespace=NAMESPACE, resource_version="1", timeout_seconds=1
@@ -1820,7 +1651,6 @@ class TestAsyncKubernetesHook:
         mock_get_pod,
         mock_watch_class,
         kube_config_loader,
-        hook,
     ):
         """
         Verify that watch_pod_events stops cleanly when the pod no longer exists (404).
@@ -1831,6 +1661,13 @@ class TestAsyncKubernetesHook:
 
         mock_watch = mock.Mock()
         mock_watch_class.return_value = mock_watch
+
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
 
         events = []
         async for event in hook.watch_pod_events(
@@ -1852,7 +1689,6 @@ class TestAsyncKubernetesHook:
         mock_watch_class,
         pod_status,
         kube_config_loader,
-        hook,
     ):
         """
         Verify that watch_pod_events stops immediately when the pod
@@ -1866,6 +1702,13 @@ class TestAsyncKubernetesHook:
         mock_pod.status.phase = pod_status
         mock_get_pod.return_value = mock_pod
 
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
+
         events = []
         async for event in hook.watch_pod_events(
             name=POD_NAME,
@@ -1878,9 +1721,15 @@ class TestAsyncKubernetesHook:
 
     @pytest.mark.asyncio
     @mock.patch(KUBE_API.format("read_namespaced_pod"))
-    async def test_get_pod(self, lib_method, kube_config_loader, hook):
+    async def test_get_pod(self, lib_method, kube_config_loader):
         lib_method.return_value = self.mock_await_result(None)
 
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
         await hook.get_pod(
             name=POD_NAME,
             namespace=NAMESPACE,
@@ -1894,9 +1743,15 @@ class TestAsyncKubernetesHook:
 
     @pytest.mark.asyncio
     @mock.patch(KUBE_API.format("delete_namespaced_pod"))
-    async def test_delete_pod(self, lib_method, kube_config_loader, hook):
+    async def test_delete_pod(self, lib_method, kube_config_loader):
         lib_method.return_value = self.mock_await_result(None)
 
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
         await hook.delete_pod(
             name=POD_NAME,
             namespace=NAMESPACE,
@@ -1906,10 +1761,17 @@ class TestAsyncKubernetesHook:
 
     @pytest.mark.asyncio
     @mock.patch(KUBE_API.format("read_namespaced_pod_log"))
-    async def test_read_logs(self, lib_method, kube_config_loader, hook):
+    async def test_read_logs(self, lib_method, kube_config_loader):
         mock_raw_resp = mock.AsyncMock()
         mock_raw_resp.read = mock.AsyncMock(return_value=b"2023-01-11 Some string logs...")
         lib_method.return_value = self.mock_await_result(mock_raw_resp)
+
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
 
         logs = await hook.read_logs(
             name=POD_NAME,
@@ -1933,13 +1795,20 @@ class TestAsyncKubernetesHook:
 
     @pytest.mark.asyncio
     @mock.patch(KUBE_API.format("read_namespaced_pod_log"))
-    async def test_read_logs_handles_non_utf8_bytes(self, lib_method, kube_config_loader, hook):
+    async def test_read_logs_handles_non_utf8_bytes(self, lib_method, kube_config_loader):
         """Non-UTF-8 bytes in pod logs are replaced instead of raising UnicodeDecodeError."""
         raw_bytes = b"2023-01-11 valid line\n2023-01-11 broken \x80\x81 bytes"
 
         mock_raw_resp = mock.AsyncMock()
         mock_raw_resp.read = mock.AsyncMock(return_value=raw_bytes)
         lib_method.return_value = self.mock_await_result(mock_raw_resp)
+
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
 
         logs = await hook.read_logs(
             name=POD_NAME,
@@ -1955,84 +1824,16 @@ class TestAsyncKubernetesHook:
         assert lib_method.call_args.kwargs.get("_preload_content") is False
 
     @pytest.mark.asyncio
-    @mock.patch("asyncio.to_thread", new_callable=mock.AsyncMock)
-    @mock.patch(KUBE_API.format("read_namespaced_pod_log"))
-    async def test_read_logs_decodes_off_the_event_loop(
-        self, lib_method, mock_to_thread, kube_config_loader, hook
-    ):
-        """The CPU-bound decode/splitlines is offloaded to a worker thread, not run on the loop."""
-        raw_bytes = b"2023-01-11 Some string logs..."
-        mock_raw_resp = mock.AsyncMock()
-        mock_raw_resp.read = mock.AsyncMock(return_value=raw_bytes)
-        lib_method.return_value = self.mock_await_result(mock_raw_resp)
-        mock_to_thread.return_value = ["decoded line"]
-
-        logs = await hook.read_logs(name=POD_NAME, namespace=NAMESPACE, container_name=CONTAINER_NAME)
-
-        assert logs == ["decoded line"]
-        mock_to_thread.assert_awaited_once_with(_split_log_bytes, raw_bytes)
-
-    # The async hook talks to kubernetes_asyncio, whose ApiException does not derive from urllib3's
-    # HTTPError, so these statuses only reach the handlers through the async exception type.
-    ASYNC_API_CALLS = [
-        pytest.param(
-            "get_pod", "read_namespaced_pod", {"name": POD_NAME, "namespace": NAMESPACE}, id="get_pod"
-        ),
-        pytest.param(
-            "read_logs", "read_namespaced_pod_log", {"name": POD_NAME, "namespace": NAMESPACE}, id="read_logs"
-        ),
-        pytest.param(
-            "get_pod_events",
-            "list_namespaced_event",
-            {"name": POD_NAME, "namespace": NAMESPACE},
-            id="get_pod_events",
-        ),
-    ]
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(("hook_method", "api_method", "call_kwargs"), ASYNC_API_CALLS)
-    async def test_async_api_403_raises_permission_error(
-        self, hook_method, api_method, call_kwargs, kube_config_loader
-    ):
-        hook = AsyncKubernetesHook(
-            conn_id=None,
-            in_cluster=False,
-            config_file=None,
-            cluster_context=None,
-        )
-
-        with mock.patch(self.KUBE_API.format(api_method), autospec=True) as lib_method:
-            lib_method.side_effect = async_client.ApiException(status=403, reason="Forbidden")
-
-            with pytest.raises(KubernetesApiPermissionError, match="Permission denied \\(403\\)"):
-                await getattr(hook, hook_method)(**call_kwargs)
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(("hook_method", "api_method", "call_kwargs"), ASYNC_API_CALLS)
-    async def test_async_api_other_status_stays_api_exception(
-        self, hook_method, api_method, call_kwargs, kube_config_loader
-    ):
-        """Non-403 statuses must reach generic_api_retry unwrapped so it can judge transience itself."""
-        hook = AsyncKubernetesHook(
-            conn_id=None,
-            in_cluster=False,
-            config_file=None,
-            cluster_context=None,
-        )
-
-        with mock.patch(self.KUBE_API.format(api_method), autospec=True) as lib_method:
-            lib_method.side_effect = async_client.ApiException(status=404, reason="Not Found")
-
-            with pytest.raises(async_client.ApiException) as exc_info:
-                await getattr(hook, hook_method)(**call_kwargs)
-
-        assert exc_info.value.status == 404
-
-    @pytest.mark.asyncio
     @mock.patch(KUBE_BATCH_API.format("read_namespaced_job_status"))
-    async def test_get_job_status(self, lib_method, kube_config_loader, hook):
+    async def test_get_job_status(self, lib_method, kube_config_loader):
         lib_method.return_value = self.mock_await_result(None)
 
+        hook = AsyncKubernetesHook(
+            conn_id=None,
+            in_cluster=False,
+            config_file=None,
+            cluster_context=None,
+        )
         await hook.get_job_status(
             name=JOB_NAME,
             namespace=NAMESPACE,
@@ -2246,118 +2047,3 @@ class TestAsyncKubernetesHook:
         assert hook_a.client_configuration is not hook_b.client_configuration
         assert hook_a.client_configuration.host == "https://cluster-a.example.com"
         assert hook_b.client_configuration.host == "https://cluster-b.example.com"
-
-    @pytest.mark.asyncio
-    @mock.patch(SSL_CREATE, autospec=True, side_effect=ssl.create_default_context)
-    async def test_static_auth_reuses_client_and_ssl_context(self, mock_create_ssl, hook):
-        hook.config_dict = self.STATIC_AUTH_CONFIG_DICT
-        async with hook.get_conn() as first_client:
-            pass
-
-        for _ in range(2):
-            async with hook.get_conn() as client:
-                assert client is first_client
-
-        assert not first_client.rest_client.pool_manager.closed
-        mock_create_ssl.assert_called_once()
-
-    @staticmethod
-    async def _bearer_auth_headers(kube_client) -> dict[str, str]:
-        headers: dict[str, str] = {}
-        # update_params_for_auth is sync in kubernetes_asyncio<33 and async from 33 on
-        result = kube_client.update_params_for_auth(headers, [], ["BearerToken"])
-        if inspect.isawaitable(result):
-            await result
-        return headers
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("source", ["file", "dict"])
-    @mock.patch(SSL_CREATE, autospec=True, side_effect=ssl.create_default_context)
-    async def test_cached_client_reloads_rotated_kubeconfig_token(
-        self, mock_create_ssl, hook, tmp_path, source
-    ):
-        kubeconfig = tmp_path / "config"
-        config_data = json.loads(json.dumps(self.STATIC_AUTH_CONFIG_DICT))
-        if source == "file":
-            kubeconfig.write_text(yaml.safe_dump(config_data))
-            hook._get_field = mock.AsyncMock(
-                side_effect=lambda field: str(kubeconfig) if field == "kube_config_path" else None
-            )
-        else:
-            hook.config_dict = config_data
-
-        async with hook.get_conn() as first_client:
-            first_headers = await self._bearer_auth_headers(first_client)
-
-        config_data["users"][0]["user"]["token"] = "rotated-token"
-        if source == "file":
-            kubeconfig.write_text(yaml.safe_dump(config_data))
-
-        async with hook.get_conn() as second_client:
-            second_headers = await self._bearer_auth_headers(second_client)
-
-        assert first_client is second_client
-        assert first_headers["authorization"] == "Bearer static-token"
-        assert second_headers["authorization"] == "Bearer rotated-token"
-        mock_create_ssl.assert_called_once()
-
-    @pytest.mark.asyncio
-    @mock.patch(SSL_CREATE, autospec=True, side_effect=ssl.create_default_context)
-    @mock.patch("kubernetes_asyncio.config.kube_config.google_auth_credentials", autospec=True)
-    async def test_cached_client_refreshes_expired_auth_provider_token(
-        self, mock_google_credentials, mock_create_ssl, hook, time_machine
-    ):
-        time_machine.move_to("2026-01-01T00:00:00Z")
-        config_data = json.loads(json.dumps(self.STATIC_AUTH_CONFIG_DICT))
-        provider_config = {"access-token": "initial-token", "expiry": "2026-01-01T02:00:00Z"}
-        config_data["users"][0]["user"] = {"auth-provider": {"name": "gcp", "config": provider_config}}
-        hook.config_dict = config_data
-        mock_google_credentials.return_value = mock.Mock(
-            token="refreshed-token", expiry="2026-01-01T04:00:00Z"
-        )
-
-        async with hook.get_conn() as first_client:
-            first_headers = await self._bearer_auth_headers(first_client)
-
-        time_machine.move_to("2026-01-01T03:00:00Z")
-        async with hook.get_conn() as second_client:
-            second_headers = await self._bearer_auth_headers(second_client)
-
-        assert first_client is second_client
-        assert first_headers["authorization"] == "Bearer initial-token"
-        assert second_headers["authorization"] == "Bearer refreshed-token"
-        mock_google_credentials.assert_awaited_once()
-        mock_create_ssl.assert_called_once()
-
-    @pytest.mark.asyncio
-    @mock.patch(SSL_CREATE, autospec=True, side_effect=ssl.create_default_context)
-    @mock.patch(HOOK_MODULE + ".async_config.load_kube_config_from_dict", autospec=True)
-    async def test_exec_auth_keeps_per_call_clients(self, mock_load_config, mock_create_ssl, hook):
-        hook.config_dict = self.EXEC_AUTH_CONFIG_DICT
-        clients = []
-        for _ in range(3):
-            async with hook.get_conn() as client:
-                clients.append(client)
-            assert client.rest_client.pool_manager.closed
-
-        assert len({id(client) for client in clients}) == 3
-        assert mock_create_ssl.call_count == 3
-        assert mock_load_config.await_count == 3
-        assert hook._cached_kube_client is None
-        assert not hook._client_cacheable
-
-    @pytest.mark.asyncio
-    async def test_close_releases_cached_client_and_is_idempotent(self, hook):
-        hook.config_dict = self.STATIC_AUTH_CONFIG_DICT
-        async with hook.get_conn() as cached:
-            pass
-
-        await hook.close()
-        assert hook._cached_kube_client is None
-        assert cached.rest_client.pool_manager.closed
-
-        await hook.close()
-
-        async with hook.get_conn() as reopened:
-            assert reopened is not cached
-            assert not reopened.rest_client.pool_manager.closed

@@ -9,7 +9,8 @@
   "config": {
     "columns": {
       "section": "Раздел"
-    }
+    },
+    "title": "Конфигурация Airflow"
   },
   "connections": {
     "add": "Добавить соединение",
@@ -19,17 +20,12 @@
       "host": "Хост",
       "port": "Порт"
     },
-    "connection_few": "Соединения",
-    "connection_many": "Соединений",
     "connection_one": "Соединение",
     "connection_other": "Соединений",
     "delete": {
-      "deleteConnection_few": "Удалить {{count, number}} соединения",
-      "deleteConnection_many": "Удалить {{count, number}} соединений",
+      "deleteConnection_few": "Удалить {{count}} соединения",
       "deleteConnection_one": "Удалить 1 соединение",
-      "deleteConnection_other": "Удалить {{count, number}} соединений",
-      "firstConfirmMessage_few": "Вы собираетесь удалить следующие соединения:",
-      "firstConfirmMessage_many": "Вы собираетесь удалить следующие соединения:",
+      "deleteConnection_other": "Удалить {{count}} соединений",
       "firstConfirmMessage_one": "Вы собираетесь удалить следующее соединение:",
       "firstConfirmMessage_other": "Вы собираетесь удалить следующие соединения:",
       "title": "Удалить соединение"
@@ -39,6 +35,7 @@
       "connectionIdRequired": "ID соединения обязателен",
       "connectionIdRequirement": "ID соединения не может состоять только из пробелов",
       "connectionTypeRequired": "Тип соединения обязателен",
+      "extraFields": "Дополнительные поля",
       "extraFieldsJson": "Дополнительные поля JSON",
       "helperText": "Отсутствует тип соединения? Убедитесь, что вы установили соответствующий пакет Airflow Providers.",
       "helperTextForRedactedFields": "Скрытые поля ('***') останутся без изменений, если их не редактировать.",
@@ -99,17 +96,15 @@
       "allTypes": "Все типы",
       "dagProcessorJob": "Задание обработки Dag-а",
       "schedulerJob": "Задание планировщика",
-      "triggererJob": "Задание триггерера"
+      "triggererJob": "Задание триггера"
     }
   },
   "plugins": {
     "columns": {
       "source": "Источник"
     },
-    "importError_few": "Ошибки импорта плагинов",
-    "importError_many": "Ошибок импорта плагинов",
     "importError_one": "Ошибка импорта плагина",
-    "importError_other": "Ошибок импорта плагинов",
+    "importError_other": "Ошибки импорта плагинов",
     "searchPlaceholder": "Поиск по файлу"
   },
   "pools": {
@@ -126,14 +121,11 @@
       "includeDeferred": "Включить отложенные",
       "nameMaxLength": "Имя может содержать максимум 256 символов",
       "nameRequired": "Имя обязательно",
-      "slots": "Слоты",
-      "slotsHelperText": "Используйте -1 для неограниченного количества слотов."
+      "slots": "Слоты"
     },
     "noPoolsFound": "Пулы не найдены",
-    "pool_few": "Пула",
-    "pool_many": "Пул",
     "pool_one": "Пул",
-    "pool_other": "Пул",
+    "pool_other": "Пулы",
     "searchPlaceholder": "Поиск пулов",
     "sort": {
       "asc": "Имя (A-Z)",
@@ -153,12 +145,8 @@
       "isEncrypted": "Зашифровано"
     },
     "delete": {
-      "deleteVariable_few": "Удалить {{count, number}} переменные",
-      "deleteVariable_many": "Удалить {{count, number}} переменных",
       "deleteVariable_one": "Удалить 1 переменную",
-      "deleteVariable_other": "Удалить {{count, number}} переменных",
-      "firstConfirmMessage_few": "Вы собираетесь удалить следующие переменные:",
-      "firstConfirmMessage_many": "Вы собираетесь удалить следующие переменные:",
+      "deleteVariable_other": "Удалить {{count}} переменных",
       "firstConfirmMessage_one": "Вы собираетесь удалить следующую переменную:",
       "firstConfirmMessage_other": "Вы собираетесь удалить следующие переменные:",
       "title": "Удалить переменную",
@@ -189,16 +177,13 @@
           "title": "Пропустить"
         }
       },
-      "parsingFile": "Парсинг файла...",
       "title": "Импорт переменных",
       "upload": "Загрузить JSON файл",
       "uploadPlaceholder": "Загрузите JSON файл, содержащий переменные (например, {\"key\": \"value\", ...})"
     },
     "noRowsMessage": "Переменные не найдены",
     "searchPlaceholder": "Поиск ключей",
-    "variable_few": "Переменные",
-    "variable_many": "Переменных",
     "variable_one": "Переменная",
-    "variable_other": "Переменных"
+    "variable_other": "Переменные"
   }
 }

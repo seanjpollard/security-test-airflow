@@ -31,7 +31,6 @@ from airflow.providers.amazon.aws.links.sagemaker_unified_studio import (
 from airflow.providers.amazon.aws.triggers.sagemaker_unified_studio import (
     SageMakerNotebookJobTrigger,
 )
-from airflow.providers.amazon.aws.utils.deferral import should_defer
 from airflow.providers.common.compat.sdk import AirflowException, BaseOperator, conf
 
 if TYPE_CHECKING:
@@ -93,9 +92,7 @@ class SageMakerNotebookOperator(BaseOperator):
     :param waiter_delay: Interval in seconds to check the notebook execution status.
     :param waiter_max_attempts: Number of attempts to wait before returning FAILED.
     :param deferrable: If True, the operator will wait asynchronously for the job to complete.
-        Deferring when ``wait_for_completion`` is False is deprecated; from the next major release
-        this has no effect when ``wait_for_completion`` is False.
-        This mode requires aiobotocore module to be installed.
+        This implies waiting for completion. This mode requires aiobotocore module to be installed.
         (default: False)
 
     .. seealso::
@@ -174,7 +171,7 @@ class SageMakerNotebookOperator(BaseOperator):
         notebook_execution = self.notebook_execution_hook.start_notebook_execution()
         execution_id = notebook_execution["execution_id"]
 
-        if should_defer(deferrable=self.deferrable, wait_for_completion=self.wait_for_completion):
+        if self.deferrable:
             self.defer(
                 trigger=SageMakerNotebookJobTrigger(
                     execution_id=execution_id,

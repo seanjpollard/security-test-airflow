@@ -67,7 +67,6 @@ class GCSObjectExistenceSensor(BaseSensorOperator):
         "bucket",
         "object",
         "impersonation_chain",
-        "google_cloud_conn_id",
     )
     ui_color = "#f0eee4"
 
@@ -178,7 +177,6 @@ class GCSObjectUpdateSensor(BaseSensorOperator):
         "bucket",
         "object",
         "impersonation_chain",
-        "google_cloud_conn_id",
     )
     ui_color = "#f0eee4"
 
@@ -271,7 +269,6 @@ class GCSObjectsWithPrefixExistenceSensor(BaseSensorOperator):
         "bucket",
         "prefix",
         "impersonation_chain",
-        "google_cloud_conn_id",
     )
     ui_color = "#f0eee4"
 
@@ -379,7 +376,6 @@ class GCSUploadSessionCompleteSensor(BaseSensorOperator):
         "bucket",
         "prefix",
         "impersonation_chain",
-        "google_cloud_conn_id",
     )
     ui_color = "#f0eee4"
 

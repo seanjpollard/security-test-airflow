@@ -21,13 +21,10 @@ import { FiSettings } from "react-icons/fi";
 import { Link as RouterLink } from "react-router-dom";
 
 import type { MenuItem } from "openapi/requests/types.gen";
-
-import { Menu } from "src/system-components";
-
+import { Menu } from "src/components/ui";
 import type { NavItemResponse } from "src/utils/types";
 
 import { NavButton } from "./NavButton";
-import { NavMenu } from "./NavMenu";
 import { PluginMenuItem } from "./PluginMenuItem";
 
 const links = [
@@ -64,34 +61,32 @@ export const AdminButton = ({
   readonly authorizedMenuItems: Array<MenuItem>;
   readonly externalViews: Array<NavItemResponse>;
 }) => {
-  const { t: translate } = useTranslation();
-  const authorizedLinks = links.filter(({ title }) => authorizedMenuItems.includes(title as MenuItem));
-  const menuItems = authorizedLinks.map((link) => (
-    <Menu.Item asChild key={link.title} value={link.title}>
-      <RouterLink aria-label={translate(`admin.${link.title}`)} to={link.href}>
-        {translate(`admin.${link.title}`)}
-      </RouterLink>
-    </Menu.Item>
-  ));
+  const { t: translate } = useTranslation("common");
+  const menuItems = links
+    .filter(({ title }) => authorizedMenuItems.includes(title as MenuItem))
+    .map((link) => (
+      <Menu.Item asChild key={link.title} value={link.title}>
+        <RouterLink aria-label={translate(`admin.${link.title}`)} to={link.href}>
+          {translate(`admin.${link.title}`)}
+        </RouterLink>
+      </Menu.Item>
+    ));
 
   if (!menuItems.length && !externalViews.length) {
     return undefined;
   }
 
   return (
-    <NavMenu
-      trigger={
-        <NavButton
-          icon={FiSettings}
-          title={translate("nav.admin")}
-          to={authorizedLinks.map(({ href }) => href)}
-        />
-      }
-    >
-      {menuItems}
-      {externalViews.map((view) => (
-        <PluginMenuItem {...view} key={view.name} />
-      ))}
-    </NavMenu>
+    <Menu.Root positioning={{ placement: "right" }}>
+      <Menu.Trigger asChild>
+        <NavButton icon={FiSettings} title={translate("nav.admin")} />
+      </Menu.Trigger>
+      <Menu.Content>
+        {menuItems}
+        {externalViews.map((view) => (
+          <PluginMenuItem {...view} key={view.name} />
+        ))}
+      </Menu.Content>
+    </Menu.Root>
   );
 };

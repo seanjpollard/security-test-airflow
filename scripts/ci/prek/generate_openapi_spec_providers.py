@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # /// script
-# requires-python = ">=3.11,<3.12"
+# requires-python = ">=3.10,<3.11"
 # dependencies = [
 #   "rich>=13.6.0",
 # ]
@@ -27,13 +27,13 @@ import sys
 
 from common_prek_utils import (
     initialize_breeze_prek,
-    run_command_via_breeze_run,
+    run_command_via_breeze_shell,
     validate_cmd_result,
 )
 
 initialize_breeze_prek(__name__, __file__)
 
-cmd_result = run_command_via_breeze_run(
+cmd_result = run_command_via_breeze_shell(
     ["python3", "/opt/airflow/scripts/in_container/run_generate_openapi_spec_providers.py", sys.argv[1]],
     backend="sqlite",
     skip_environment_initialization=False,

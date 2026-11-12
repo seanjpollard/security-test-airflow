@@ -17,15 +17,14 @@
 # under the License.
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from datetime import datetime, timedelta
+from collections.abc import Callable
+from datetime import datetime
 from enum import Enum
 from functools import cached_property, lru_cache
 from time import sleep
 from typing import TYPE_CHECKING, NoReturn
-from uuid import UUID
 
-from sqlalchemy import Index, Integer, String, Uuid, and_, case, or_, select
+from sqlalchemy import Index, Integer, String, case, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Mapped, backref, foreign, mapped_column, relationship
 from sqlalchemy.orm.session import make_transient
@@ -36,13 +35,12 @@ from airflow.configuration import conf
 from airflow.exceptions import AirflowException
 from airflow.listeners.listener import get_listener_manager
 from airflow.models.base import ID_LEN, Base
-from airflow.models.team import JobTeam
 from airflow.utils.helpers import convert_camel_to_snake
 from airflow.utils.log.logging_mixin import LoggingMixin
 from airflow.utils.net import get_hostname
 from airflow.utils.platform import getuser
 from airflow.utils.session import NEW_SESSION, create_session, provide_session
-from airflow.utils.sqlalchemy import ExtendedJSON, UtcDateTime
+from airflow.utils.sqlalchemy import UtcDateTime
 
 
 class JobState(str, Enum):
@@ -59,7 +57,6 @@ class JobState(str, Enum):
 
 if TYPE_CHECKING:
     from sqlalchemy.orm.session import Session
-    from sqlalchemy.sql.elements import ColumnElement
 
 
 def _resolve_dagrun_model():
@@ -104,11 +101,6 @@ class Job(Base, LoggingMixin):
     executor_class: Mapped[str | None] = mapped_column(String(500))
     hostname: Mapped[str | None] = mapped_column(String(500))
     unixname: Mapped[str | None] = mapped_column(String(1000))
-    bundle_names: Mapped[list[str] | None] = mapped_column(ExtendedJSON, nullable=True)
-    session_id: Mapped[UUID | None] = mapped_column(Uuid(), nullable=True, unique=True)
-    """Component session that registered this Job over the Execution API; ``None`` for Jobs written directly or replaced by a newer registration."""
-    registration_id: Mapped[UUID | None] = mapped_column(Uuid(), nullable=True, unique=True)
-    """Process registration that created this Job; it creates no other Job, even after this one ends."""
 
     __table_args__ = (
         Index("job_type_heart", job_type, latest_heartbeat),
@@ -140,21 +132,6 @@ class Job(Base, LoggingMixin):
 
     Only makes sense for SchedulerJob.
     """
-
-    job_teams = relationship(
-        "JobTeam",
-        cascade="all, delete-orphan",
-        lazy="selectin",
-    )
-
-    @property
-    def team_names(self) -> list[str]:
-        """Names of the teams whose workloads this job serves, empty when it is not team-scoped."""
-        return sorted(job_team.team_name for job_team in self.job_teams)
-
-    @team_names.setter
-    def team_names(self, names: Iterable[str]) -> None:
-        self.job_teams = [JobTeam(team_name=name) for name in dict.fromkeys(names)]
 
     def __init__(self, heartrate=None, **kwargs):
         # Save init parameters as DB fields
@@ -192,7 +169,7 @@ class Job(Base, LoggingMixin):
         )
 
     @provide_session
-    def kill(self, *, session: Session = NEW_SESSION) -> NoReturn:
+    def kill(self, session: Session = NEW_SESSION) -> NoReturn:
         """Handle on_kill callback and updates state in database."""
         try:
             self.on_kill()
@@ -210,7 +187,9 @@ class Job(Base, LoggingMixin):
         """Will be called when an external kill command is received."""
 
     @provide_session
-    def heartbeat(self, heartbeat_callback: Callable[..., None], *, session: Session = NEW_SESSION) -> None:
+    def heartbeat(
+        self, heartbeat_callback: Callable[[Session], None], session: Session = NEW_SESSION
+    ) -> None:
         """
         Update the job's entry in the database with the latest_heartbeat timestamp.
 
@@ -262,7 +241,7 @@ class Job(Base, LoggingMixin):
                     self.log.info("Heartbeat recovered after %.2f seconds", time_since_last_heartbeat)
                 # At this point, the DB has updated.
                 previous_heartbeat = self.latest_heartbeat
-                heartbeat_callback(session=session)
+                heartbeat_callback(session)
             self.log.debug("[heartbeat]")
             self.heartbeat_failed = False
         except OperationalError:
@@ -287,7 +266,7 @@ class Job(Base, LoggingMixin):
             self.latest_heartbeat = previous_heartbeat
 
     @provide_session
-    def prepare_for_execution(self, *, session: Session = NEW_SESSION):
+    def prepare_for_execution(self, session: Session = NEW_SESSION):
         """Prepare the job for execution."""
         stats.incr(self.__class__.__name__.lower() + "_start", 1, 1)
         self.state = JobState.RUNNING
@@ -297,7 +276,7 @@ class Job(Base, LoggingMixin):
         make_transient(self)
 
     @provide_session
-    def complete_execution(self, *, session: Session = NEW_SESSION):
+    def complete_execution(self, session: Session = NEW_SESSION):
         try:
             get_listener_manager().hook.before_stopping(component=self)
         except Exception:
@@ -308,7 +287,7 @@ class Job(Base, LoggingMixin):
         stats.incr(self.__class__.__name__.lower() + "_end", 1, 1)
 
     @provide_session
-    def most_recent_job(self, *, session: Session = NEW_SESSION) -> Job | None:
+    def most_recent_job(self, session: Session = NEW_SESSION) -> Job | None:
         """Return the most recent job of this type, if any, based on last heartbeat received."""
         return most_recent_job(str(self.job_type), session=session)
 
@@ -335,30 +314,9 @@ class Job(Base, LoggingMixin):
             and (timezone.utcnow() - latest_heartbeat).total_seconds() < health_check_threshold_value
         )
 
-    @staticmethod
-    def is_alive_clause(job_types: Iterable[str]) -> ColumnElement[bool]:
-        """
-        Return the SQL form of :meth:`_is_alive` for the given job types.
-
-        Only the core job types are supported: their thresholds come from config rather than the per-row
-        heartrate, so the cutoff is a bound timestamp and the predicate stays portable. Keep in sync
-        with :meth:`_is_alive`.
-        """
-        now = timezone.utcnow()
-        fresh_per_type = or_(
-            *(
-                and_(
-                    Job.job_type == job_type,
-                    Job.latest_heartbeat > now - timedelta(seconds=health_check_threshold(job_type, 0)),
-                )
-                for job_type in job_types
-            )
-        )
-        return and_(Job.state == JobState.RUNNING, Job.latest_heartbeat.is_not(None), fresh_per_type)
-
 
 @provide_session
-def most_recent_job(job_type: str, *, session: Session = NEW_SESSION) -> Job | None:
+def most_recent_job(job_type: str, session: Session = NEW_SESSION) -> Job | None:
     """
     Return the most recent job of this type, if any, based on last heartbeat received.
 
@@ -382,7 +340,7 @@ def most_recent_job(job_type: str, *, session: Session = NEW_SESSION) -> Job | N
 
 @provide_session
 def run_job(
-    job: Job, execute_callable: Callable[[], int | None], *, session: Session = NEW_SESSION
+    job: Job, execute_callable: Callable[[], int | None], session: Session = NEW_SESSION
 ) -> int | None:
     """
     Run the job.
@@ -435,7 +393,9 @@ def execute_job(job: Job, execute_callable: Callable[[], int | None]) -> int | N
     return ret
 
 
-def perform_heartbeat(job: Job, heartbeat_callback: Callable[..., None], only_if_necessary: bool) -> None:
+def perform_heartbeat(
+    job: Job, heartbeat_callback: Callable[[Session], None], only_if_necessary: bool
+) -> None:
     """
     Perform heartbeat for the Job passed to it,optionally checking if it is necessary.
 

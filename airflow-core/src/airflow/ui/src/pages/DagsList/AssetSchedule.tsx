@@ -16,21 +16,18 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from "react";
-
-import { Button, HStack, Text } from "@chakra-ui/react";
+import { Button, HStack, Link, Text } from "@chakra-ui/react";
 import dayjs from "dayjs";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FiAlertTriangle, FiDatabase } from "react-icons/fi";
+import { FiDatabase } from "react-icons/fi";
+import { Link as RouterLink } from "react-router-dom";
 
 import { useAssetServiceGetDagAssetQueuedEvents, useAssetServiceNextRunAssets } from "openapi/queries";
-import type { NextRunAssetEventResponse } from "openapi/requests/types.gen";
-
-import { Popover, RouterLink, Tooltip } from "src/system-components";
-
 import { AssetExpression, type ExpressionType } from "src/components/AssetExpression";
-import { RollupKeyChecklistPopover } from "src/components/RollupKeyChecklist";
+import type { NextRunEvent } from "src/components/AssetExpression/types";
 import { TruncatedText } from "src/components/TruncatedText";
+import { Popover } from "src/components/ui";
 
 import { PartitionScheduleModal } from "./PartitionScheduleModal";
 
@@ -43,27 +40,20 @@ type Props = {
 
 type PartitionScheduleProps = {
   readonly dagId: string;
-  readonly hasInactiveAsset: boolean;
   readonly isLoading: boolean;
   readonly pendingCount: number;
 };
 
-const PartitionSchedule = ({ dagId, hasInactiveAsset, isLoading, pendingCount }: PartitionScheduleProps) => {
-  const { t: translate } = useTranslation();
+const PartitionSchedule = ({ dagId, isLoading, pendingCount }: PartitionScheduleProps) => {
+  const { t: translate } = useTranslation("common");
   const [open, setOpen] = useState(false);
 
   return (
     <>
-      <Tooltip content={translate("common:assetInactive.tooltip")} disabled={!hasInactiveAsset}>
-        <Button loading={isLoading} onClick={() => setOpen(true)} paddingInline={0} variant="ghost">
-          {hasInactiveAsset ? (
-            <FiAlertTriangle color="var(--chakra-colors-warning-fg)" style={{ display: "inline" }} />
-          ) : (
-            <FiDatabase style={{ display: "inline" }} />
-          )}
-          {translate("pendingDagRun", { count: pendingCount })}
-        </Button>
-      </Tooltip>
+      <Button loading={isLoading} onClick={() => setOpen(true)} paddingInline={0} size="sm" variant="ghost">
+        <FiDatabase style={{ display: "inline" }} />
+        {translate("pendingDagRun", { count: pendingCount })}
+      </Button>
       <PartitionScheduleModal dagId={dagId} onClose={() => setOpen(false)} open={open} />
     </>
   );
@@ -79,7 +69,7 @@ export const AssetSchedule = ({ assetExpression, dagId, timetablePartitioned, ti
     { enabled: !timetablePartitioned },
   );
 
-  const nextRunEvents: Array<NextRunAssetEventResponse> = nextRun?.events ?? [];
+  const nextRunEvents = (nextRun?.events ?? []) as Array<NextRunEvent>;
   const queuedAssetEvents = new Map<number, string>();
 
   if (!timetablePartitioned) {
@@ -93,42 +83,18 @@ export const AssetSchedule = ({ assetExpression, dagId, timetablePartitioned, ti
     }
   }
 
-  // Fully satisfied assets (used for the button count label).
   const pendingEvents = nextRunEvents.flatMap((event) => {
     if (timetablePartitioned) {
-      return event.last_update === null ? [] : [event];
+      return event.lastUpdate === null ? [] : [event];
     }
 
     const queuedAt = queuedAssetEvents.get(event.id);
 
-    return queuedAt === undefined ? [] : [{ ...event, last_update: event.last_update ?? queuedAt }];
+    return queuedAt === undefined ? [] : [{ ...event, lastUpdate: event.lastUpdate ?? queuedAt }];
   });
-
-  // For partitioned Dags, also include partially-received assets in the popover visualization.
-  const popoverEvents = timetablePartitioned
-    ? nextRunEvents.filter((event) => (event.received_count ?? (event.last_update === null ? 0 : 1)) > 0)
-    : pendingEvents;
-
-  // For partitioned Dags (which may use rollup mappers), compute event-level totals so the
-  // button label reflects received/required partition-key events, not just asset counts.
-  // For non-partitioned Dags, fall back to asset counts (existing behaviour).
-  const scheduledCount = timetablePartitioned
-    ? nextRunEvents.reduce(
-        (sum, event) => sum + Math.min(event.received_count ?? 0, event.required_count ?? 1),
-        0,
-      )
-    : pendingEvents.length;
-  // `events` only carries the assets the caller may read, so the total and the
-  // layout branches below come from `scheduling_asset_count` instead — the schedule
-  // a Dag shows should not change with who is looking at it.
-  const schedulingAssetCount = nextRun?.scheduling_asset_count ?? 0;
-  const scheduledTotal = timetablePartitioned
-    ? nextRunEvents.reduce((sum, event) => sum + (event.required_count ?? 1), 0)
-    : schedulingAssetCount;
-
   const isLoading = isNextRunLoading || (!timetablePartitioned && isQueuedEventsLoading);
 
-  if (!schedulingAssetCount) {
+  if (!nextRunEvents.length) {
     return (
       <HStack>
         <FiDatabase style={{ display: "inline", flexShrink: 0 }} />
@@ -138,8 +104,7 @@ export const AssetSchedule = ({ assetExpression, dagId, timetablePartitioned, ti
   }
 
   if (timetablePartitioned) {
-    const pendingCount = nextRun?.pending_partition_count ?? 0;
-    const hasInactiveAsset = nextRunEvents.some((event) => event.asset_inactive === true);
+    const pendingCount = (nextRun?.pending_partition_count as number | undefined) ?? 0;
 
     if (pendingCount === 0) {
       return (
@@ -151,102 +116,23 @@ export const AssetSchedule = ({ assetExpression, dagId, timetablePartitioned, ti
     }
 
     if (pendingCount > 1) {
-      return (
-        <PartitionSchedule
-          dagId={dagId}
-          hasInactiveAsset={hasInactiveAsset}
-          isLoading={isLoading}
-          pendingCount={pendingCount}
-        />
-      );
+      return <PartitionSchedule dagId={dagId} isLoading={isLoading} pendingCount={pendingCount} />;
     }
 
-    // pendingCount === 1: render single-asset view with inactive warning.
-    const [partitionedAsset] = nextRunEvents;
-
-    if (schedulingAssetCount === 1 && partitionedAsset !== undefined) {
-      const requiredCount = partitionedAsset.required_count ?? 1;
-      const receivedCount = partitionedAsset.received_count ?? 0;
-      const requiredKeys = partitionedAsset.required_keys ?? [];
-
-      if (partitionedAsset.is_rollup && requiredKeys.length > 0) {
-        return (
-          <Tooltip content={translate("common:assetInactive.tooltip")} disabled={!hasInactiveAsset}>
-            <HStack>
-              {hasInactiveAsset ? (
-                <FiAlertTriangle
-                  color="var(--chakra-colors-warning-fg)"
-                  style={{ display: "inline", flexShrink: 0 }}
-                />
-              ) : (
-                <FiDatabase style={{ display: "inline", flexShrink: 0 }} />
-              )}
-              <RouterLink display="block" fontSize="sm" to={`/assets/${partitionedAsset.id}`}>
-                <TruncatedText minWidth={0} text={partitionedAsset.name ?? partitionedAsset.uri} />
-              </RouterLink>
-              <RollupKeyChecklistPopover
-                isLoading={isLoading}
-                receivedCount={receivedCount}
-                receivedKeys={partitionedAsset.received_keys ?? []}
-                requiredCount={requiredCount}
-                requiredKeys={requiredKeys}
-              />
-            </HStack>
-          </Tooltip>
-        );
-      }
-
-      return (
-        <Tooltip content={translate("common:assetInactive.tooltip")} disabled={!hasInactiveAsset}>
-          <HStack>
-            {hasInactiveAsset ? (
-              <FiAlertTriangle
-                color="var(--chakra-colors-warning-fg)"
-                style={{ display: "inline", flexShrink: 0 }}
-              />
-            ) : (
-              <FiDatabase style={{ display: "inline", flexShrink: 0 }} />
-            )}
-            <RouterLink display="block" fontSize="sm" to={`/assets/${partitionedAsset.id}`}>
-              <TruncatedText minWidth={0} text={partitionedAsset.name ?? partitionedAsset.uri} />
-            </RouterLink>
-          </HStack>
-        </Tooltip>
-      );
-    }
+    // pendingCount === 1: fall through to the standard asset popover below
   }
 
   const [asset] = nextRunEvents;
 
-  if (schedulingAssetCount === 1 && asset !== undefined) {
-    const requiredCount = asset.required_count ?? 1;
-    const receivedCount = asset.received_count ?? 0;
-    const requiredKeys = asset.required_keys ?? [];
-
-    if (asset.is_rollup && requiredKeys.length > 0) {
-      return (
-        <HStack>
-          <FiDatabase style={{ display: "inline", flexShrink: 0 }} />
-          <RouterLink display="block" fontSize="sm" to={`/assets/${asset.id}`}>
-            <TruncatedText minWidth={0} text={asset.name ?? asset.uri} />
-          </RouterLink>
-          <RollupKeyChecklistPopover
-            isLoading={isLoading}
-            receivedCount={receivedCount}
-            receivedKeys={asset.received_keys ?? []}
-            requiredCount={requiredCount}
-            requiredKeys={requiredKeys}
-          />
-        </HStack>
-      );
-    }
-
+  if (nextRunEvents.length === 1 && asset !== undefined) {
     return (
       <HStack>
         <FiDatabase style={{ display: "inline", flexShrink: 0 }} />
-        <RouterLink display="block" fontSize="sm" to={`/assets/${asset.id}`}>
-          <TruncatedText minWidth={0} text={asset.name ?? asset.uri} />
-        </RouterLink>
+        <Link asChild color="fg.info" display="block" fontSize="sm">
+          <RouterLink to={`/assets/${asset.id}`}>
+            <TruncatedText minWidth={0} text={asset.name ?? asset.uri} />
+          </RouterLink>
+        </Link>
       </HStack>
     );
   }
@@ -255,17 +141,17 @@ export const AssetSchedule = ({ assetExpression, dagId, timetablePartitioned, ti
     // eslint-disable-next-line jsx-a11y/no-autofocus
     <Popover.Root autoFocus={false} lazyMount positioning={{ placement: "bottom-end" }} unmountOnExit>
       <Popover.Trigger asChild>
-        <Button loading={isLoading} paddingInline={0} variant="ghost">
+        <Button loading={isLoading} paddingInline={0} size="sm" variant="ghost">
           <FiDatabase style={{ display: "inline" }} />
-          {translate("assetSchedule", { count: scheduledCount, total: scheduledTotal })}
+          {translate("assetSchedule", { count: pendingEvents.length, total: nextRunEvents.length })}
         </Button>
       </Popover.Trigger>
       <Popover.Content css={{ "--popover-bg": "colors.bg.emphasized" }} width="fit-content">
         <Popover.Arrow />
         <Popover.Body>
           <AssetExpression
-            events={popoverEvents}
-            expression={nextRun?.asset_expression ?? assetExpression ?? undefined}
+            events={pendingEvents}
+            expression={(nextRun?.asset_expression ?? assetExpression) as ExpressionType}
           />
         </Popover.Body>
       </Popover.Content>

@@ -26,55 +26,36 @@ import attrs
 import pendulum
 
 from airflow._shared.module_loading import qualname
-from airflow._shared.serialization import CLASSNAME, DATA, VERSION
-from airflow.models.deadline import DAGRUN_CREATED_TIMING, EVALUATION_TIMING_FIELD
 from airflow.partition_mappers.base import PartitionMapper as CorePartitionMapper
-from airflow.partition_mappers.wait_policy import WaitPolicy as CoreWaitPolicy
-from airflow.partition_mappers.window import Window as CoreWindow
 from airflow.sdk import (
     AllowedKeyMapper,
     Asset,
     AssetAlias,
     AssetAll,
-    AssetAndTimeSchedule,
     AssetAny,
     AssetOrTimeSchedule,
     ChainMapper,
     CronDataIntervalTimetable,
     CronTriggerTimetable,
-    DayWindow,
     DeltaDataIntervalTimetable,
     DeltaTriggerTimetable,
     EventsTimetable,
-    FanOutMapper,
-    FixedKeyMapper,
-    HourWindow,
     IdentityMapper,
-    MinimumCount,
-    MonthWindow,
     MultipleCronTriggerTimetable,
     PartitionMapper,
     ProductMapper,
-    QuarterWindow,
-    RollupMapper,
-    SegmentWindow,
     StartOfDayMapper,
-    StartOfHourMapper,
     StartOfMonthMapper,
     StartOfQuarterMapper,
     StartOfWeekMapper,
     StartOfYearMapper,
-    WaitForAll,
-    WeekWindow,
-    Window,
-    YearWindow,
 )
 from airflow.sdk.bases.timetable import BaseTimetable
 from airflow.sdk.definitions.asset import AssetRef
+from airflow.sdk.definitions.partition_mappers.temporal import StartOfHourMapper
 from airflow.sdk.definitions.timetables.assets import (
     AssetTriggeredTimetable,
     PartitionedAssetTimetable,
-    PartitionedAtRuntime,
 )
 from airflow.sdk.definitions.timetables.simple import ContinuousTimetable, NullTimetable, OnceTimetable
 from airflow.sdk.definitions.timetables.trigger import CronPartitionTimetable
@@ -90,14 +71,10 @@ from airflow.serialization.definitions.assets import (
 from airflow.serialization.definitions.deadline import SerializedDeadlineAlert
 from airflow.serialization.enums import DagAttributeTypes as DAT, Encoding
 from airflow.serialization.helpers import (
-    WaitPolicyNotSupported,
     find_registered_custom_partition_mapper,
     find_registered_custom_timetable,
-    find_registered_custom_window,
     is_core_partition_mapper_import_path,
     is_core_timetable_import_path,
-    is_core_wait_policy_import_path,
-    is_core_window_import_path,
 )
 from airflow.timetables.base import Timetable as CoreTimetable
 from airflow.utils.docs import get_docs_url
@@ -108,7 +85,6 @@ if TYPE_CHECKING:
     from airflow.sdk.definitions._internal.expandinput import ExpandInput
     from airflow.sdk.definitions.asset import BaseAsset
     from airflow.sdk.definitions.deadline import DeadlineAlert
-    from airflow.sdk.definitions.partition_mappers.wait_policy import WaitPolicy
     from airflow.triggers.base import BaseEventTrigger
 
     T = TypeVar("T")
@@ -186,7 +162,6 @@ def encode_trigger(trigger: BaseEventTrigger | dict):
     if isinstance(trigger, dict):
         classpath = trigger["classpath"]
         kwargs = trigger["kwargs"]
-        queue = trigger.get("queue")
         # unwrap any kwargs that are themselves serialized objects, to avoid double-serialization in the trigger's own serialize() method.
         unwrapped = {}
         for k, v in kwargs.items():
@@ -197,14 +172,10 @@ def encode_trigger(trigger: BaseEventTrigger | dict):
         kwargs = unwrapped
     else:
         classpath, kwargs = trigger.serialize()
-        queue = getattr(trigger, "queue", None)
-    encoded = {
+    return {
         "classpath": classpath,
         "kwargs": {k: _ensure_serialized(v) for k, v in kwargs.items()},
     }
-    if queue is not None:
-        encoded["queue"] = queue
-    return encoded
 
 
 def encode_asset_like(a: BaseAsset | SerializedAssetBase) -> dict[str, Any]:
@@ -219,21 +190,8 @@ def encode_asset_like(a: BaseAsset | SerializedAssetBase) -> dict[str, Any]:
             d = {"__type": DAT.ASSET, "name": a.name, "uri": a.uri, "group": a.group, "extra": a.extra}
             if a.watchers:
                 d["watchers"] = [{"name": w.name, "trigger": encode_trigger(w.trigger)} for w in a.watchers]
-            ac = a.access_control
-            if isinstance(ac, dict):
-                # SerializedAsset stores access_control as a plain dict.
-                if ac:
-                    d["access_control"] = ac
-            else:
-                # Asset stores access_control as an AssetAccessControl instance.
-                if ac.producer_teams or ac.consumer_teams is not None or not ac.allow_global:
-                    ac_dict: dict[str, Any] = {
-                        "producer_teams": ac.producer_teams,
-                        "allow_global": ac.allow_global,
-                    }
-                    if ac.consumer_teams is not None:
-                        ac_dict["consumer_teams"] = ac.consumer_teams
-                    d["access_control"] = ac_dict
+            if a.allow_producer_teams:
+                d["allow_producer_teams"] = a.allow_producer_teams
             return d
         case AssetAlias() | SerializedAssetAlias():
             return {"__type": DAT.ASSET_ALIAS, "name": a.name, "group": a.group}
@@ -257,74 +215,9 @@ def encode_deadline_alert(d: DeadlineAlert | SerializedDeadlineAlert) -> dict[st
     return {
         "name": d.name,
         "reference": encode_deadline_reference(d.reference),
-        "interval": serialize(d.interval),
-        "callback": (
-            _encode_decoded_deadline_callback(d.callback)
-            if isinstance(d, SerializedDeadlineAlert)
-            else serialize(d.callback)
-        ),
+        "interval": d.interval.total_seconds(),
+        "callback": serialize(d.callback),
     }
-
-
-def _encode_decoded_deadline_callback(callback: Any) -> dict[str, Any]:
-    """
-    Re-encode the callback of a decoded deadline alert.
-
-    A decoded alert keeps the callback ``kwargs`` encoded (see
-    ``airflow.serialization.decoders._decode_deadline_callback``), so they are written back
-    as they are rather than serialized a second time.
-    """
-    return {
-        CLASSNAME: qualname(callback),
-        VERSION: getattr(type(callback), "__version__", 0),
-        DATA: {
-            field: encode_stored_callback_kwargs(value) if field == "kwargs" else value
-            for field, value in callback.serialize().items()
-        },
-    }
-
-
-def encode_stored_callback_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """
-    Serialize the stored kwargs of a callback, keeping values that are already serde-encoded.
-
-    Deadline callback kwargs travel in their encoded form from the serialized Dag to the
-    component that runs the callback, and only that component decodes them. Kwargs stored by
-    earlier versions in decoded form are serialized here, so the result is fully encoded either
-    way. This is only for the kwargs of the callback definition; values provided at runtime,
-    such as the callback ``context``, are serialized by :func:`encode_queued_callback_kwargs`.
-
-    :meta private:
-    """
-    from airflow.sdk.serde import serialize
-
-    def _encode(value: Any) -> Any:
-        if isinstance(value, dict):
-            if CLASSNAME in value:
-                return value
-            return {str(k): _encode(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [_encode(v) for v in value]
-        return serialize(value)
-
-    return {str(k): _encode(v) for k, v in kwargs.items()}
-
-
-def encode_queued_callback_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """
-    Serialize the kwargs of a queued callback: its stored kwargs plus the runtime ``context``.
-
-    Only the stored kwargs keep their encoded form. The ``context`` is provided at runtime and
-    is serialized strictly with serde, as any other value.
-
-    :meta private:
-    """
-    from airflow.sdk.serde import serialize
-
-    encoded = encode_stored_callback_kwargs({k: v for k, v in kwargs.items() if k != "context"})
-    if "context" in kwargs:
-        encoded["context"] = serialize(kwargs["context"])
-    return encoded
 
 
 _BUILTIN_DEADLINE_MODULES = (
@@ -350,14 +243,9 @@ def encode_deadline_reference(ref) -> dict[str, Any]:
 
     serialized = ref.serialize_reference()
 
-    # Added here rather than in serialize_reference() because custom references are expected to
-    # override that method, and an override would drop the timing.
-    serialized[EVALUATION_TIMING_FIELD] = getattr(ref, "evaluation_timing", DAGRUN_CREATED_TIMING)
-
-    # Custom types (not built-in) need __class_path so the decoder can look them up.
+    # Custom types (not built-in) need __class_path so the decoder can import them.
     # Unlike built-in types which are looked up in SerializedReferenceModels,
-    # custom types are resolved at deserialization time from the classes registered
-    # via the `deadline_references` attribute on an AirflowPlugin.
+    # custom types are discovered via import_string(__class_path) at deserialization time.
     module = type(ref).__module__
     if module not in _BUILTIN_DEADLINE_MODULES:
         serialized["__class_path"] = qualname(ref)
@@ -395,7 +283,6 @@ class _Serializer:
     """Serialization logic."""
 
     BUILTIN_TIMETABLES: dict[type, str] = {
-        AssetAndTimeSchedule: "airflow.timetables.assets.AssetAndTimeSchedule",
         AssetOrTimeSchedule: "airflow.timetables.assets.AssetOrTimeSchedule",
         AssetTriggeredTimetable: "airflow.timetables.simple.AssetTriggeredTimetable",
         ContinuousTimetable: "airflow.timetables.simple.ContinuousTimetable",
@@ -408,7 +295,6 @@ class _Serializer:
         MultipleCronTriggerTimetable: "airflow.timetables.trigger.MultipleCronTriggerTimetable",
         NullTimetable: "airflow.timetables.simple.NullTimetable",
         OnceTimetable: "airflow.timetables.simple.OnceTimetable",
-        PartitionedAtRuntime: "airflow.timetables.simple.PartitionedAtRuntime",
         PartitionedAssetTimetable: "airflow.timetables.simple.PartitionedAssetTimetable",
     }
 
@@ -434,18 +320,12 @@ class _Serializer:
     @serialize_timetable.register(ContinuousTimetable)
     @serialize_timetable.register(NullTimetable)
     @serialize_timetable.register(OnceTimetable)
-    @serialize_timetable.register(PartitionedAtRuntime)
-    def _(
-        self, timetable: ContinuousTimetable | NullTimetable | OnceTimetable | PartitionedAtRuntime
-    ) -> dict[str, Any]:
+    def _(self, timetable: ContinuousTimetable | NullTimetable | OnceTimetable) -> dict[str, Any]:
         return {}
 
     @serialize_timetable.register
     def _(self, timetable: AssetTriggeredTimetable) -> dict[str, Any]:
-        return {
-            "asset_condition": encode_asset_like(timetable.asset_condition),
-            "batch_asset_events": timetable.batch_asset_events,
-        }
+        return {"asset_condition": encode_asset_like(timetable.asset_condition)}
 
     @serialize_timetable.register
     def _(self, timetable: EventsTimetable) -> dict[str, Any]:
@@ -502,18 +382,10 @@ class _Serializer:
         }
 
     @serialize_timetable.register
-    def _(self, timetable: AssetAndTimeSchedule) -> dict[str, Any]:
-        return {
-            "asset_condition": encode_asset_like(timetable.asset_condition),
-            "timetable": encode_timetable(timetable.timetable),
-        }
-
-    @serialize_timetable.register
     def _(self, timetable: AssetOrTimeSchedule) -> dict[str, Any]:
         return {
             "asset_condition": encode_asset_like(timetable.asset_condition),
             "timetable": encode_timetable(timetable.timetable),
-            "batch_asset_events": timetable.batch_asset_events,
         }
 
     @serialize_timetable.register
@@ -524,7 +396,6 @@ class _Serializer:
     def _(self, timetable: PartitionedAssetTimetable) -> dict[str, Any]:
         return {
             "asset_condition": encode_asset_like(timetable.asset_condition),
-            "batch_asset_events": timetable.batch_asset_events,
             "default_partition_mapper": encode_partition_mapper(timetable.default_partition_mapper),
             "partition_mapper_config": [
                 (encode_asset_like(asset), encode_partition_mapper(partition_mapper))
@@ -535,11 +406,8 @@ class _Serializer:
     BUILTIN_PARTITION_MAPPERS: dict[type, str] = {
         AllowedKeyMapper: "airflow.partition_mappers.allowed_key.AllowedKeyMapper",
         ChainMapper: "airflow.partition_mappers.chain.ChainMapper",
-        FanOutMapper: "airflow.partition_mappers.temporal.FanOutMapper",
-        FixedKeyMapper: "airflow.partition_mappers.fixed_key.FixedKeyMapper",
         IdentityMapper: "airflow.partition_mappers.identity.IdentityMapper",
         ProductMapper: "airflow.partition_mappers.product.ProductMapper",
-        RollupMapper: "airflow.partition_mappers.base.RollupMapper",
         StartOfDayMapper: "airflow.partition_mappers.temporal.StartOfDayMapper",
         StartOfHourMapper: "airflow.partition_mappers.temporal.StartOfHourMapper",
         StartOfMonthMapper: "airflow.partition_mappers.temporal.StartOfMonthMapper",
@@ -558,24 +426,11 @@ class _Serializer:
 
     @serialize_partition_mapper.register
     def _(self, partition_mapper: ChainMapper) -> dict[str, Any]:
-        data: dict[str, Any] = {"mappers": [encode_partition_mapper(m) for m in partition_mapper.mappers]}
-        if partition_mapper.max_downstream_keys is not None:
-            data["max_downstream_keys"] = partition_mapper.max_downstream_keys
-        return data
+        return {"mappers": [encode_partition_mapper(m) for m in partition_mapper.mappers]}
 
     @serialize_partition_mapper.register
     def _(self, partition_mapper: IdentityMapper) -> dict[str, Any]:
-        data: dict[str, Any] = {}
-        if partition_mapper.max_downstream_keys is not None:
-            data["max_downstream_keys"] = partition_mapper.max_downstream_keys
-        return data
-
-    @serialize_partition_mapper.register
-    def _(self, partition_mapper: FixedKeyMapper) -> dict[str, Any]:
-        data: dict[str, Any] = {"downstream_key": partition_mapper.downstream_key}
-        if partition_mapper.max_downstream_keys is not None:
-            data["max_downstream_keys"] = partition_mapper.max_downstream_keys
-        return data
+        return {}
 
     @serialize_partition_mapper.register(StartOfHourMapper)
     @serialize_partition_mapper.register(StartOfDayMapper)
@@ -592,107 +447,21 @@ class _Serializer:
         | StartOfQuarterMapper
         | StartOfYearMapper,
     ) -> dict[str, Any]:
-        data: dict[str, Any] = {
-            "timezone": encode_timezone(partition_mapper._timezone),
+        return {
             "input_format": partition_mapper.input_format,
             "output_format": partition_mapper.output_format,
         }
-        if partition_mapper.max_downstream_keys is not None:
-            data["max_downstream_keys"] = partition_mapper.max_downstream_keys
-        return data
 
     @serialize_partition_mapper.register
     def _(self, partition_mapper: ProductMapper) -> dict[str, Any]:
-        data: dict[str, Any] = {
+        return {
             "delimiter": partition_mapper.delimiter,
             "mappers": [encode_partition_mapper(m) for m in partition_mapper.mappers],
         }
-        if partition_mapper.max_downstream_keys is not None:
-            data["max_downstream_keys"] = partition_mapper.max_downstream_keys
-        return data
 
     @serialize_partition_mapper.register
     def _(self, partition_mapper: AllowedKeyMapper) -> dict[str, Any]:
-        data: dict[str, Any] = {"allowed_keys": partition_mapper.allowed_keys}
-        if partition_mapper.max_downstream_keys is not None:
-            data["max_downstream_keys"] = partition_mapper.max_downstream_keys
-        return data
-
-    @serialize_partition_mapper.register
-    def _(self, partition_mapper: RollupMapper) -> dict[str, Any]:
-        data: dict[str, Any] = {
-            "upstream_mapper": encode_partition_mapper(partition_mapper.upstream_mapper),
-            "window": encode_window(partition_mapper.window),
-            "wait_policy": encode_wait_policy(partition_mapper.wait_policy),
-        }
-        if partition_mapper.max_downstream_keys is not None:
-            data["max_downstream_keys"] = partition_mapper.max_downstream_keys
-        return data
-
-    @serialize_partition_mapper.register
-    def _(self, partition_mapper: FanOutMapper) -> dict[str, Any]:
-        data: dict[str, Any] = {
-            "upstream_mapper": encode_partition_mapper(partition_mapper.upstream_mapper),
-            "window": encode_window(partition_mapper.window),
-            "downstream_mapper": encode_partition_mapper(partition_mapper.downstream_mapper),
-        }
-        if partition_mapper.max_downstream_keys is not None:
-            data["max_downstream_keys"] = partition_mapper.max_downstream_keys
-        return data
-
-    BUILTIN_WINDOWS: dict[type, str] = {
-        HourWindow: "airflow.partition_mappers.window.HourWindow",
-        DayWindow: "airflow.partition_mappers.window.DayWindow",
-        WeekWindow: "airflow.partition_mappers.window.WeekWindow",
-        MonthWindow: "airflow.partition_mappers.window.MonthWindow",
-        QuarterWindow: "airflow.partition_mappers.window.QuarterWindow",
-        SegmentWindow: "airflow.partition_mappers.window.SegmentWindow",
-        YearWindow: "airflow.partition_mappers.window.YearWindow",
-    }
-
-    @functools.singledispatchmethod
-    def serialize_window(self, window: Window | CoreWindow) -> dict[str, Any]:
-        if not isinstance(window, CoreWindow):
-            raise NotImplementedError(f"can not serialize window {type(window).__name__}")
-        return window.serialize()
-
-    @serialize_window.register(HourWindow)
-    @serialize_window.register(DayWindow)
-    @serialize_window.register(WeekWindow)
-    @serialize_window.register(MonthWindow)
-    @serialize_window.register(QuarterWindow)
-    @serialize_window.register(YearWindow)
-    def _(
-        self,
-        window: HourWindow | DayWindow | WeekWindow | MonthWindow | QuarterWindow | YearWindow,
-    ) -> dict[str, Any]:
-        return window.serialize()
-
-    @serialize_window.register
-    def _(self, window: SegmentWindow) -> dict[str, Any]:
-        return {"segments": sorted(window._segments)}
-
-    # SDK classes are what user Dag files instantiate; after deserialization a
-    # re-encoded WaitPolicy may be the core class, in which case the
-    # qualname-prefix check in encode_wait_policy() accepts it.
-    BUILTIN_WAIT_POLICIES: dict[type, str] = {
-        WaitForAll: "airflow.partition_mappers.wait_policy.WaitForAll",
-        MinimumCount: "airflow.partition_mappers.wait_policy.MinimumCount",
-    }
-
-    @functools.singledispatchmethod
-    def serialize_wait_policy(self, policy: WaitPolicy | CoreWaitPolicy) -> dict[str, Any]:
-        if not isinstance(policy, CoreWaitPolicy):
-            raise NotImplementedError(f"can not serialize wait policy {type(policy).__name__!r}")
-        return policy.serialize()
-
-    @serialize_wait_policy.register(WaitForAll)
-    def _(self, policy: WaitForAll) -> dict[str, Any]:
-        return {}
-
-    @serialize_wait_policy.register(MinimumCount)
-    def _(self, policy: MinimumCount) -> dict[str, Any]:
-        return {"n": policy.n}
+        return {"allowed_keys": partition_mapper.allowed_keys}
 
 
 _serializer = _Serializer()
@@ -782,66 +551,4 @@ def encode_partition_mapper(var: PartitionMapper | CorePartitionMapper) -> dict[
     return {
         Encoding.TYPE: qn,
         Encoding.VAR: _serializer.serialize_partition_mapper(var),
-    }
-
-
-def encode_window(var: Window | CoreWindow) -> dict[str, Any]:
-    """
-    Encode a :class:`Window` instance.
-
-    Custom subclasses must be registered via the ``windows`` plugin attribute;
-    unregistered classes raise :class:`WindowNotSupported` so the scheduler
-    never deserializes an attacker-controlled import path.
-
-    The ``BUILTIN_WINDOWS`` fast path maps the SDK classes user code instantiates
-    (e.g. ``from airflow.sdk import WeekWindow``); after deserialization a
-    re-encoded Window may be the core class, in which case the qualname-prefix
-    check accepts it.
-
-    :meta private:
-    """
-    var_type = type(var)
-    importable_string = _serializer.BUILTIN_WINDOWS.get(var_type)
-    if importable_string is not None:
-        return {
-            Encoding.TYPE: importable_string,
-            Encoding.VAR: _serializer.serialize_window(var),
-        }
-
-    qn = qualname(var)
-    if is_core_window_import_path(qn) is False:
-        # This raises if not found.
-        find_registered_custom_window(qn)
-
-    return {
-        Encoding.TYPE: qn,
-        Encoding.VAR: _serializer.serialize_window(var),
-    }
-
-
-def encode_wait_policy(var: WaitPolicy | CoreWaitPolicy) -> dict[str, Any]:
-    """
-    Encode a :class:`WaitPolicy` instance.
-
-    Only built-in ``WaitPolicy`` subclasses are accepted. Custom subclasses
-    raise :class:`WaitPolicyNotSupported`. The ``BUILTIN_WAIT_POLICIES``
-    fast path maps the SDK classes user code instantiates; after
-    deserialization a re-encoded WaitPolicy may be the core class, in which
-    case the qualname-prefix check accepts it.
-
-    :meta private:
-    """
-    var_type = type(var)
-    importable_string = _serializer.BUILTIN_WAIT_POLICIES.get(var_type)
-    if importable_string is not None:
-        return {
-            Encoding.TYPE: importable_string,
-            Encoding.VAR: _serializer.serialize_wait_policy(var),
-        }
-    qn = qualname(var)
-    if not is_core_wait_policy_import_path(qn):
-        raise WaitPolicyNotSupported(qn)
-    return {
-        Encoding.TYPE: qn,
-        Encoding.VAR: _serializer.serialize_wait_policy(var),
     }

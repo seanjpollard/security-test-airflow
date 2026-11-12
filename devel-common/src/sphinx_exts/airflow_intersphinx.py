@@ -28,16 +28,6 @@ if TYPE_CHECKING:
 
 AIRFLOW_ROOT_PATH = Path(os.path.abspath(__file__)).parents[3]
 GENERATED_PATH = AIRFLOW_ROOT_PATH / "generated"
-INVENTORY_FILENAME = "objects.inv"
-
-
-def _inventory_for(package_name: str, versioned: bool) -> Path:
-    """Prefer the inventory built earlier in this run, fall back to the one fetched from the published docs."""
-    build_dir = GENERATED_PATH / "_build" / "docs" / package_name / ("stable" if versioned else "")
-    built_this_run = build_dir / INVENTORY_FILENAME
-    if built_this_run.exists():
-        return built_this_run
-    return GENERATED_PATH / "_inventory_cache" / package_name / INVENTORY_FILENAME
 
 
 def _create_init_py(app, config):
@@ -61,32 +51,39 @@ def _generate_provider_intersphinx_mapping() -> dict[str, tuple[str, tuple[str, 
             continue
 
         provider_base_url = f"/docs/{package_name}/{current_version}/"
-        inventory = _inventory_for(package_name, versioned=True)
+        doc_inventory = GENERATED_PATH / "_build" / "docs" / package_name / current_version / "objects.inv"
+        cache_inventory = GENERATED_PATH / "_inventory_cache" / package_name / "objects.inv"
 
         # Skip adding the mapping if the path does not exist
-        if not inventory.exists():
+        if not os.path.exists(doc_inventory) and not os.path.exists(cache_inventory):
             continue
 
         airflow_mapping[package_name] = (
             # base URI
             provider_base_url,
-            (inventory.as_posix(),),
+            (doc_inventory.as_posix() if doc_inventory.exists() else cache_inventory.as_posix(),),
         )
     for pkg_name in ["apache-airflow", "helm-chart", "task-sdk"]:
         if os.environ.get("AIRFLOW_PACKAGE_NAME") == pkg_name:
             continue
+        doc_inventory = GENERATED_PATH / "_build" / "docs" / pkg_name / current_version / "objects.inv"
+        cache_inventory = GENERATED_PATH / "_inventory_cache" / pkg_name / "objects.inv"
+
         airflow_mapping[pkg_name] = (
             # base URI
             f"/docs/{pkg_name}/stable/",
-            (_inventory_for(pkg_name, versioned=True).as_posix(),),
+            (doc_inventory.as_posix() if doc_inventory.exists() else cache_inventory.as_posix(),),
         )
     for pkg_name in ["apache-airflow-providers", "docker-stack"]:
         if os.environ.get("AIRFLOW_PACKAGE_NAME") == pkg_name:
             continue
+        doc_inventory = GENERATED_PATH / "_build" / "docs" / pkg_name / "objects.inv"
+        cache_inventory = GENERATED_PATH / "_inventory_cache" / pkg_name / "objects.inv"
+
         airflow_mapping[pkg_name] = (
             # base URI
             f"/docs/{pkg_name}/",
-            (_inventory_for(pkg_name, versioned=False).as_posix(),),
+            (doc_inventory.as_posix() if doc_inventory.exists() else cache_inventory.as_posix(),),
         )
     return airflow_mapping
 

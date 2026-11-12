@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import datetime
-import logging
 import subprocess
 import sys
 import warnings
@@ -31,21 +30,21 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import TYPE_CHECKING
 
 import pendulum
-import tenacity
 
 from airflow.providers.google.common.hooks.base_google import PROVIDE_PROJECT_ID
 
 if TYPE_CHECKING:
     from airflow.providers.common.compat.sdk import Context
 
-from google.api_core.exceptions import Conflict, GoogleAPIError
+from google.api_core.exceptions import Conflict
 from google.cloud.exceptions import GoogleCloudError
 
 from airflow.exceptions import AirflowProviderDeprecationWarning
-from airflow.providers.common.compat.sdk import AirflowException, timezone
+from airflow.providers.common.compat.sdk import AirflowException
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
 from airflow.providers.google.cloud.operators.cloud_base import GoogleCloudBaseOperator
 from airflow.providers.google.common.links.storage import FileDetailsLink, StorageLink
+from airflow.utils import timezone
 
 
 class GCSCreateBucketOperator(GoogleCloudBaseOperator):
@@ -230,21 +229,18 @@ class GCSListObjectsOperator(GoogleCloudBaseOperator):
         super().__init__(**kwargs)
         self.bucket = bucket
         self.prefix = prefix
-        self.delimiter = delimiter
-        self.gcp_conn_id = gcp_conn_id
-        self.impersonation_chain = impersonation_chain
-        self.match_glob = match_glob
-
-    def _warn_on_deprecated_template_fields(self) -> None:
-        if self.delimiter:
+        if delimiter:
             warnings.warn(
                 "Usage of 'delimiter' is deprecated, please use 'match_glob' instead. Planned removal date: October 5, 2026.",
                 AirflowProviderDeprecationWarning,
                 stacklevel=2,
             )
+        self.delimiter = delimiter
+        self.gcp_conn_id = gcp_conn_id
+        self.impersonation_chain = impersonation_chain
+        self.match_glob = match_glob
 
     def execute(self, context: Context) -> list:
-        self._warn_on_deprecated_template_fields()
         hook = GCSHook(
             gcp_conn_id=self.gcp_conn_id,
             impersonation_chain=self.impersonation_chain,
@@ -357,9 +353,6 @@ class GCSDeleteObjectsOperator(GoogleCloudBaseOperator):
         from airflow.providers.google.cloud.openlineage.utils import extract_ds_name_from_gcs_path
         from airflow.providers.openlineage.extractors import OperatorLineage
 
-        if not self.bucket_name:
-            return OperatorLineage()
-
         objects = []
         if self.objects is not None:
             objects = self.objects
@@ -383,7 +376,6 @@ class GCSDeleteObjectsOperator(GoogleCloudBaseOperator):
                 },
             )
             for object_name in objects
-            if object_name
         ]
 
         return OperatorLineage(inputs=input_datasets)
@@ -460,91 +452,6 @@ class GCSBucketCreateAclEntryOperator(GoogleCloudBaseOperator):
         hook.insert_bucket_acl(
             bucket_name=self.bucket, entity=self.entity, role=self.role, user_project=self.user_project
         )
-
-
-class GCSBucketAddIamBindingOperator(GoogleCloudBaseOperator):
-    """
-    Adds a member to an IAM role binding on the specified bucket.
-
-    .. seealso::
-        For more information on how to use this operator, take a look at the guide:
-        :ref:`howto/operator:GCSBucketAddIamBindingOperator`
-
-    :param bucket: Name of a bucket.
-    :param role: The IAM role to grant, for example ``roles/storage.objectViewer``.
-    :param member: The IAM member to grant the role to, for example
-        ``serviceAccount:example@example-project.iam.gserviceaccount.com``.
-    :param user_project: (Optional) The project to be billed for this request.
-        Required for Requester Pays buckets.
-    :param gcp_conn_id: (Optional) The connection ID used to connect to Google Cloud.
-    :param impersonation_chain: Optional service account to impersonate using short-term
-        credentials, or chained list of accounts required to get the access_token
-        of the last account in the list, which will be impersonated in the request.
-        If set as a string, the account must grant the originating account
-        the Service Account Token Creator IAM role.
-        If set as a sequence, the identities from the list must grant
-        Service Account Token Creator IAM role to the directly preceding identity, with first
-        account from the list granting this role to the originating account (templated).
-    """
-
-    # [START gcs_bucket_add_iam_binding_template_fields]
-    template_fields: Sequence[str] = (
-        "bucket",
-        "role",
-        "member",
-        "user_project",
-        "gcp_conn_id",
-        "impersonation_chain",
-    )
-    # [END gcs_bucket_add_iam_binding_template_fields]
-    operator_extra_links = (StorageLink(),)
-
-    def __init__(
-        self,
-        *,
-        bucket: str,
-        role: str,
-        member: str,
-        user_project: str | None = None,
-        gcp_conn_id: str = "google_cloud_default",
-        impersonation_chain: str | Sequence[str] | None = None,
-        **kwargs,
-    ) -> None:
-        super().__init__(**kwargs)
-        self.bucket = bucket
-        self.role = role
-        self.member = member
-        self.user_project = user_project
-        self.gcp_conn_id = gcp_conn_id
-        self.impersonation_chain = impersonation_chain
-
-    def execute(self, context: Context) -> None:
-        hook = GCSHook(
-            gcp_conn_id=self.gcp_conn_id,
-            impersonation_chain=self.impersonation_chain,
-        )
-        StorageLink.persist(
-            context=context,
-            uri=self.bucket,
-            project_id=hook.project_id,
-        )
-        try:
-            hook.add_bucket_iam_binding(
-                bucket_name=self.bucket,
-                role=self.role,
-                member=self.member,
-                user_project=self.user_project,
-            )
-        except GoogleAPIError as e:
-            self.log.exception(
-                "Failed to add member %s to IAM role %s on bucket %s. Google Cloud API error (%s): %s",
-                self.member,
-                self.role,
-                self.bucket,
-                type(e).__name__,
-                e,
-            )
-            raise
 
 
 class GCSObjectCreateAclEntryOperator(GoogleCloudBaseOperator):
@@ -694,8 +601,8 @@ class GCSFileTransformOperator(GoogleCloudBaseOperator):
         super().__init__(**kwargs)
         self.source_bucket = source_bucket
         self.source_object = source_object
-        self.destination_bucket = destination_bucket
-        self.destination_object = destination_object
+        self.destination_bucket = destination_bucket or self.source_bucket
+        self.destination_object = destination_object or self.source_object
 
         self.gcp_conn_id = gcp_conn_id
         self.transform_script = transform_script
@@ -703,8 +610,6 @@ class GCSFileTransformOperator(GoogleCloudBaseOperator):
         self.impersonation_chain = impersonation_chain
 
     def execute(self, context: Context) -> None:
-        self.destination_bucket = self.destination_bucket or self.source_bucket
-        self.destination_object = self.destination_object or self.source_object
         hook = GCSHook(gcp_conn_id=self.gcp_conn_id, impersonation_chain=self.impersonation_chain)
 
         with NamedTemporaryFile() as source_file, NamedTemporaryFile() as destination_file:
@@ -751,8 +656,8 @@ class GCSFileTransformOperator(GoogleCloudBaseOperator):
             name=self.source_object,
         )
         output_dataset = Dataset(
-            namespace=f"gs://{self.destination_bucket or self.source_bucket}",
-            name=self.destination_object or self.source_object,
+            namespace=f"gs://{self.destination_bucket}",
+            name=self.destination_object,
         )
 
         return OperatorLineage(inputs=[input_dataset], outputs=[output_dataset])
@@ -972,7 +877,6 @@ class GCSTimeSpanFileTransformOperator(GoogleCloudBaseOperator):
 
         with TemporaryDirectory() as temp_input_dir, TemporaryDirectory() as temp_output_dir:
             temp_input_dir_path = Path(temp_input_dir)
-            temp_input_dir_resolved = temp_input_dir_path.resolve()
             temp_output_dir_path = Path(temp_output_dir)
 
             num_downloads = len(blobs_to_transform)
@@ -987,31 +891,12 @@ class GCSTimeSpanFileTransformOperator(GoogleCloudBaseOperator):
             # Get storage client once (storage.Client is thread-safe for concurrent requests).
             client = source_hook.get_conn()
 
-            # A transient ``GoogleCloudError`` retries the whole download. ``reraise`` keeps the
-            # original error after the last attempt, for the ``download_continue_on_fail``
-            # handling below. The waits (2, 4, 8 s, ...) match ``GCSHook.download``.
-            @tenacity.retry(
-                stop=tenacity.stop_after_attempt(self.download_num_attempts),
-                wait=tenacity.wait_exponential(multiplier=2, max=60),
-                retry=tenacity.retry_if_exception_type(GoogleCloudError),
-                before_sleep=tenacity.before_sleep_log(self.log, logging.WARNING),
-                reraise=True,
-            )
             def _download(blob_name: str):
 
                 bucket = client.bucket(bucket_name=self.source_bucket)
                 blob = bucket.blob(blob_name=blob_name, chunk_size=self.chunk_size)
 
                 destination_file = temp_input_dir_path / blob_name
-                # Containment check: ``blob_name`` originates outside the worker, and GCS
-                # allows object names containing ``..``. Resolve the target and assert it
-                # stays under ``temp_input_dir_path`` so a hostile blob name cannot write
-                # outside the worker's temp directory (CWE-22).
-                if not destination_file.resolve().is_relative_to(temp_input_dir_resolved):
-                    raise ValueError(
-                        f"Refusing to download GCS blob {blob_name!r}: resolved path "
-                        f"{destination_file} escapes the temp directory {temp_input_dir_path}."
-                    )
                 destination_file.parent.mkdir(parents=True, exist_ok=True)
 
                 blob.download_to_filename(filename=str(destination_file))
@@ -1077,14 +962,6 @@ class GCSTimeSpanFileTransformOperator(GoogleCloudBaseOperator):
             # Get storage client once (storage.Client is thread-safe for concurrent requests).
             client = destination_hook.get_conn()
 
-            # Same retry policy as the downloads, for ``upload_num_attempts``.
-            @tenacity.retry(
-                stop=tenacity.stop_after_attempt(self.upload_num_attempts),
-                wait=tenacity.wait_exponential(multiplier=2, max=60),
-                retry=tenacity.retry_if_exception_type(GoogleCloudError),
-                before_sleep=tenacity.before_sleep_log(self.log, logging.WARNING),
-                reraise=True,
-            )
             def _upload(upload_file: Path):
 
                 bucket = client.bucket(bucket_name=self.destination_bucket)
@@ -1097,7 +974,9 @@ class GCSTimeSpanFileTransformOperator(GoogleCloudBaseOperator):
 
                 blob = bucket.blob(blob_name=upload_file_name, chunk_size=self.chunk_size)
 
-                blob.upload_from_filename(filename=str(upload_file))
+                blob.upload_from_filename(
+                    filename=str(upload_file),
+                )
 
                 return upload_file_name
 

@@ -16,141 +16,185 @@
     under the License.
 
 
+
 Quick Start
 -----------
 
-Install Airflow on your machine and start it with ``airflow standalone``, which runs the scheduler, Dag
-processor, triggerer and API server together on a SQLite database. Use it to try Airflow and to develop
-Dags locally, not in production. For other ways to install and run Airflow, see :doc:`/installation/index`.
+This quick start guide will help you bootstrap an Airflow standalone instance on your local machine.
 
-Before you start
-''''''''''''''''
+.. note::
 
-You need a Python version that this Airflow release supports; see :doc:`/installation/prerequisites`.
+   Successful installation requires a Python 3 environment. Starting with Airflow 3.2.0, Airflow supports Python 3.10, 3.11, 3.12, 3.13, 3.14.
 
-On Windows, set up WSL2 first: run ``wsl --install`` in PowerShell as administrator and restart, as described
-in `Install WSL <https://learn.microsoft.com/en-us/windows/wsl/install>`__. Then run every command below in
-the Ubuntu terminal that WSL2 installs.
+   Officially supported installation methods are ``pip`` or ``uv``.
 
-Install Airflow
-'''''''''''''''
+   Run ``pip install apache-airflow[EXTRAS]==AIRFLOW_VERSION --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-AIRFLOW_VERSION/constraints-PYTHON_VERSION.txt"``, for example ``pip install "apache-airflow[celery]==3.0.0" --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.0.0/constraints-3.10.txt"`` to install Airflow in a reproducible way. You can also use - much faster - ``uv`` - by adding ``uv`` before the command.
 
-Create a virtual environment and install Airflow into it with the
-:ref:`constraints file <installation:constraints>`, which pins every dependency to the version this release
-was tested with. A later release of a dependency then does not change what you install.
 
-.. tab-set::
 
-    .. tab-item:: uv
-        :sync: uv
+   While there have been successes with using other tools like `poetry <https://python-poetry.org/>`_ or
+   `pip-tools <https://pypi.org/project/pip-tools/>`_, they do not share the same workflow as
+   ``pip`` or ``uv`` - especially when it comes to constraint vs. requirements management.
+   Installing via ``Poetry`` or ``pip-tools`` is not currently supported.
 
-        If you do not have uv yet, install it from the
-        `uv installation guide <https://docs.astral.sh/uv/getting-started/installation/>`__. Then create the
-        virtual environment and install Airflow:
+   If you wish to install Airflow using those tools you should use the constraint files and convert
+   them to appropriate format and workflow that your tool requires.
 
-        .. code-block:: bash
-            :substitutions:
+   This guide will help you quickly set up Apache Airflow using ``uv``, a fast and modern tool for managing Python environments and dependencies. ``uv`` makes the installation process easy and provides a
+   smooth setup experience.
 
-            uv venv
-            source .venv/bin/activate
+   If you are on Windows, you have to use WSL2 (Linux environment for Windows).
 
-            AIRFLOW_VERSION=|version|
-            PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-            CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
-            uv pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}"
+   .. code-block:: bash
 
-        ``uv venv`` uses a Python it finds on your machine. To choose a supported version instead, pass it
-        with ``--python``, and uv downloads it if it is missing.
+      wsl --install
 
-    .. tab-item:: pip
-        :sync: pip
+1. **Set Airflow Home (optional)**:
 
-        On Debian and Ubuntu, including WSL2, install the ``venv`` module first with
-        ``sudo apt update && sudo apt install python3-venv``. Without it, ``python3 -m venv`` fails with
-        ``The virtual environment was not created successfully because ensurepip is not available``.
+   Airflow requires a home directory, and uses ``~/airflow`` by default, but you can set a different location if you prefer. The ``AIRFLOW_HOME`` environment variable is used to inform Airflow of the desired location. This step of setting the environment variable should be done before installing Airflow so that the installation process knows where to store the necessary files.
 
-        Then create the virtual environment and install Airflow:
+   .. code-block:: bash
 
-        .. code-block:: bash
-            :substitutions:
+      export AIRFLOW_HOME=~/airflow
 
-            python3 -m venv .venv
-            source .venv/bin/activate
-            pip install --upgrade pip
+2. Install Airflow in a virtual environment using ``uv`` since it is a faster alternative that creates the ``venv`` automatically for you. It is an efficient alternative to using ``pip`` and ``venv``.
 
-            AIRFLOW_VERSION=|version|
-            PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-            CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
-            pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}"
+    .. rst-class:: centered
 
-If the virtual environment's Python is a version this release does not support, no constraints file exists for
-it and the install stops at the constraints URL. pip reports ``ERROR: 404 Client Error: Not Found for url:``
-and uv reports ``error: Error while accessing remote requirements file:``, each followed by the URL. Recreate
-the virtual environment with a supported Python.
+        Install uv: `uv Installation Guide <https://docs.astral.sh/uv/getting-started/installation/>`_
 
-Start Airflow
-'''''''''''''
 
-With the virtual environment activated, start every component with one command:
+    For creating virtual environment with ``uv``, refer to the documentation here:
+    `Creating and Maintaining Local virtual environment with uv <https://github.com/apache/airflow/blob/main/contributing-docs/07_local_virtualenv.rst#creating-and-maintaining-local-virtualenv-with-uv-recommended>`_
+
+For installation using ``pip`` and ``venv``, carry out the following steps.
+On Debian/Ubuntu systems, Python may enforce
+externally managed environments (PEP 668), so use a virtual environment
+before running ``pip install`` commands:
 
 .. code-block:: bash
 
-    airflow standalone
+   # For Windows after WSL2 install, restart computer, then in WSL Ubuntu terminal
+   sudo apt update
+   sudo apt install python3-pip python3-venv
 
-On the first run, Airflow creates ``~/airflow`` with its configuration file ``airflow.cfg`` and a SQLite
-database, and generates a password for the ``admin`` user. The password appears near the start of the
-output. Once the API server, scheduler, Dag processor and triggerer are all running, Airflow prints a ready
-banner. The components' logs fill the lines in between:
+   # Go to Linux home directory (not Windows mount)
+   cd ~
 
-.. code-block:: text
+   # Create airflow directory
+   mkdir -p ~/airflow
+   cd ~/airflow
 
-    standalone | Starting Airflow Standalone
-    [warning  ] SimpleAuthManager is active but the deployment shape looks like production (non-sqlite backend, non-local API host, or a distributed executor). ...
-    Simple auth manager | Password for user 'admin': <generated-password>
-    ...
-    standalone | Airflow is ready
-    standalone | Airflow Standalone is for development purposes only. Do not use this in production!
+   # Create virtual environment
+   python3 -m venv airflow_venv
 
-The ``SimpleAuthManager is active but the deployment shape looks like production`` warning is expected for a
-local standalone run: the API server listens on ``0.0.0.0`` by default, which the warning treats as a
-non-local host.
+   # Activate
+   source airflow_venv/bin/activate
 
-Press ``Ctrl+C`` to stop every component.
+   # Upgrade pip
+   pip install --upgrade pip
 
-Airflow keeps its files in ``~/airflow`` unless you set ``AIRFLOW_HOME``. If you set it, export the same value
-in every terminal before you run ``airflow``: a terminal without it uses ``~/airflow``, with a separate
-database and password. To start Airflow again later, open a terminal in the directory where you created the
-virtual environment, run ``source .venv/bin/activate``, then ``airflow standalone``.
+   # Install Airflow with correct Python version constraints
+   pip install apache-airflow[celery]==3.1.0 --constraint https://raw.githubusercontent.com/apache/airflow/constraints-3.1.0/constraints-3.12.txt
 
-Log in and run a Dag
-''''''''''''''''''''
+   # Verify installation
+   airflow version
 
-Open ``http://localhost:8080`` and log in as ``admin`` with the password from the
-``Password for user 'admin'`` line. Airflow prints that line only on the first run; later runs print a line
-saying the password was previously generated, with the path of the file that holds it. To read the file:
+3. Install Airflow using the constraints file, which is determined based on the URL we pass:
+
+   .. code-block:: bash
+      :substitutions:
+
+
+      AIRFLOW_VERSION=3.1.1
+
+      # Extract the version of Python you have installed. If you're currently using a Python version that is not supported by Airflow, you may want to set this manually.
+      # See above for supported versions.
+      PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+
+      CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+      # For example this would install 3.0.0 with python 3.10: https://raw.githubusercontent.com/apache/airflow/constraints-|version|/constraints-3.10.txt
+
+      uv pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}"
+
+4. Run Airflow Standalone:
+
+   The ``airflow standalone`` command initializes the database, creates a user, and starts all components.
+
+   .. code-block:: bash
+
+      airflow standalone
+
+   .. note::
+
+      In Airflow 3.x, the admin password may not always be displayed in the terminal output when running ``airflow standalone``.
+
+      The password is automatically generated and stored in:
+
+      ``$AIRFLOW_HOME/simple_auth_manager_passwords.json.generated``
+
+      To retrieve it, run:
+
+      .. code-block:: bash
+
+         cat ~/airflow/simple_auth_manager_passwords.json.generated
+
+      Use this password to log in to the web interface instead of default credentials.
+
+5. Access the Airflow UI:
+
+   Visit ``localhost:8080`` in your browser and log in with the admin account details shown in the terminal. Enable the ``example_bash_operator`` DAG on the home page.
+
+Upon running these commands, Airflow will create the ``$AIRFLOW_HOME`` folder
+and create the "airflow.cfg" file with defaults that will get you going fast.
+You can override defaults using environment variables, see :doc:`/configurations-ref`.
+You can inspect the file either in ``$AIRFLOW_HOME/airflow.cfg``, or through the UI in
+the ``Admin->Configuration`` menu. The PID file for the webserver will be stored
+in ``$AIRFLOW_HOME/airflow-api-server.pid`` or in ``/run/airflow/airflow-webserver.pid``
+if started by systemd.
+
+As you grow and deploy Airflow to production, you will also want to move away
+from the ``standalone`` command we use here to running the components
+separately. You can read more in :doc:`/administration-and-deployment/production-deployment`.
+
+Here are a few commands that will trigger a few task instances. You should
+be able to see the status of the jobs change in the ``example_bash_operator`` Dag as you
+run the commands below.
 
 .. code-block:: bash
 
-    cat "${AIRFLOW_HOME:-$HOME/airflow}/simple_auth_manager_passwords.json.generated"
+    # run your first task instance
+    airflow tasks test example_bash_operator runme_0 2015-01-01
+    # run a backfill over 2 days
+    airflow backfill create --dag-id example_bash_operator \
+        --from-date 2015-01-01 \
+        --to-date 2015-01-02
 
-It maps each user to their password:
+If you want to run the individual parts of Airflow manually rather than using
+the all-in-one ``standalone`` command, you can instead run:
 
-.. code-block:: text
+.. code-block:: bash
 
-    {"admin": "<generated-password>"}
+    airflow db migrate
 
-Airflow loads a set of example Dags, all paused. Open **Dags**, find ``example_bash_operator``, and switch on
-its toggle to unpause it. The scheduler starts a run within a few seconds; click the Dag name to follow its
-tasks.
+    airflow users create \
+        --username admin \
+        --firstname Peter \
+        --lastname Parker \
+        --role Admin \
+        --email spiderman@superhero.org
 
-What's next
-'''''''''''
+    airflow api-server --port 8080
 
-* :doc:`/tutorial/index` to write your first Dag
-* :doc:`/installation/installing-from-pypi` for extras, providers, and how constraints files work
-* :doc:`/configurations-ref` for the settings in ``airflow.cfg``
-* :ref:`starting-components-separately` to run the API server, scheduler, Dag processor,
-  and triggerer as separate processes
-* :doc:`/howto/docker-compose/index` or :doc:`helm-chart:index` for container and Kubernetes setups
-* :doc:`/administration-and-deployment/production-deployment` when you move beyond standalone
-* :doc:`/howto/index` for common configuration tasks
+    airflow scheduler
+
+    airflow dag-processor
+
+    airflow triggerer
+
+.. note::
+    ``airflow users`` command is only available when :doc:`apache-airflow-providers-fab:auth-manager/index` is enabled.
+
+What's Next?
+''''''''''''
+From this point, you can head to the :doc:`/tutorial/index` section for further examples or the :doc:`/howto/index` section if you're ready to get your hands dirty.

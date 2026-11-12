@@ -39,7 +39,6 @@ from airflow.sdk.definitions._internal.expandinput import (
     ListOfDictsExpandInput,
     MappedArgument,
 )
-from airflow.sdk.definitions._internal.loop import create_loop
 from airflow.sdk.definitions._internal.node import DAGNode
 from airflow.sdk.definitions.mappedoperator import ensure_xcomarg_return_value, prevent_duplicates
 from airflow.sdk.definitions.taskgroup import MappedTaskGroup, TaskGroup
@@ -51,7 +50,6 @@ if TYPE_CHECKING:
         OperatorExpandKwargsArgument,
     )
     from airflow.sdk.definitions.dag import DAG
-    from airflow.sdk.definitions.loop import LoopDecision
 
 FParams = ParamSpec("FParams")
 FReturn = TypeVar("FReturn", None, DAGNode)
@@ -94,17 +92,10 @@ class _TaskGroupFactory(ExpandableFactory, Generic[FParams, FReturn]):
         """
         return self._create_task_group(TaskGroup, *args, **kwargs)
 
-    def apply_function_doc(self, task_group: TaskGroup) -> None:
-        if doc := self.function.__doc__:
-            if not task_group.tooltip:
-                task_group.tooltip = doc
-            if not task_group.doc_md:
-                # Function docstrings are documentation text, not file paths for the doc_md converter.
-                object.__setattr__(task_group, "doc_md", doc)
-
     def _create_task_group(self, tg_factory: Callable[..., TaskGroup], *args: Any, **kwargs: Any) -> DAGNode:
         with tg_factory(add_suffix_on_collision=True, **self.tg_kwargs) as task_group:
-            self.apply_function_doc(task_group)
+            if self.function.__doc__ and not task_group.tooltip:
+                task_group.tooltip = self.function.__doc__
 
             # Invoke function to run Tasks inside the TaskGroup
             retval = self.function(*args, **kwargs)
@@ -128,36 +119,14 @@ class _TaskGroupFactory(ExpandableFactory, Generic[FParams, FReturn]):
 
     def override(self, **kwargs: Any) -> _TaskGroupFactory[FParams, FReturn]:
         # TODO: FIXME when mypy gets compatible with new attrs
-        evolved = attr.evolve(self, tg_kwargs={**self.tg_kwargs, **kwargs})  # type: ignore[arg-type]
-        # The evolved copy owns the "never mapped" warning, so the intermediate factory must not repeat it.
-        self._task_group_created = True
-        return evolved
-
-    def loop(
-        self, *, max_iterations: int, until: Callable[..., bool | LoopDecision] | None = None
-    ) -> TaskGroup:
-        """
-        Repeat this group's tasks, creating each iteration when the previous gate continues.
-
-        The body must have one terminal task definition, which may be mapped.
-        Use ``partial()`` to supply body arguments and ``override()`` to configure the group.
-
-        :param max_iterations: Positive upper bound on the number of iterations.
-        :param until: Synchronous callable receiving task context keyword arguments.
-            True stops the loop. False at the iteration limit fails the gate.
-            May instead return a :class:`~airflow.sdk.LoopDecision` to attach a reason.
-            Omit for a fixed-count loop that succeeds at its limit.
-        """
-        return create_loop(self, max_iterations=max_iterations, until=until)
+        return attr.evolve(self, tg_kwargs={**self.tg_kwargs, **kwargs})  # type: ignore[arg-type]
 
     def partial(self, **kwargs: Any) -> _TaskGroupFactory[FParams, FReturn]:
         self._validate_arg_names("partial", kwargs)
         prevent_duplicates(self.partial_kwargs, kwargs, fail_reason="duplicate partial")
         kwargs.update(self.partial_kwargs)
         # TODO: FIXME when mypy gets compatible with new attrs
-        evolved = attr.evolve(self, partial_kwargs=kwargs)  # type: ignore[arg-type]
-        self._task_group_created = True
-        return evolved
+        return attr.evolve(self, partial_kwargs=kwargs)  # type: ignore[arg-type]
 
     def expand(self, **kwargs: OperatorExpandArgument) -> DAGNode:
         if not kwargs:
@@ -225,7 +194,6 @@ def task_group(
     dag: DAG | None = None,
     default_args: dict[str, Any] | None = None,
     tooltip: str = "",
-    doc_md: str | None = None,
     ui_color: str = "CornflowerBlue",
     ui_fgcolor: str = "#000",
     add_suffix_on_collision: bool = False,

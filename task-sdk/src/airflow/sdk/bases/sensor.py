@@ -116,7 +116,7 @@ class BaseSensorOperator(BaseOperator):
         self,
         *,
         poke_interval: timedelta | float = 60,
-        timeout: timedelta | float | None = None,
+        timeout: timedelta | float = conf.getfloat("sensors", "default_timeout"),
         soft_fail: bool = False,
         mode: str = "poke",
         exponential_backoff: bool = False,
@@ -128,8 +128,6 @@ class BaseSensorOperator(BaseOperator):
         super().__init__(**kwargs)
         self.poke_interval = self._coerce_poke_interval(poke_interval).total_seconds()
         self.soft_fail = soft_fail
-        if timeout is None:
-            timeout = conf.getfloat("sensors", "default_timeout")
         self.timeout: int | float = self._coerce_timeout(timeout).total_seconds()
         self.mode = mode
         self.exponential_backoff = exponential_backoff

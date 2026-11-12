@@ -49,7 +49,7 @@ class OpenSearchQueryOperator(BaseOperator):
     :param log_query: Whether to log the query used. Defaults to True and logs query used.
     """
 
-    template_fields: Sequence[str] = ["query", "opensearch_conn_id"]
+    template_fields: Sequence[str] = ["query"]
 
     def __init__(
         self,
@@ -118,8 +118,6 @@ class OpenSearchCreateIndexOperator(BaseOperator):
     :param opensearch_conn_id: opensearch connection to use
     """
 
-    template_fields: Sequence[str] = ("opensearch_conn_id",)
-
     def __init__(
         self,
         *,
@@ -160,8 +158,6 @@ class OpenSearchAddDocumentOperator(BaseOperator):
     :param doc_class: A Document subclassed object using opensearch-dsl
     :param opensearch_conn_id: opensearch connection to use
     """
-
-    template_fields: Sequence[str] = ("opensearch_conn_id",)
 
     def __init__(
         self,

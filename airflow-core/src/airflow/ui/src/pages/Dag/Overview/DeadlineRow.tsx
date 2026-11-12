@@ -16,18 +16,19 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Badge, HStack, Text, VStack } from "@chakra-ui/react";
+import { Badge, HStack, Link, Text, VStack } from "@chakra-ui/react";
+import dayjs from "dayjs";
+import duration from "dayjs/plugin/duration";
+import relativeTime from "dayjs/plugin/relativeTime";
 import { useTranslation } from "react-i18next";
 import { FiAlertTriangle, FiClock } from "react-icons/fi";
+import { Link as RouterLink } from "react-router-dom";
 
 import type { DeadlineAlertResponse, DeadlineResponse } from "openapi/requests/types.gen";
-
-import { RouterLink } from "src/system-components";
-
 import Time from "src/components/Time";
 
-import { useDurationFormat } from "src/utils";
-import { translateCompletionRule } from "src/utils/deadlines";
+dayjs.extend(duration);
+dayjs.extend(relativeTime);
 
 type DeadlineRowProps = {
   readonly alert?: DeadlineAlertResponse;
@@ -36,9 +37,13 @@ type DeadlineRowProps = {
 
 export const DeadlineRow = ({ alert, deadline }: DeadlineRowProps) => {
   const { t: translate } = useTranslation("dag");
-  const { locale } = useDurationFormat();
 
-  const completionRule = translateCompletionRule(translate, alert, locale);
+  const reference = alert
+    ? translate(`deadlineAlerts.referenceType.${alert.reference_type}`, {
+        defaultValue: alert.reference_type,
+      })
+    : undefined;
+  const interval = alert ? dayjs.duration(alert.interval, "seconds").humanize() : undefined;
 
   return (
     <HStack justifyContent="space-between" px={2} py={1.5} width="100%">
@@ -48,19 +53,17 @@ export const DeadlineRow = ({ alert, deadline }: DeadlineRowProps) => {
             {deadline.missed ? <FiAlertTriangle /> : <FiClock />}
             {translate(deadline.missed ? "deadlineStatus.missed" : "deadlineStatus.upcoming")}
           </Badge>
-          <RouterLink
-            fontSize="sm"
-            fontWeight="bold"
-            to={`/dags/${deadline.dag_id}/runs/${deadline.dag_run_id}`}
-          >
-            {deadline.dag_run_id}
-          </RouterLink>
+          <Link asChild color="fg.info" fontSize="sm" fontWeight="bold">
+            <RouterLink to={`/dags/${deadline.dag_id}/runs/${deadline.dag_run_id}`}>
+              {deadline.dag_run_id}
+            </RouterLink>
+          </Link>
         </HStack>
-        {completionRule === undefined ? undefined : (
+        {reference !== undefined && interval !== undefined ? (
           <Text color="fg.muted" fontSize="xs">
-            {completionRule}
+            {translate("deadlineAlerts.completionRule", { interval, reference })}
           </Text>
-        )}
+        ) : undefined}
       </VStack>
       <HStack gap={1}>
         <Text color="fg.muted" fontSize="xs">

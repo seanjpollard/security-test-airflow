@@ -17,7 +17,7 @@
 # under the License.
 
 """
-Add dataset_expression in DagModel.
+add dataset_expression in DagModel.
 
 Revision ID: ab34f260b71c
 Revises: d75389605139

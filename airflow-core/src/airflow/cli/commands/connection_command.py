@@ -29,20 +29,12 @@ from urllib.parse import urlsplit, urlunsplit
 from sqlalchemy import select
 from sqlalchemy.orm import exc
 
-from airflow._shared.secrets_masker import redact
 from airflow.cli.simple_table import AirflowConsole
-from airflow.cli.utils import (
-    SENSITIVE_PLACEHOLDER,
-    deprecated_for_airflowctl,
-    get_hidden_entries_warning,
-    is_stdout,
-    print_export_output,
-)
+from airflow.cli.utils import SENSITIVE_PLACEHOLDER, is_stdout, print_export_output
 from airflow.configuration import conf
 from airflow.exceptions import AirflowNotFoundException
 from airflow.models import Connection
 from airflow.providers_manager import ProvidersManager
-from airflow.secrets.environment_variables import CONN_ENV_PREFIX
 from airflow.secrets.local_filesystem import load_connections_dict
 from airflow.utils import cli as cli_utils, helpers, yaml
 from airflow.utils.cli import suppress_logs_and_warning
@@ -94,7 +86,7 @@ class ConnectionDisplayMapper:
             "password": conn.password,
             "port": conn.port,
             "is_encrypted": conn.is_encrypted,
-            "is_extra_encrypted": conn.is_extra_encrypted,
+            "is_extra_encrypted": conn.is_encrypted,
             "extra_dejson": conn.extra_dejson,
             "get_uri": conn.get_uri(),
         }
@@ -121,7 +113,7 @@ class ConnectionDisplayMapper:
             "password": SENSITIVE_PLACEHOLDER if conn.password else conn.password,
             "port": conn.port,
             "is_encrypted": conn.is_encrypted,
-            "is_extra_encrypted": conn.is_extra_encrypted,
+            "is_extra_encrypted": conn.is_encrypted,
             "extra_dejson": SENSITIVE_PLACEHOLDER if conn.extra_dejson else conn.extra_dejson,
             "get_uri": _mask_uri_credentials(conn.get_uri()),
         }
@@ -148,7 +140,6 @@ def connections_get(args):
     )
 
 
-@deprecated_for_airflowctl("airflowctl connections list")
 @suppress_logs_and_warning
 @providers_configuration_loaded
 def connections_list(args):
@@ -170,9 +161,6 @@ def connections_list(args):
         mapper = ConnectionDisplayMapper.masked_sensitive
     else:
         mapper = ConnectionDisplayMapper.full_details
-
-    if warning := get_hidden_entries_warning("connections", CONN_ENV_PREFIX):
-        AirflowConsole(stderr=True).print(f"[bold yellow]Warning:[/bold yellow] {warning}\n")
 
     with create_session() as session:
         query = select(Connection)
@@ -198,7 +186,6 @@ def _connection_to_dict(conn: Connection) -> dict:
     }
 
 
-@deprecated_for_airflowctl("airflowctl connections create-defaults")
 def create_default_connections(args):
     db_create_default_connections()
 
@@ -296,7 +283,6 @@ alternative_conn_specs = ["conn_type", "conn_host", "conn_login", "conn_password
 
 
 @cli_utils.action_cli
-@deprecated_for_airflowctl("airflowctl connections create")
 @providers_configuration_loaded
 def connections_add(args):
     """Add new connection."""
@@ -371,26 +357,28 @@ def connections_add(args):
     with create_session() as session:
         if not session.scalar(select(Connection).where(Connection.conn_id == new_conn.conn_id).limit(1)):
             session.add(new_conn)
-            print(f"Successfully added `conn_id`={new_conn.conn_id}")
-            AirflowConsole().print_as(
-                data=[new_conn],
-                output="table",
-                mapper=lambda conn: {
-                    "conn_id": conn.conn_id,
-                    "conn_type": conn.conn_type,
-                    "host": conn.host,
-                    "login": conn.login,
-                    "port": conn.port,
-                    "extra": redact(conn.extra_dejson),
-                },
+            msg = "Successfully added `conn_id`={conn_id} : {uri}"
+            msg = msg.format(
+                conn_id=new_conn.conn_id,
+                uri=args.conn_uri
+                or urlunsplit(
+                    (
+                        new_conn.conn_type,
+                        f"{new_conn.login or ''}:{'******' if new_conn.password else ''}"
+                        f"@{new_conn.host or ''}:{new_conn.port or ''}",
+                        new_conn.schema or "",
+                        "",
+                        "",
+                    )
+                ),
             )
+            print(msg)
         else:
             msg = f"A connection with `conn_id`={new_conn.conn_id} already exists."
             raise SystemExit(msg)
 
 
 @cli_utils.action_cli
-@deprecated_for_airflowctl("airflowctl connections delete")
 @providers_configuration_loaded
 def connections_delete(args):
     """Delete connection from DB."""
@@ -407,7 +395,6 @@ def connections_delete(args):
 
 
 @cli_utils.action_cli(check_db=False)
-@deprecated_for_airflowctl("airflowctl connections import")
 @providers_configuration_loaded
 def connections_import(args):
     """Import connections from a file."""
@@ -446,7 +433,6 @@ def _import_helper(file_path: str, overwrite: bool) -> None:
             print(f"Imported connection {conn_id}")
 
 
-@deprecated_for_airflowctl("airflowctl connections test")
 @suppress_logs_and_warning
 @providers_configuration_loaded
 def connections_test(args) -> None:
@@ -474,4 +460,3 @@ def connections_test(args) -> None:
         console.print("[bold green]\nConnection success!\n")
     else:
         console.print(f"[bold][red]\nConnection failed![/bold]\n{message}\n")
-        raise SystemExit(1)

@@ -21,6 +21,7 @@ import inspect
 import os
 import warnings
 from datetime import datetime
+from unittest.mock import patch
 
 from openlineage.client.facet_v2 import source_code_job
 
@@ -59,11 +60,13 @@ def test_extract_source_code():
     assert code == CODE
 
 
-def test_extract_operator_code_disabled():
+@patch("airflow.providers.openlineage.conf.is_source_enabled")
+def test_extract_operator_code_disabled(mocked_source_enabled):
+    mocked_source_enabled.return_value = False
     operator = PythonOperator(task_id="taskid", python_callable=callable, op_args=(1, 2), op_kwargs={"a": 1})
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", AirflowProviderDeprecationWarning)
-        result = PythonExtractor(operator, source_code_enabled=False).extract()
+        result = PythonExtractor(operator).extract()
     assert "sourceCode" not in result.job_facets
     assert "unknownSourceAttribute" in result.run_facets
     unknown_items = result.run_facets["unknownSourceAttribute"]["unknownItems"]
@@ -75,11 +78,13 @@ def test_extract_operator_code_disabled():
     assert "task_id" in unknown_items[0]["properties"]
 
 
-def test_extract_operator_code_enabled():
+@patch("airflow.providers.openlineage.conf.is_source_enabled")
+def test_extract_operator_code_enabled(mocked_source_enabled):
+    mocked_source_enabled.return_value = True
     operator = PythonOperator(task_id="taskid", python_callable=callable, op_args=(1, 2), op_kwargs={"a": 1})
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", AirflowProviderDeprecationWarning)
-        result = PythonExtractor(operator, source_code_enabled=True).extract()
+        result = PythonExtractor(operator).extract()
     assert result.job_facets["sourceCode"] == source_code_job.SourceCodeJobFacet("python", CODE)
     assert "unknownSourceAttribute" in result.run_facets
     unknown_items = result.run_facets["unknownSourceAttribute"]["unknownItems"]

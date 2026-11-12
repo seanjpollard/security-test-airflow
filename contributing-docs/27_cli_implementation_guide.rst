@@ -101,7 +101,7 @@ HTTP client and operations: ``airflow-ctl/src/airflowctl/api/`` (``client.py``, 
 
    .. code-block:: bash
 
-      breeze testing airflow-ctl-integration-tests
+      breeze testing airflow-ctl-integration-test
 
 Rewiring an Existing ``airflow`` CLI Command
 ---------------------------------------------

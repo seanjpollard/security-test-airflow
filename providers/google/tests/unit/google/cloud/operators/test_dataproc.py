@@ -23,7 +23,6 @@ from unittest import mock
 from unittest.mock import ANY, MagicMock, Mock, call
 
 import pytest
-import time_machine
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.api_core.retry import Retry
 from google.api_core.retry_async import AsyncRetry
@@ -85,7 +84,6 @@ cluster_params = inspect.signature(ClusterGenerator.__init__).parameters
 
 DATAPROC_PATH = "airflow.providers.google.cloud.operators.dataproc.{}"
 DATAPROC_TRIGGERS_PATH = "airflow.providers.google.cloud.triggers.dataproc.{}"
-
 
 TASK_ID = "task-id"
 GCP_PROJECT = "test-project"
@@ -326,120 +324,6 @@ CONFIG_WITH_GPU_ACCELERATOR = {
     "endpoint_config": {},
 }
 
-CONFIG_WITH_MASTER_AND_WORKER_FLEX_MIG = {
-    "gce_cluster_config": {
-        "zone_uri": "https://www.googleapis.com/compute/v1/projects/project_id/zones/zone",
-        "metadata": {"metadata": "data"},
-        "network_uri": "network_uri",
-        "subnetwork_uri": "subnetwork_uri",
-        "internal_ip_only": True,
-        "tags": ["tags"],
-        "service_account": "service_account",
-        "service_account_scopes": ["service_account_scopes"],
-    },
-    "master_config": {
-        "num_instances": 2,
-        "machine_type_uri": "projects/project_id/zones/zone/machineTypes/master_machine_type",
-        "disk_config": {"boot_disk_type": "master_disk_type", "boot_disk_size_gb": 128},
-        "image_uri": "https://www.googleapis.com/compute/beta/projects/"
-        "custom_image_project_id/global/images/custom_image",
-        "instance_flexibility_policy": {
-            "instance_selection_list": [
-                {
-                    "machine_types": [
-                        "projects/project_id/zones/zone/machineTypes/machine1",
-                        "projects/project_id/zones/zone/machineTypes/machine2",
-                    ],
-                    "rank": 0,
-                },
-                {"machine_types": ["projects/project_id/zones/zone/machineTypes/machine3"], "rank": 1},
-            ],
-        },
-    },
-    "worker_config": {
-        "num_instances": 3,
-        "machine_type_uri": "projects/project_id/zones/zone/machineTypes/worker_machine_type",
-        "disk_config": {"boot_disk_type": "worker_disk_type", "boot_disk_size_gb": 256},
-        "image_uri": "https://www.googleapis.com/compute/beta/projects/"
-        "custom_image_project_id/global/images/custom_image",
-        "instance_flexibility_policy": {
-            "instance_selection_list": [
-                {
-                    "machine_types": [
-                        "projects/project_id/zones/zone/machineTypes/machine1",
-                        "projects/project_id/zones/zone/machineTypes/machine2",
-                    ],
-                    "rank": 0,
-                },
-                {"machine_types": ["projects/project_id/zones/zone/machineTypes/machine3"], "rank": 1},
-            ],
-        },
-    },
-    "secondary_worker_config": {
-        "num_instances": 4,
-        "machine_type_uri": "projects/project_id/zones/zone/machineTypes/worker_machine_type",
-        "disk_config": {"boot_disk_type": "worker_disk_type", "boot_disk_size_gb": 256},
-        "is_preemptible": True,
-        "preemptibility": "SPOT",
-    },
-    "software_config": {"properties": {"properties": "data"}, "optional_components": ["optional_components"]},
-    "lifecycle_config": {},
-    "encryption_config": {"gce_pd_kms_key_name": "customer_managed_key"},
-    "autoscaling_config": {"policy_uri": "autoscaling_policy"},
-    "config_bucket": "storage_bucket",
-    "initialization_actions": [
-        {"executable_file": "init_actions_uris", "execution_timeout": {"seconds": 600}}
-    ],
-    "endpoint_config": {},
-}
-
-
-CONFIG_WITH_STOP_TTL = {
-    "gce_cluster_config": {
-        "zone_uri": "https://www.googleapis.com/compute/v1/projects/project_id/zones/zone",
-        "metadata": {"metadata": "data"},
-        "network_uri": "network_uri",
-        "subnetwork_uri": "subnetwork_uri",
-        "internal_ip_only": True,
-        "tags": ["tags"],
-        "service_account": "service_account",
-        "service_account_scopes": ["service_account_scopes"],
-    },
-    "master_config": {
-        "num_instances": 2,
-        "machine_type_uri": "projects/project_id/zones/zone/machineTypes/master_machine_type",
-        "disk_config": {"boot_disk_type": "master_disk_type", "boot_disk_size_gb": 128},
-        "image_uri": "https://www.googleapis.com/compute/beta/projects/"
-        "custom_image_project_id/global/images/custom_image",
-    },
-    "worker_config": {
-        "num_instances": 2,
-        "machine_type_uri": "projects/project_id/zones/zone/machineTypes/worker_machine_type",
-        "disk_config": {"boot_disk_type": "worker_disk_type", "boot_disk_size_gb": 256},
-        "image_uri": "https://www.googleapis.com/compute/beta/projects/"
-        "custom_image_project_id/global/images/custom_image",
-    },
-    "secondary_worker_config": {
-        "num_instances": 4,
-        "machine_type_uri": "projects/project_id/zones/zone/machineTypes/worker_machine_type",
-        "disk_config": {"boot_disk_type": "worker_disk_type", "boot_disk_size_gb": 256},
-        "is_preemptible": True,
-        "preemptibility": "SPOT",
-    },
-    "software_config": {"properties": {"properties": "data"}, "optional_components": ["optional_components"]},
-    "lifecycle_config": {
-        "idle_stop_ttl": {"seconds": 300},
-        "auto_stop_time": "2019-09-12T00:00:00.000000Z",
-    },
-    "encryption_config": {"gce_pd_kms_key_name": "customer_managed_key"},
-    "autoscaling_config": {"policy_uri": "autoscaling_policy"},
-    "config_bucket": "storage_bucket",
-    "initialization_actions": [
-        {"executable_file": "init_actions_uris", "execution_timeout": {"seconds": 600}}
-    ],
-    "endpoint_config": {},
-}
-
 LABELS = {"labels": "data", "airflow-version": AIRFLOW_VERSION_LABEL}
 
 LABELS.update({"airflow-version": AIRFLOW_VERSION_LABEL})
@@ -576,7 +460,7 @@ def assert_warning(msg: str, warnings):
 class DataprocTestBase:
     @classmethod
     def setup_class(cls):
-        cls.dagbag = DagBag(dag_folder="/dev/null")
+        cls.dagbag = DagBag(dag_folder="/dev/null", include_examples=False)
         cls.dag = DAG(
             dag_id=TEST_DAG_ID,
             schedule=None,
@@ -633,7 +517,6 @@ class DataprocClusterTestBase(DataprocTestBase):
             ]
 
 
-@pytest.mark.filterwarnings("ignore::airflow.exceptions.AirflowProviderDeprecationWarning")
 class TestsClusterGenerator:
     def test_image_version(self):
         with pytest.raises(ValueError, match="custom_image and image_version"):
@@ -815,102 +698,6 @@ class TestsClusterGenerator:
         cluster = generator.make()
         assert cluster == CONFIG_WITH_FLEX_MIG
 
-    def test_build_with_master_and_worker_flex_migs(self):
-        generator = ClusterGenerator(
-            project_id="project_id",
-            num_workers=3,
-            zone="zone",
-            network_uri="network_uri",
-            subnetwork_uri="subnetwork_uri",
-            internal_ip_only=True,
-            tags=["tags"],
-            storage_bucket="storage_bucket",
-            init_actions_uris=["init_actions_uris"],
-            init_action_timeout="10m",
-            metadata={"metadata": "data"},
-            custom_image="custom_image",
-            custom_image_project_id="custom_image_project_id",
-            autoscaling_policy="autoscaling_policy",
-            properties={"properties": "data"},
-            optional_components=["optional_components"],
-            num_masters=2,
-            master_machine_type="master_machine_type",
-            master_disk_type="master_disk_type",
-            master_disk_size=128,
-            worker_machine_type="worker_machine_type",
-            worker_disk_type="worker_disk_type",
-            worker_disk_size=256,
-            num_preemptible_workers=4,
-            preemptibility="Spot",
-            region="region",
-            service_account="service_account",
-            service_account_scopes=["service_account_scopes"],
-            customer_managed_key="customer_managed_key",
-            master_instance_flexibility_policy=InstanceFlexibilityPolicy(
-                [
-                    InstanceSelection(
-                        [
-                            "projects/project_id/zones/zone/machineTypes/machine1",
-                            "projects/project_id/zones/zone/machineTypes/machine2",
-                        ],
-                        0,
-                    ),
-                    InstanceSelection(["projects/project_id/zones/zone/machineTypes/machine3"], 1),
-                ]
-            ),
-            worker_instance_flexibility_policy=InstanceFlexibilityPolicy(
-                [
-                    InstanceSelection(
-                        [
-                            "projects/project_id/zones/zone/machineTypes/machine1",
-                            "projects/project_id/zones/zone/machineTypes/machine2",
-                        ],
-                        0,
-                    ),
-                    InstanceSelection(["projects/project_id/zones/zone/machineTypes/machine3"], 1),
-                ]
-            ),
-        )
-        cluster = generator.make()
-        assert cluster == CONFIG_WITH_MASTER_AND_WORKER_FLEX_MIG
-
-    def test_build_with_stop_ttl(self):
-        generator = ClusterGenerator(
-            project_id="project_id",
-            num_workers=2,
-            zone="zone",
-            network_uri="network_uri",
-            subnetwork_uri="subnetwork_uri",
-            internal_ip_only=True,
-            tags=["tags"],
-            storage_bucket="storage_bucket",
-            init_actions_uris=["init_actions_uris"],
-            init_action_timeout="10m",
-            metadata={"metadata": "data"},
-            custom_image="custom_image",
-            custom_image_project_id="custom_image_project_id",
-            autoscaling_policy="autoscaling_policy",
-            properties={"properties": "data"},
-            optional_components=["optional_components"],
-            num_masters=2,
-            master_machine_type="master_machine_type",
-            master_disk_type="master_disk_type",
-            master_disk_size=128,
-            worker_machine_type="worker_machine_type",
-            worker_disk_type="worker_disk_type",
-            worker_disk_size=256,
-            num_preemptible_workers=4,
-            preemptibility="Spot",
-            region="region",
-            service_account="service_account",
-            service_account_scopes=["service_account_scopes"],
-            idle_stop_ttl=300,
-            auto_stop_time=timezone.datetime(2019, 9, 12),
-            customer_managed_key="customer_managed_key",
-        )
-        cluster = generator.make()
-        assert cluster == CONFIG_WITH_STOP_TTL
-
     def test_build_with_gpu_accelerator(self):
         generator = ClusterGenerator(
             project_id="project_id",
@@ -984,10 +771,6 @@ class TestsClusterGenerator:
         cluster = generator.make()
         assert cluster["engine"] == "DEFAULT"
 
-    def test_deprecation_warning(self):
-        with pytest.warns(AirflowProviderDeprecationWarning, match="ClusterGenerator"):
-            ClusterGenerator(project_id=GCP_PROJECT)
-
 
 class TestDataprocCreateClusterOperator(DataprocClusterTestBase):
     def test_deprecation_warning(self):
@@ -1000,7 +783,7 @@ class TestDataprocCreateClusterOperator(DataprocClusterTestBase):
                 num_workers=2,
                 zone="zone",
             )
-        assert_warning("Since passing cluster parameters by keyword", warnings)
+        assert_warning("Passing cluster parameters by keywords", warnings)
 
         assert op.project_id == GCP_PROJECT
         assert op.cluster_name == "cluster_name"
@@ -1873,50 +1656,6 @@ class TestDataprocSubmitJobOperator(DataprocJobTestBase):
         assert isinstance(exc.value.trigger, DataprocSubmitTrigger)
         assert exc.value.method_name == GOOGLE_DEFAULT_DEFERRABLE_METHOD_NAME
 
-    @time_machine.travel(dt.datetime(2026, 1, 1, 0, 10, tzinfo=dt.UTC), tick=False)
-    @mock.patch(DATAPROC_PATH.format("DataprocHook"))
-    @mock.patch(DATAPROC_TRIGGERS_PATH.format("DataprocAsyncHook"))
-    def test_execute_deferrable_with_execution_timeout(self, mock_trigger_hook, mock_hook):
-        mock_hook.return_value.submit_job.return_value.reference.job_id = TEST_JOB_ID
-
-        op = DataprocSubmitJobOperator(
-            task_id=TASK_ID,
-            region=GCP_REGION,
-            project_id=GCP_PROJECT,
-            job={},
-            gcp_conn_id=GCP_CONN_ID,
-            deferrable=True,
-            execution_timeout=dt.timedelta(hours=1),
-        )
-        start_date = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
-        self.mock_ti.start_date = start_date
-
-        with pytest.raises(TaskDeferred) as exc:
-            op.execute(self.mock_context)
-
-        expected_deadline = start_date.timestamp() + 3600
-        assert exc.value.trigger.execution_deadline == expected_deadline
-        # 50 minutes remain, plus the 60 second minimum buffer.
-        assert exc.value.timeout == dt.timedelta(minutes=50, seconds=60)
-
-    @mock.patch(DATAPROC_PATH.format("DataprocHook"))
-    def test_execute_complete_timed_out_raises(self, mock_hook):
-        op = DataprocSubmitJobOperator(
-            task_id=TASK_ID,
-            region=GCP_REGION,
-            project_id=GCP_PROJECT,
-            job={},
-            gcp_conn_id=GCP_CONN_ID,
-            deferrable=True,
-        )
-        event = {
-            "job_id": TEST_JOB_ID,
-            "job_state": "TIMED_OUT",
-            "message": f"Job {TEST_JOB_ID} exceeded the task's execution_timeout while deferred.",
-        }
-        with pytest.raises(AirflowTaskTimeout, match="execution_timeout"):
-            op.execute_complete(context=self.mock_context, event=event)
-
     @mock.patch(DATAPROC_PATH.format("DataprocHook"))
     @mock.patch(DATAPROC_PATH.format("DataprocSubmitJobOperator.defer"))
     @mock.patch(DATAPROC_PATH.format("DataprocHook.submit_job"))
@@ -1943,8 +1682,8 @@ class TestDataprocSubmitJobOperator(DataprocJobTestBase):
         op.execute(context=self.mock_context)
         assert not mock_defer.called
 
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_root_run_id")
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_dag_run_ol_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_task_instance_ol_run_id")
     @mock.patch("airflow.providers.google.cloud.openlineage.utils._is_openlineage_provider_accessible")
     @mock.patch(DATAPROC_PATH.format("DataprocHook"))
     def test_execute_openlineage_parent_job_info_injection(
@@ -2014,8 +1753,8 @@ class TestDataprocSubmitJobOperator(DataprocJobTestBase):
             metadata=METADATA,
         )
 
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_root_run_id")
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_dag_run_ol_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_task_instance_ol_run_id")
     @mock.patch("airflow.providers.openlineage.utils.spark.get_openlineage_listener")
     @mock.patch("airflow.providers.google.cloud.openlineage.utils._is_openlineage_provider_accessible")
     @mock.patch(DATAPROC_PATH.format("DataprocHook"))
@@ -2073,8 +1812,8 @@ class TestDataprocSubmitJobOperator(DataprocJobTestBase):
             metadata=METADATA,
         )
 
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_root_run_id")
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_dag_run_ol_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_task_instance_ol_run_id")
     @mock.patch("airflow.providers.openlineage.utils.spark.get_openlineage_listener")
     @mock.patch("airflow.providers.google.cloud.openlineage.utils._is_openlineage_provider_accessible")
     @mock.patch(DATAPROC_PATH.format("DataprocHook"))
@@ -3165,8 +2904,8 @@ class TestDataprocWorkflowTemplateInstantiateInlineOperator:
         )
         mock_op.return_value.result.assert_not_called()
 
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_root_run_id")
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_dag_run_ol_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_task_instance_ol_run_id")
     @mock.patch("airflow.providers.google.cloud.openlineage.utils._is_openlineage_provider_accessible")
     @mock.patch(DATAPROC_PATH.format("DataprocHook"))
     def test_execute_openlineage_parent_job_info_injection(
@@ -3360,8 +3099,8 @@ class TestDataprocWorkflowTemplateInstantiateInlineOperator:
             metadata=METADATA,
         )
 
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_root_run_id")
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_dag_run_ol_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_task_instance_ol_run_id")
     @mock.patch("airflow.providers.openlineage.utils.spark.get_openlineage_listener")
     @mock.patch("airflow.providers.google.cloud.openlineage.utils._is_openlineage_provider_accessible")
     @mock.patch(DATAPROC_PATH.format("DataprocHook"))
@@ -3470,8 +3209,8 @@ class TestDataprocWorkflowTemplateInstantiateInlineOperator:
             metadata=METADATA,
         )
 
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_root_run_id")
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_dag_run_ol_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_task_instance_ol_run_id")
     @mock.patch("airflow.providers.openlineage.utils.spark.get_openlineage_listener")
     @mock.patch("airflow.providers.google.cloud.openlineage.utils._is_openlineage_provider_accessible")
     @mock.patch(DATAPROC_PATH.format("DataprocHook"))
@@ -3787,176 +3526,6 @@ class TestDataprocCreateWorkflowTemplateOperator:
 
 
 class TestDataprocCreateBatchOperator:
-    @pytest.mark.parametrize(
-        ("extra_kwargs", "match"),
-        [
-            pytest.param({"batch_id": BATCH_ID}, "batch_id and batch_id_prefix", id="batch_id"),
-            pytest.param({"request_id": REQUEST_ID}, "batch_id_prefix and request_id", id="request_id"),
-        ],
-    )
-    @mock.patch(DATAPROC_PATH.format("DataprocHook"))
-    def test_batch_id_prefix_mutually_exclusive_params(self, mock_hook, extra_kwargs, match):
-        operator = DataprocCreateBatchOperator(
-            task_id=TASK_ID,
-            region=GCP_REGION,
-            project_id=GCP_PROJECT,
-            batch=BATCH,
-            batch_id_prefix="batch-prefix",
-            **extra_kwargs,
-        )
-        with pytest.raises(ValueError, match=match):
-            operator.execute(context=MagicMock())
-        mock_hook.return_value.create_batch.assert_not_called()
-
-    @mock.patch(DATAPROC_PATH.format("uuid.uuid4"))
-    def test_build_unique_batch_id_from_prefix_preserves_prefix_verbatim(self, mock_uuid):
-        mock_uuid.return_value.hex = "abc12345def67890"
-        batch_id = DataprocCreateBatchOperator._build_unique_batch_id_from_prefix("Batch_Prefix")
-
-        assert batch_id == "Batch_Prefix-abc12345"
-
-    @mock.patch.object(DataprocCreateBatchOperator, "log", new_callable=mock.MagicMock)
-    @mock.patch(DATAPROC_PATH.format("uuid.uuid4"))
-    @mock.patch(DATAPROC_PATH.format("Batch.to_dict"))
-    @mock.patch(DATAPROC_PATH.format("DataprocHook"))
-    def test_execute_with_batch_id_prefix(self, mock_hook, to_dict_mock, mock_uuid, mock_log):
-        mock_uuid.return_value.hex = "abc12345def67890"
-        expected_batch_id = "batch-prefix-abc12345"
-        operator = DataprocCreateBatchOperator(
-            task_id=TASK_ID,
-            gcp_conn_id=GCP_CONN_ID,
-            impersonation_chain=IMPERSONATION_CHAIN,
-            region=GCP_REGION,
-            project_id=GCP_PROJECT,
-            batch=BATCH,
-            batch_id_prefix="batch-prefix",
-            retry=RETRY,
-            timeout=TIMEOUT,
-            metadata=METADATA,
-        )
-        mock_hook.return_value.create_batch.return_value.metadata.batch = f"prefix/{expected_batch_id}"
-        batch_state_succeeded = Batch(state=Batch.State.SUCCEEDED)
-        mock_hook.return_value.wait_for_batch.return_value = batch_state_succeeded
-
-        operator.execute(context=MagicMock())
-
-        mock_hook.return_value.create_batch.assert_called_once_with(
-            region=GCP_REGION,
-            project_id=GCP_PROJECT,
-            batch=BATCH,
-            batch_id=expected_batch_id,
-            request_id=None,
-            retry=RETRY,
-            timeout=TIMEOUT,
-            metadata=METADATA,
-        )
-        to_dict_mock.assert_called_once_with(batch_state_succeeded)
-        logs_link = DATAPROC_BATCH_LINK.format(
-            region=GCP_REGION, project_id=GCP_PROJECT, batch_id=expected_batch_id
-        )
-        mock_log.info.assert_has_calls(
-            [
-                mock.call("Starting batch %s", expected_batch_id),
-                mock.call("The batch %s was created.", expected_batch_id),
-                mock.call("Waiting for the completion of batch job %s", expected_batch_id),
-                mock.call("Batch job %s completed.\nDriver logs: %s", expected_batch_id, logs_link),
-            ]
-        )
-
-    @mock.patch(DATAPROC_PATH.format("uuid.uuid4"))
-    @mock.patch(DATAPROC_PATH.format("Batch.to_dict"))
-    @mock.patch(DATAPROC_PATH.format("DataprocHook"))
-    def test_execute_with_batch_id_prefix_generates_new_id_per_task_attempt(
-        self, mock_hook, to_dict_mock, mock_uuid
-    ):
-        mock_uuid.side_effect = [mock.Mock(hex="aaaaaaaa1111"), mock.Mock(hex="bbbbbbbb2222")]
-        operator = DataprocCreateBatchOperator(
-            task_id=TASK_ID,
-            region=GCP_REGION,
-            project_id=GCP_PROJECT,
-            batch=BATCH,
-            batch_id_prefix="batch-prefix",
-        )
-        mock_hook.return_value.wait_for_batch.return_value = Batch(state=Batch.State.SUCCEEDED)
-
-        operator.execute(context=MagicMock())
-        operator.execute(context=MagicMock())
-
-        assert [c.kwargs["batch_id"] for c in mock_hook.return_value.create_batch.call_args_list] == [
-            "batch-prefix-aaaaaaaa",
-            "batch-prefix-bbbbbbbb",
-        ]
-
-    @mock.patch(DATAPROC_PATH.format("uuid.uuid4"))
-    @mock.patch(DATAPROC_PATH.format("Batch.to_dict"))
-    @mock.patch(DATAPROC_PATH.format("DataprocHook"))
-    def test_execute_with_batch_id_prefix_retries_resource_not_ready_with_same_id(
-        self, mock_hook, to_dict_mock, mock_uuid
-    ):
-        mock_uuid.return_value.hex = "abc12345def67890"
-        expected_batch_id = "batch-prefix-abc12345"
-        operator = DataprocCreateBatchOperator(
-            task_id=TASK_ID,
-            region=GCP_REGION,
-            project_id=GCP_PROJECT,
-            batch=BATCH,
-            batch_id_prefix="batch-prefix",
-            num_retries_if_resource_is_not_ready=1,
-            retry=RETRY,
-            timeout=TIMEOUT,
-            metadata=METADATA,
-        )
-        mock_hook.return_value.create_batch.return_value.metadata.batch = f"prefix/{expected_batch_id}"
-        mock_hook.return_value.wait_for_batch.side_effect = [
-            Batch(state=Batch.State.FAILED, state_message="resource not ready"),
-            Batch(state=Batch.State.SUCCEEDED),
-        ]
-        mock_hook.return_value.check_error_for_resource_is_not_ready_msg.side_effect = [True, False]
-
-        operator.execute(context=MagicMock())
-
-        mock_uuid.assert_called_once()
-        mock_hook.return_value.delete_batch.assert_called_once_with(
-            batch_id=expected_batch_id,
-            region=GCP_REGION,
-            project_id=GCP_PROJECT,
-            retry=RETRY,
-            timeout=TIMEOUT,
-            metadata=METADATA,
-        )
-        assert [c.kwargs["batch_id"] for c in mock_hook.return_value.create_batch.call_args_list] == [
-            expected_batch_id,
-            expected_batch_id,
-        ]
-
-    @mock.patch(DATAPROC_PATH.format("DataprocHook"))
-    def test_retry_batch_creation_already_exists_attaches_to_batch_id(self, mock_hook):
-        op = DataprocCreateBatchOperator(
-            task_id=TASK_ID,
-            region=GCP_REGION,
-            project_id=GCP_PROJECT,
-            batch=BATCH,
-            batch_id=BATCH_ID,
-            retry=RETRY,
-            timeout=TIMEOUT,
-            metadata=METADATA,
-        )
-        mock_hook.return_value.create_batch.side_effect = AlreadyExists("")
-        mock_hook.return_value.wait_for_batch.return_value = Batch(state=Batch.State.SUCCEEDED)
-
-        _, batch_id = op.retry_batch_creation(BATCH_ID)
-
-        assert batch_id == BATCH_ID
-        assert mock_hook.return_value.create_batch.call_args.kwargs["batch_id"] == BATCH_ID
-        mock_hook.return_value.wait_for_batch.assert_called_once_with(
-            batch_id=BATCH_ID,
-            region=GCP_REGION,
-            project_id=GCP_PROJECT,
-            retry=RETRY,
-            timeout=TIMEOUT,
-            metadata=METADATA,
-        )
-
     @mock.patch.object(DataprocCreateBatchOperator, "log", new_callable=mock.MagicMock)
     @mock.patch(DATAPROC_PATH.format("Batch.to_dict"))
     @mock.patch(DATAPROC_PATH.format("DataprocHook"))
@@ -4169,8 +3738,8 @@ class TestDataprocCreateBatchOperator:
         mock_log.info.assert_any_call("Batch with given id already exists.")
 
     @mock.patch.object(DataprocCreateBatchOperator, "log", new_callable=mock.MagicMock)
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_root_run_id")
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_dag_run_ol_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_task_instance_ol_run_id")
     @mock.patch("airflow.providers.google.cloud.openlineage.utils._is_openlineage_provider_accessible")
     @mock.patch(DATAPROC_PATH.format("Batch.to_dict"))
     @mock.patch(DATAPROC_PATH.format("DataprocHook"))
@@ -4227,8 +3796,8 @@ class TestDataprocCreateBatchOperator:
         mock_log.info.assert_any_call("Batch job %s completed.\nDriver logs: %s", BATCH_ID, logs_link)
 
     @mock.patch.object(DataprocCreateBatchOperator, "log", new_callable=mock.MagicMock)
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_root_run_id")
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_dag_run_ol_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_task_instance_ol_run_id")
     @mock.patch("airflow.providers.openlineage.utils.spark.get_openlineage_listener")
     @mock.patch("airflow.providers.google.cloud.openlineage.utils._is_openlineage_provider_accessible")
     @mock.patch(DATAPROC_PATH.format("Batch.to_dict"))
@@ -4295,8 +3864,8 @@ class TestDataprocCreateBatchOperator:
             logs_link,
         )
 
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_root_run_id")
-    @mock.patch("airflow.providers.openlineage.utils.spark.lineage_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_dag_run_ol_run_id")
+    @mock.patch("airflow.providers.openlineage.plugins.adapter.build_task_instance_ol_run_id")
     @mock.patch("airflow.providers.openlineage.utils.spark.get_openlineage_listener")
     @mock.patch("airflow.providers.google.cloud.openlineage.utils._is_openlineage_provider_accessible")
     @mock.patch(DATAPROC_PATH.format("Batch.to_dict"))

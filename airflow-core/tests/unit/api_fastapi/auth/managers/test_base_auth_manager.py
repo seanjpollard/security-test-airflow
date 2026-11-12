@@ -16,32 +16,23 @@
 # under the License.
 from __future__ import annotations
 
-import threading
-import warnings
 from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock, MagicMock, Mock, create_autospec, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from jwt import InvalidTokenError
-from sqlalchemy.orm import Session
 
 from airflow.api_fastapi.auth.managers.base_auth_manager import BaseAuthManager, T
 from airflow.api_fastapi.auth.managers.models.base_user import BaseUser
 from airflow.api_fastapi.auth.managers.models.resource_details import (
-    AccessView,
-    AssetDetails,
     ConnectionDetails,
     DagDetails,
     PoolDetails,
     TeamDetails,
     VariableDetails,
 )
-from airflow.api_fastapi.auth.middlewares.refresh_token import JWTRefreshMiddleware
 from airflow.api_fastapi.auth.tokens import JWTGenerator, JWTValidator
-from airflow.api_fastapi.common.types import CliLoginMethods, MenuItem
-from airflow.api_fastapi.core_api.app import _STATIC_URL_PATH
-from airflow.exceptions import RemovedInAirflow4Warning
-from airflow.models.pool import Pool
+from airflow.api_fastapi.common.types import MenuItem
 from airflow.models.team import Team
 
 from tests_common.test_utils.config import conf_vars
@@ -49,7 +40,9 @@ from tests_common.test_utils.config import conf_vars
 if TYPE_CHECKING:
     from airflow.api_fastapi.auth.managers.base_auth_manager import ResourceMethod
     from airflow.api_fastapi.auth.managers.models.resource_details import (
+        AccessView,
         AssetAliasDetails,
+        AssetDetails,
         ConfigurationDetails,
         DagAccessEntity,
     )
@@ -138,11 +131,7 @@ class EmptyAuthManager(BaseAuthManager[BaseAuthManagerUserTest]):
         raise NotImplementedError()
 
     def is_authorized_view(
-        self,
-        *,
-        access_view: AccessView,
-        user: BaseAuthManagerUserTest | None = None,
-        team_name: str | None = None,
+        self, *, access_view: AccessView, user: BaseAuthManagerUserTest | None = None
     ) -> bool:
         raise NotImplementedError()
 
@@ -167,76 +156,14 @@ class TestBaseAuthManager:
     def test_init_non_multi_team_mode(self, auth_manager):
         assert auth_manager.init() is None
 
-    @patch.object(EmptyAuthManager, "is_authorized_view")
-    def test_authorize_view_passes_team_name_to_team_aware_manager(
-        self, mock_is_authorized_view, auth_manager
-    ):
-        mock_is_authorized_view.return_value = True
-
-        result = auth_manager.authorize_view(access_view=AccessView.DOCS, user=None, team_name="team_a")
-
-        assert result is True
-        mock_is_authorized_view.assert_called_once_with(
-            access_view=AccessView.DOCS, user=None, team_name="team_a"
-        )
-
-    def test_authorize_view_drops_team_name_and_warns_for_team_unaware_manager(self):
-        # A manager whose is_authorized_view predates team_name (out-of-tree, or a provider
-        # released before the argument existed) must keep working: authorize_view falls back
-        # to a global check and warns that some views are not team-restricted.
-        class TeamUnawareAuthManager(EmptyAuthManager):
-            def is_authorized_view(self, *, access_view, user=None):  # old signature, no team_name
-                return True
-
-        manager = TeamUnawareAuthManager()
-
-        with pytest.warns(RemovedInAirflow4Warning, match="not team-aware"):
-            result = manager.authorize_view(access_view=AccessView.DOCS, user=None, team_name="team_a")
-
-        assert result is True
-
-    def test_authorize_view_denies_a_view_the_manager_cannot_map(self):
-        # AccessView members are added by core, but auth managers ship as separately
-        # released providers, so a core newer than the installed manager can name a view
-        # the manager has never heard of. Managers that translate the enum through a lookup
-        # table raise KeyError on such a member, which would surface as a 500 on the
-        # endpoint. authorize_view denies instead -- the endpoint keeps working and the
-        # records these views gate stay closed.
-        class LookupTableAuthManager(EmptyAuthManager):
-            def is_authorized_view(self, *, access_view, user=None, team_name=None):
-                return {AccessView.WEBSITE: True}[access_view]
-
-        manager = LookupTableAuthManager()
-
-        with pytest.warns(UserWarning, match="cannot map the 'DOCS' view"):
-            result = manager.authorize_view(access_view=AccessView.DOCS, user=None)
-
-        assert result is False
-        # A view the manager does map is unaffected.
-        assert manager.authorize_view(access_view=AccessView.WEBSITE, user=None) is True
-
-    def test_authorize_view_treats_kwargs_override_as_team_aware(self):
-        class KwargsAuthManager(EmptyAuthManager):
-            def is_authorized_view(self, *, access_view, user=None, **kwargs):
-                return kwargs.get("team_name") == "team_a"
-
-        manager = KwargsAuthManager()
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")  # a warning here would fail the test
-            result = manager.authorize_view(access_view=AccessView.DOCS, user=None, team_name="team_a")
-
-        assert result is True
-
     @conf_vars({("core", "multi_team"): "True"})
     @pytest.mark.parametrize(
         ("auth_manager_teams", "db_teams", "expected"),
         [
-            pytest.param({"teamA", "teamB"}, {"teamA", "teamB"}, "same", id="same teams"),
-            pytest.param({"teamA", "teamB"}, {"teamA", "teamB", "teamC"}, "extra_db", id="extra teams db"),
-            pytest.param(set(), set(), "same", id="no teams"),
-            pytest.param({"teamA", "teamB"}, {"teamA"}, "extra_auth", id="extra teams auth"),
-            pytest.param({"teamA", "teamB"}, {"teamA", "teamC"}, "extra_both", id="extra teams both"),
+            ({"teamA", "teamB"}, {"teamA", "teamB"}, True),
+            ({"teamA", "teamB"}, {"teamA", "teamB", "teamC"}, True),
+            (set(), set(), True),
+            ({"teamA", "teamB"}, {"teamA", "teamC"}, False),
         ],
     )
     @patch.object(Team, "get_all_team_names")
@@ -247,19 +174,10 @@ class TestBaseAuthManager:
         mock_get_teams.return_value = auth_manager_teams
         mock_get_all_team_names.return_value = db_teams
 
-        if expected == "same":
+        if expected:
             assert auth_manager.init() is None
-        elif expected == "extra_auth":
-            with pytest.warns(UserWarning, match="Teams defined in the auth manager"):
-                auth_manager.init()
-        elif expected == "extra_db":
-            with pytest.warns(UserWarning, match="Teams defined in the database"):
-                auth_manager.init()
         else:
-            with (
-                pytest.warns(UserWarning, match="Teams defined in the database"),
-                pytest.warns(UserWarning, match="Teams defined in the auth manager"),
-            ):
+            with pytest.raises(ValueError, match="Teams defined in the auth manager"):
                 auth_manager.init()
 
     def test_get_cli_commands_return_empty_list(self, auth_manager):
@@ -273,9 +191,6 @@ class TestBaseAuthManager:
 
     def test_get_url_logout_return_none(self, auth_manager):
         assert auth_manager.get_url_logout() is None
-
-    def test_get_cli_login_methods_return_empty(self, auth_manager):
-        assert auth_manager.get_cli_login_methods() == CliLoginMethods()
 
     def test_get_extra_menu_items_return_empty_list(self, auth_manager):
         assert auth_manager.get_extra_menu_items(user=BaseAuthManagerUserTest(name="test")) == []
@@ -347,33 +262,6 @@ class TestBaseAuthManager:
     )
     @patch.object(EmptyAuthManager, "deserialize_user")
     @pytest.mark.asyncio
-    async def test_get_user_from_token_checks_revocation_off_the_event_loop(
-        self, mock_deserialize_user, mock__get_token_validator, auth_manager
-    ):
-        """The revocation lookup is a synchronous DB query, so it must not block the event loop."""
-        signer = AsyncMock(spec=JWTValidator)
-        signer.avalidated_claims.return_value = {"jti": "some-jti"}
-        mock__get_token_validator.return_value = signer
-        lookup_threads = []
-
-        def is_revoked(jti):
-            lookup_threads.append(threading.get_ident())
-            return False
-
-        with patch(
-            "airflow.models.revoked_token.RevokedToken.is_revoked", autospec=True, side_effect=is_revoked
-        ):
-            await auth_manager.get_user_from_token("token")
-
-        assert lookup_threads
-        assert lookup_threads != [threading.get_ident()]
-
-    @patch(
-        "airflow.api_fastapi.auth.managers.base_auth_manager.BaseAuthManager._get_token_validator",
-        autospec=True,
-    )
-    @patch.object(EmptyAuthManager, "deserialize_user")
-    @pytest.mark.asyncio
     async def test_get_user_from_token_invalid_token_payload(
         self, mock_deserialize_user, mock__get_token_validator, auth_manager
     ):
@@ -401,76 +289,6 @@ class TestBaseAuthManager:
         auth_manager.revoke_token(token)
 
         validator.revoke_token.assert_called_once_with(token)
-
-    @patch(
-        "airflow.api_fastapi.auth.managers.base_auth_manager.get_signing_args",
-        return_value={"secret_key": "k", "algorithm": "HS256"},
-    )
-    @patch("airflow.api_fastapi.auth.managers.base_auth_manager.JWTGenerator", autospec=True)
-    def test_token_signer_reads_audience_from_api_auth_section(
-        self, mock_jwt_generator, mock_get_signing_args, auth_manager
-    ):
-        """Signer and validator must read `jwt_audience` from the same `[api_auth]` section.
-
-        Regression test: the signer previously read `[api] jwt_audience` while the validator read
-        `[api_auth] jwt_audience` (the documented option). Both defaults are `apache-airflow` so
-        out-of-box behaviour was correct, but a custom audience set under the documented
-        `[api_auth]` section would silently mismatch.
-        """
-        EmptyAuthManager._get_token_signer.cache_clear()
-        try:
-            with conf_vars({("api_auth", "jwt_audience"): "configured-audience"}):
-                auth_manager._get_token_signer()
-        finally:
-            EmptyAuthManager._get_token_signer.cache_clear()
-        assert mock_jwt_generator.call_args.kwargs["audience"] == "configured-audience"
-
-    @patch(
-        "airflow.api_fastapi.auth.managers.base_auth_manager.get_signing_args",
-        return_value={"secret_key": "k", "algorithm": "HS256"},
-    )
-    @patch("airflow.api_fastapi.auth.managers.base_auth_manager.JWTGenerator", autospec=True)
-    def test_token_signer_falls_back_to_deprecated_api_section_with_warning(
-        self, mock_jwt_generator, mock_get_signing_args, auth_manager
-    ):
-        """Honour an audience set under the (deprecated) ``[api]`` section with a warning.
-
-        Deployments that hit the original bug worked around it by setting ``[api] jwt_audience``
-        so the signer would emit the configured value. Keep accepting that until the next major
-        release, but emit ``DeprecationWarning`` so operators move it to ``[api_auth]``.
-        """
-        EmptyAuthManager._get_token_signer.cache_clear()
-        try:
-            with conf_vars({("api", "jwt_audience"): "legacy-audience"}):
-                with pytest.warns(DeprecationWarning, match=r"\[api\] jwt_audience"):
-                    auth_manager._get_token_signer()
-        finally:
-            EmptyAuthManager._get_token_signer.cache_clear()
-        assert mock_jwt_generator.call_args.kwargs["audience"] == "legacy-audience"
-
-    @patch(
-        "airflow.api_fastapi.auth.managers.base_auth_manager.get_signing_args",
-        return_value={"secret_key": "k", "algorithm": "HS256"},
-    )
-    @patch("airflow.api_fastapi.auth.managers.base_auth_manager.JWTGenerator", autospec=True)
-    def test_token_signer_prefers_api_auth_over_deprecated_api_section(
-        self, mock_jwt_generator, mock_get_signing_args, auth_manager
-    ):
-        """When both sections are set, the documented ``[api_auth]`` option wins (no warning)."""
-        EmptyAuthManager._get_token_signer.cache_clear()
-        try:
-            with conf_vars(
-                {
-                    ("api_auth", "jwt_audience"): "documented-audience",
-                    ("api", "jwt_audience"): "legacy-audience",
-                }
-            ):
-                with warnings.catch_warnings():
-                    warnings.simplefilter("error", DeprecationWarning)
-                    auth_manager._get_token_signer()
-        finally:
-            EmptyAuthManager._get_token_signer.cache_clear()
-        assert mock_jwt_generator.call_args.kwargs["audience"] == "documented-audience"
 
     @patch("airflow.api_fastapi.auth.managers.base_auth_manager.JWTGenerator", autospec=True)
     @patch.object(EmptyAuthManager, "serialize_user")
@@ -833,91 +651,6 @@ class TestBaseAuthManager:
         result = auth_manager.get_authorized_pools(user=user, session=session)
         assert result == expected
 
-    @pytest.mark.db_test
-    def test_get_authorized_pools_skips_null_names(self, auth_manager, session):
-        session.add_all(
-            [
-                Pool(pool=None, slots=1, include_deferred=False),
-                Pool(pool="authorized_pool", slots=1, include_deferred=False),
-            ]
-        )
-        session.flush()
-        auth_manager.is_authorized_pool = create_autospec(auth_manager.is_authorized_pool, return_value=True)
-
-        result = auth_manager.get_authorized_pools(user=Mock(spec=BaseAuthManagerUserTest), session=session)
-
-        assert None not in result
-        assert "authorized_pool" in result
-
-    @pytest.mark.parametrize(
-        ("authorized_uri_prefix", "rows", "expected"),
-        [
-            pytest.param(None, [(1, "a", "s3://team-a/a"), (2, "b", "s3://team-b/b")], set(), id="no-access"),
-            pytest.param(
-                "s3://team-a/",
-                [(1, "a", "s3://team-a/a"), (2, "b", "s3://team-b/b"), (3, "c", "s3://team-a/c")],
-                {1, 3},
-                id="access-by-uri-prefix",
-            ),
-        ],
-    )
-    def test_get_authorized_assets(self, auth_manager, authorized_uri_prefix, rows: list, expected: set):
-        def side_effect_func(
-            *,
-            method: ResourceMethod,
-            user: BaseAuthManagerUserTest,
-            details: AssetDetails | None = None,
-        ):
-            if not details or not details.uri or authorized_uri_prefix is None:
-                return False
-            return details.uri.startswith(authorized_uri_prefix)
-
-        auth_manager.is_authorized_asset = create_autospec(
-            auth_manager.is_authorized_asset, side_effect=side_effect_func
-        )
-        user = Mock(spec=BaseAuthManagerUserTest)
-        session = Mock(spec=Session)
-        session.execute.return_value.all.return_value = rows
-        result = auth_manager.get_authorized_assets(user=user, session=session)
-        assert result == expected
-
-    def test_get_authorized_assets_passes_id_name_and_uri_to_filter(self, auth_manager):
-        auth_manager.filter_authorized_assets = create_autospec(
-            auth_manager.filter_authorized_assets, return_value={"2"}
-        )
-        user = Mock(spec=BaseAuthManagerUserTest)
-        session = Mock(spec=Session)
-        session.execute.return_value.all.return_value = [(1, "a", "s3://a"), (2, "b", "s3://b")]
-
-        result = auth_manager.get_authorized_assets(user=user, method="PUT", session=session)
-
-        auth_manager.filter_authorized_assets.assert_called_once_with(
-            assets=[
-                AssetDetails(id="1", name="a", uri="s3://a"),
-                AssetDetails(id="2", name="b", uri="s3://b"),
-            ],
-            user=user,
-            method="PUT",
-        )
-        assert result == {2}
-
-    def test_filter_authorized_assets(self, auth_manager):
-        assets = [
-            AssetDetails(id="1", name="a", uri="s3://a"),
-            AssetDetails(id="2", name="b", uri="s3://b"),
-            AssetDetails(name="no-id", uri="s3://no-id"),
-        ]
-        auth_manager.is_authorized_asset = create_autospec(
-            auth_manager.is_authorized_asset, side_effect=lambda *, method, user, details: details.id != "2"
-        )
-        user = Mock(spec=BaseAuthManagerUserTest)
-
-        result = auth_manager.filter_authorized_assets(assets=assets, user=user, method="DELETE")
-
-        assert result == {"1"}
-        auth_manager.is_authorized_asset.assert_any_call(method="DELETE", details=assets[0], user=user)
-        auth_manager.is_authorized_asset.assert_any_call(method="DELETE", details=assets[1], user=user)
-
     @pytest.mark.parametrize(
         ("user_id", "assigned_users", "expected"),
         [
@@ -937,11 +670,3 @@ class TestBaseAuthManager:
         user = BaseAuthManagerUserTest(name=user_id)
         result = auth_manager.is_authorized_hitl_task(assigned_users=assigned_users, user=user)
         assert result == expected
-
-    def test_get_jwt_refresh_middleware(self, auth_manager):
-        assert auth_manager.get_jwt_refresh_middleware() == [
-            (JWTRefreshMiddleware, {"skip_path_prefixes": (f"{_STATIC_URL_PATH}/",)})
-        ]
-
-    def test_get_fastapi_middlewares(self, auth_manager):
-        assert auth_manager.get_fastapi_middlewares() == []

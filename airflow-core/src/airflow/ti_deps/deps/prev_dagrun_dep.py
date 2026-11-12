@@ -24,7 +24,6 @@ from sqlalchemy import func, or_, select
 from airflow.models.backfill import BackfillDagRun
 from airflow.models.dagrun import DagRun
 from airflow.models.taskinstance import PAST_DEPENDS_MET, TaskInstance as TI
-from airflow.models.xcom import LazyXComSelectSequence
 from airflow.ti_deps.deps.base_ti_dep import BaseTIDep
 from airflow.utils.db import exists_query
 from airflow.utils.session import provide_session
@@ -36,19 +35,6 @@ if TYPE_CHECKING:
     from airflow.serialization.definitions.mappedoperator import Operator
 
 _SUCCESSFUL_STATES = (TaskInstanceState.SKIPPED, TaskInstanceState.SUCCESS)
-
-
-def is_past_depends_met(ti: TI, *, session: Session) -> bool:
-    """Return whether this task instance recorded that its past depends were met."""
-    value = ti.xcom_pull(
-        task_ids=ti.task_id, key=PAST_DEPENDS_MET, session=session, default=False, full=False
-    )
-    # XCom is read as plain JSON here, so only the literal ``True`` this dep pushes counts; a
-    # non-empty mapping or other truthy value does not. A mapped task instance's read returns
-    # the value of every map index.
-    if isinstance(value, LazyXComSelectSequence):
-        return any(item is True for item in value)
-    return value is True
 
 
 class PrevDagrunDep(BaseTIDep):
@@ -76,7 +62,6 @@ class PrevDagrunDep(BaseTIDep):
         This function exists for easy mocking in tests.
         """
         return exists_query(
-            TI.working_set.is_(True),
             TI.dag_id == dagrun.dag_id,
             TI.task_id == task_id,
             TI.run_id == dagrun.run_id,
@@ -91,7 +76,6 @@ class PrevDagrunDep(BaseTIDep):
         This function exists for easy mocking in tests.
         """
         query = exists_query(
-            TI.working_set.is_(True),
             TI.dag_id == ti.dag_id,
             TI.task_id == ti.task_id,
             TI.logical_date < ti.logical_date,
@@ -112,7 +96,6 @@ class PrevDagrunDep(BaseTIDep):
         """
         unsuccessful_tis_count = session.scalar(
             select(func.count()).where(
-                TI.working_set.is_(True),
                 TI.dag_id == dagrun.dag_id,
                 TI.task_id == task_id,
                 TI.run_id == dagrun.run_id,
@@ -135,7 +118,6 @@ class PrevDagrunDep(BaseTIDep):
         if not task.downstream_task_ids:
             return False
         return exists_query(
-            TI.working_set.is_(True),
             TI.dag_id == dagrun.dag_id,
             TI.task_id.in_(task.downstream_task_ids),
             TI.run_id == dagrun.run_id,
@@ -144,7 +126,7 @@ class PrevDagrunDep(BaseTIDep):
         )
 
     @provide_session
-    def _get_dep_statuses(self, ti: TI, dep_context, *, session: Session):
+    def _get_dep_statuses(self, ti: TI, session: Session, dep_context):
         if TYPE_CHECKING:
             assert ti.task
         if dep_context.ignore_depends_on_past:
@@ -178,7 +160,7 @@ class PrevDagrunDep(BaseTIDep):
         # Don't depend on the previous task instance if we are the first task.
         catchup = ti.task.dag and ti.task.dag.catchup
         if catchup:
-            last_dagrun = DagRun.get_previous_scheduled_dagrun(dr.id, session=session)
+            last_dagrun = DagRun.get_previous_scheduled_dagrun(dr.id, session)
         else:
             last_dagrun = DagRun.get_previous_dagrun(dr, session=session)
         # First ever run for this DAG.

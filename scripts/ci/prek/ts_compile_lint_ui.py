@@ -17,14 +17,12 @@
 # under the License.
 from __future__ import annotations
 
-import hashlib
 import sys
 from pathlib import Path
 
 from common_prek_utils import (
     AIRFLOW_CORE_ROOT_PATH,
     AIRFLOW_CORE_SOURCES_PATH,
-    AIRFLOW_ROOT_PATH,
     run_command,
     temporary_tsc_project,
 )
@@ -47,46 +45,18 @@ if __name__ == "__main__":
     ]
     all_non_yaml_files = [file for file in files if not file.endswith(".yaml")]
     print("All non-YAML files:", all_non_yaml_files)
-    all_eslint_files = [file for file in files if file.endswith((".js", ".ts", ".tsx"))]
     all_ts_files = [file for file in files if file.endswith(".ts") or file.endswith(".tsx")]
     if all_ts_files:
         all_ts_files.append("src/vite-env.d.ts")
     print("All TypeScript files:", all_ts_files)
 
-    hash_file = AIRFLOW_ROOT_PATH / ".build" / "ui" / "pnpm-install-hash.txt"
-    node_modules = dir / "node_modules"
-    hasher = hashlib.sha256()
-    for hashed_file_name in ("package.json", "pnpm-lock.yaml"):
-        file_bytes = (dir / hashed_file_name).read_bytes()
-        hasher.update(f"{hashed_file_name}:{len(file_bytes)}:".encode())
-        hasher.update(file_bytes)
-    current_hash = hasher.hexdigest()
-    stored_hash = hash_file.read_text().strip() if hash_file.exists() else ""
-
-    # A stored hash only proves node_modules matched the lockfile when it was written; guard
-    # against node_modules having been modified afterwards (e.g. a manual `pnpm install`).
-    cache_valid = (
-        node_modules.is_dir()
-        and current_hash == stored_hash
-        and hash_file.stat().st_mtime >= node_modules.stat().st_mtime
-    )
-    if cache_valid:
-        print("pnpm deps unchanged — skipping install.")
-    else:
-        run_command(["pnpm", "install", "--frozen-lockfile", "--config.confirmModulesPurge=false"], cwd=dir)
-        hash_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp_hash_file = hash_file.with_suffix(".tmp")
-        tmp_hash_file.write_text(current_hash)
-        tmp_hash_file.replace(hash_file)
+    run_command(["pnpm", "config", "set", "store-dir", ".pnpm-store"], cwd=dir)
+    run_command(["pnpm", "install", "--frozen-lockfile", "--config.confirmModulesPurge=false"], cwd=dir)
     if any("/openapi/" in file for file in original_files):
         run_command(["pnpm", "codegen"], cwd=dir)
     if all_non_yaml_files:
-        if all_eslint_files:
-            run_command(["pnpm", "oxlint", "--fix", *all_eslint_files], cwd=dir)
-            run_command(["pnpm", "eslint", "--fix", *all_eslint_files], cwd=dir)
-        run_command(
-            ["pnpm", "oxfmt", "--write", "--no-error-on-unmatched-pattern", *all_non_yaml_files], cwd=dir
-        )
+        run_command(["pnpm", "eslint", "--fix", *all_non_yaml_files], cwd=dir)
+        run_command(["pnpm", "prettier", "--write", *all_non_yaml_files], cwd=dir)
     if all_ts_files:
         with temporary_tsc_project(dir / "tsconfig.app.json", all_ts_files) as tsc_project:
             run_command(["pnpm", "tsc", "--p", tsc_project.name], cwd=dir)

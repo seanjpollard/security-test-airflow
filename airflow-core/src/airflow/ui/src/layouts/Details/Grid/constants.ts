@@ -19,20 +19,9 @@
 
 // Grid layout constants - shared between Grid and Gantt for alignment
 export const ROW_HEIGHT = 20;
-/** Height of a task bar / badge within a row — matches the unmapped GridTI badge height. */
+/** Height of a task bar / badge within a row — matches the GridTI badge height. */
 export const TASK_BAR_HEIGHT_PX = 14;
 export const GRID_HEADER_PADDING_PX = 16; // pt={4} = 4 * 4 = 16px
-/** Narrowest the task name column gets; it also pins the older-runs button when the Grid scrolls. */
-export const TASK_NAME_COLUMN_MIN_WIDTH_PX = 200;
-/**
- * Strip kept clear at the Grid's inline end, where whatever sits there covers the run columns: the
- * vertical scrollbar, which overlay scrollbars leave inside clientWidth instead of outside it
- * (#69447), and the details panel's collapse button. The spacer holds it open at the end of the
- * content and the run reveal keeps out of it, so both read it from here.
- */
-export const SCROLLBAR_SPACER_WIDTH_PX = 16;
-/** Widened to this while the pinned newer/reset buttons are shown, which cover more of that edge. */
-export const PINNED_RUN_BUTTONS_WIDTH_PX = 32;
 export const GRID_HEADER_HEIGHT_PX = 100; // height="100px" for duration bars
 
 // Gantt chart's x-axis height (time labels at top of chart)
@@ -52,11 +41,3 @@ export const BUNDLE_VERSION_INDICATOR_LEFT = -2; // Position from left for bundl
 export const BUNDLE_VERSION_ICON_SIZE = 15; // Size of the git commit icon
 export const DAG_VERSION_INDICATOR_HEIGHT = 104; // Height of the vertical line indicator
 export const VERSION_INDICATOR_Z_INDEX = 1; // Z-index for version indicators
-export const SELECTED_TASK_OUTLINE_COLOR = {
-  dark: "brand.contrast",
-  light: "brand.solid",
-} as const;
-
-// Render a gradient to indicate a saved note on a Dag run or task instance
-export const NOTE_GRADIENT =
-  "linear-gradient(45deg, var(--chakra-colors-color-palette-solid) calc(100% - 8px), var(--chakra-colors-color-palette-emphasized) calc(100% - 8px))";

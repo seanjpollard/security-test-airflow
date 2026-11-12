@@ -20,7 +20,6 @@ from datetime import timedelta
 from unittest import mock
 
 import pytest
-from sqlalchemy.orm import Session
 
 from airflow._shared.timezones import timezone
 from airflow.jobs.job import Job
@@ -47,7 +46,7 @@ class TestMonitorEndpoint:
 
 class TestGetHealth(TestMonitorEndpoint):
     @provide_session
-    def test_healthy_scheduler_status(self, test_client, *, session: Session):
+    def test_healthy_scheduler_status(self, test_client, session):
         last_scheduler_heartbeat_for_testing_1 = timezone.utcnow()
         job = Job(state=State.RUNNING, latest_heartbeat=last_scheduler_heartbeat_for_testing_1)
         SchedulerJobRunner(job=job)
@@ -66,7 +65,7 @@ class TestGetHealth(TestMonitorEndpoint):
         )
 
     @provide_session
-    def test_unhealthy_scheduler_is_slow(self, test_client, *, session: Session):
+    def test_unhealthy_scheduler_is_slow(self, test_client, session):
         last_scheduler_heartbeat_for_testing_2 = timezone.utcnow() - timedelta(minutes=1)
         job = Job(state=State.RUNNING, latest_heartbeat=last_scheduler_heartbeat_for_testing_2)
         SchedulerJobRunner(job=job)
@@ -94,9 +93,9 @@ class TestGetHealth(TestMonitorEndpoint):
         assert body["scheduler"]["status"] == "unhealthy"
         assert body["scheduler"]["latest_scheduler_heartbeat"] is None
 
-    @mock.patch("airflow.api.common.airflow_health.get_jobs_health")
-    def test_unhealthy_metadatabase_status(self, mock_get_jobs_health, test_client):
-        mock_get_jobs_health.side_effect = Exception
+    @mock.patch.object(SchedulerJobRunner, "most_recent_job")
+    def test_unhealthy_metadatabase_status(self, most_recent_job_mock, test_client):
+        most_recent_job_mock.side_effect = Exception
         response = test_client.get("/monitor/health")
 
         assert response.status_code == 200
@@ -112,17 +111,14 @@ class TestGetHealth(TestMonitorEndpoint):
             "scheduler": {
                 "status": HEALTHY,
                 "latest_scheduler_heartbeat": "2024-11-23T11:09:16.663124+00:00",
-                "detailed_status": HEALTHY,
             },
             "triggerer": {
                 "status": HEALTHY,
                 "latest_triggerer_heartbeat": "2024-11-23T11:09:15.815483+00:00",
-                "detailed_status": HEALTHY,
             },
             "dag_processor": {
                 "status": HEALTHY,
                 "latest_dag_processor_heartbeat": "2024-11-23T11:09:15.815483+00:00",
-                "detailed_status": HEALTHY,
             },
         }
 
@@ -137,70 +133,16 @@ class TestGetHealth(TestMonitorEndpoint):
         assert body["triggerer"]["status"] == HEALTHY
 
     @mock.patch("airflow.api_fastapi.core_api.routes.public.monitor.get_airflow_health")
-    def test_health_includes_instance_team_names_and_bundle_names(self, mock_get_airflow_health, test_client):
-        mock_get_airflow_health.return_value = {
-            "metadatabase": {"status": HEALTHY},
-            "scheduler": {
-                "status": HEALTHY,
-                "latest_scheduler_heartbeat": "2024-11-23T11:09:16.663124+00:00",
-                "detailed_status": HEALTHY,
-                "instances": [
-                    {
-                        "status": HEALTHY,
-                        "hostname": "scheduler-1",
-                        "latest_scheduler_heartbeat": "2024-11-23T11:09:16.663124+00:00",
-                    }
-                ],
-            },
-            "triggerer": {
-                "status": HEALTHY,
-                "latest_triggerer_heartbeat": "2024-11-23T11:09:15.815483+00:00",
-                "detailed_status": HEALTHY,
-                "instances": [
-                    {
-                        "status": HEALTHY,
-                        "hostname": "triggerer-1",
-                        "latest_triggerer_heartbeat": "2024-11-23T11:09:15.815483+00:00",
-                        "team_names": ["team-a"],
-                    }
-                ],
-            },
-            "dag_processor": {
-                "status": HEALTHY,
-                "latest_dag_processor_heartbeat": "2024-11-23T11:09:15.815483+00:00",
-                "detailed_status": HEALTHY,
-                "instances": [
-                    {
-                        "status": HEALTHY,
-                        "hostname": "dag-processor-1",
-                        "latest_dag_processor_heartbeat": "2024-11-23T11:09:15.815483+00:00",
-                        "bundle_names": ["bundle-a"],
-                    }
-                ],
-            },
-        }
-
-        response = test_client.get("/monitor/health")
-
-        assert response.status_code == 200
-        body = response.json()
-        assert body["triggerer"]["instances"][0]["team_names"] == ["team-a"]
-        assert body["dag_processor"]["instances"][0]["bundle_names"] == ["bundle-a"]
-        assert body["scheduler"]["instances"][0]["hostname"] == "scheduler-1"
-
-    @mock.patch("airflow.api_fastapi.core_api.routes.public.monitor.get_airflow_health")
     def test_health_without_dag_processor(self, mock_get_airflow_health, test_client):
         mock_get_airflow_health.return_value = {
             "metadatabase": {"status": HEALTHY},
             "scheduler": {
                 "status": HEALTHY,
                 "latest_scheduler_heartbeat": "2024-11-23T11:09:16.663124+00:00",
-                "detailed_status": HEALTHY,
             },
             "triggerer": {
                 "status": HEALTHY,
                 "latest_triggerer_heartbeat": "2024-11-23T11:09:15.815483+00:00",
-                "detailed_status": HEALTHY,
             },
         }
 

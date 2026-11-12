@@ -80,7 +80,6 @@ class ContextManagerClassDecoratorChecker(ast.NodeVisitor):
         problematic_decorators = {
             "conf_vars",
             "env_vars",
-            "mock_plugin_manager",
             "contextlib.contextmanager",
             "contextmanager",
         }

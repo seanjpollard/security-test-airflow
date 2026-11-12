@@ -17,8 +17,6 @@
 # under the License.
 from __future__ import annotations
 
-import ftplib
-import posixpath
 from collections.abc import Sequence
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING
@@ -29,9 +27,6 @@ from airflow.providers.ftp.hooks.ftp import FTPHook
 
 if TYPE_CHECKING:
     from airflow.sdk import Context
-
-
-SKIPPED_SAMPLE_SIZE = 10
 
 
 class FTPToS3Operator(BaseOperator):
@@ -65,20 +60,9 @@ class FTPToS3Operator(BaseOperator):
     :param gzip: If True, the file will be compressed locally
     :param acl_policy: String specifying the canned ACL policy for the file being
         uploaded to the S3 bucket.
-    :param fail_on_file_not_exist: If True, operator fails when a source file does not
-        exist on the FTP server. If False, the operator logs a warning and skips the
-        transfer. Default is True.
     """
 
-    template_fields: Sequence[str] = (
-        "ftp_path",
-        "s3_bucket",
-        "s3_key",
-        "ftp_filenames",
-        "s3_filenames",
-        "ftp_conn_id",
-        "aws_conn_id",
-    )
+    template_fields: Sequence[str] = ("ftp_path", "s3_bucket", "s3_key", "ftp_filenames", "s3_filenames")
 
     def __init__(
         self,
@@ -94,7 +78,6 @@ class FTPToS3Operator(BaseOperator):
         encrypt: bool = False,
         gzip: bool = False,
         acl_policy: str | None = None,
-        fail_on_file_not_exist: bool = True,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -109,31 +92,25 @@ class FTPToS3Operator(BaseOperator):
         self.encrypt = encrypt
         self.gzip = gzip
         self.acl_policy = acl_policy
-        self.fail_on_file_not_exist = fail_on_file_not_exist
         self.s3_hook: S3Hook | None = None
         self.ftp_hook: FTPHook | None = None
 
     def __upload_to_s3_from_ftp(self, remote_filename, s3_file_key):
-        try:
-            with NamedTemporaryFile() as local_tmp_file:
-                self.ftp_hook.retrieve_file(
-                    remote_full_path=remote_filename, local_full_path_or_buffer=local_tmp_file.name
-                )
-                self.s3_hook.load_file(
-                    filename=local_tmp_file.name,
-                    key=s3_file_key,
-                    bucket_name=self.s3_bucket,
-                    replace=self.replace,
-                    encrypt=self.encrypt,
-                    gzip=self.gzip,
-                    acl_policy=self.acl_policy,
-                )
-                self.log.info("File upload to %s", s3_file_key)
-        except ftplib.error_perm as e:
-            if "550" in str(e) and not self.fail_on_file_not_exist:
-                self.log.info("File %s not found on FTP server. Skipping transfer.", remote_filename)
-                return
-            raise
+        with NamedTemporaryFile() as local_tmp_file:
+            self.ftp_hook.retrieve_file(
+                remote_full_path=remote_filename, local_full_path_or_buffer=local_tmp_file.name
+            )
+
+            self.s3_hook.load_file(
+                filename=local_tmp_file.name,
+                key=s3_file_key,
+                bucket_name=self.s3_bucket,
+                replace=self.replace,
+                encrypt=self.encrypt,
+                gzip=self.gzip,
+                acl_policy=self.acl_policy,
+            )
+            self.log.info("File upload to %s", s3_file_key)
 
     def execute(self, context: Context):
         self.ftp_hook = FTPHook(ftp_conn_id=self.ftp_conn_id)
@@ -147,37 +124,19 @@ class FTPToS3Operator(BaseOperator):
                     path=self.ftp_path,
                 )
 
-                ftp_prefix: str = self.ftp_filenames
-                if ftp_prefix == "*":
+                if self.ftp_filenames == "*":
                     files = list_dir
                 else:
-                    # ``nlst`` may qualify entries with the listed directory, so the prefix applies
-                    # to the file name, while the substring test mirrors the old rule over the whole entry.
-                    files, dropped = [], []
-                    for entry in list_dir:
-                        if posixpath.basename(entry).startswith(ftp_prefix):
-                            files.append(entry)
-                        elif ftp_prefix in entry:
-                            dropped.append(entry)
-                    if dropped:
-                        omitted = len(dropped) - SKIPPED_SAMPLE_SIZE
-                        self.log.warning(
-                            "%d file(s) contain %r but are not selected, because a string prefix "
-                            "matches only at the start of the filename: %s%s",
-                            len(dropped),
-                            ftp_prefix,
-                            dropped[:SKIPPED_SAMPLE_SIZE],
-                            f" and {omitted} more" if omitted > 0 else "",
-                        )
+                    ftp_filename: str = self.ftp_filenames
+                    files = [f for f in list_dir if ftp_filename in f]
 
                 for file in files:
                     self.log.info("Moving file %s", file)
 
-                    # The entry is kept as listed for retrieval, but the destination key is
-                    # built from the file name so it never embeds the source directory.
-                    filename = posixpath.basename(file)
                     if self.s3_filenames and isinstance(self.s3_filenames, str):
-                        filename = filename.replace(ftp_prefix, self.s3_filenames, 1)
+                        filename = file.replace(self.ftp_filenames, self.s3_filenames)
+                    else:
+                        filename = file
 
                     s3_file_key = f"{self.s3_key}{filename}"
                     self.__upload_to_s3_from_ftp(file, s3_file_key)

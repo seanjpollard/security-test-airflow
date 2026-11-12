@@ -67,11 +67,7 @@ class TestPodLauncher:
                 "CeleryExecutor,KubernetesExecutor",
                 False,
                 False,
-                [
-                    "release-name-airflow-scheduler",
-                    "release-name-airflow-worker",
-                    "release-name-airflow-worker-kubernetes",
-                ],
+                ["release-name-airflow-scheduler", "release-name-airflow-worker"],
             ),
             # Add triggerer SA if enabled
             (
@@ -83,7 +79,6 @@ class TestPodLauncher:
                 [
                     "release-name-airflow-scheduler",
                     "release-name-airflow-worker",
-                    "release-name-airflow-worker-kubernetes",
                     "release-name-airflow-triggerer",
                 ],
             ),

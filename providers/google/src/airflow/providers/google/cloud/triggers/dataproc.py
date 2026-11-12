@@ -20,14 +20,13 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import re
 import time
 from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, Any
 
 from asgiref.sync import sync_to_async
-from google.api_core.exceptions import AlreadyExists, NotFound
+from google.api_core.exceptions import NotFound
 from google.cloud.dataproc_v1 import Batch, Cluster, ClusterStatus, Job, JobStatus
 
 from airflow.providers.common.compat.sdk import AirflowException
@@ -104,14 +103,10 @@ class DataprocSubmitTrigger(DataprocBaseTrigger):
         Service Account Token Creator IAM role to the directly preceding identity, with first
         account from the list granting this role to the originating account (templated).
     :param polling_interval_seconds: polling period in seconds to check for the status
-    :param execution_deadline: Optional absolute timestamp (in seconds since the epoch) after
-        which the task is considered timed out. On expiry the trigger cancels the Dataproc job
-        (unless ``cancel_on_kill`` is False) and emits a ``TIMED_OUT`` event.
     """
 
-    def __init__(self, job_id: str, execution_deadline: float | None = None, **kwargs):
+    def __init__(self, job_id: str, **kwargs):
         self.job_id = job_id
-        self.execution_deadline = execution_deadline
         super().__init__(**kwargs)
 
     def serialize(self):
@@ -125,7 +120,6 @@ class DataprocSubmitTrigger(DataprocBaseTrigger):
                 "impersonation_chain": self.impersonation_chain,
                 "polling_interval_seconds": self.polling_interval_seconds,
                 "cancel_on_kill": self.cancel_on_kill,
-                "execution_deadline": self.execution_deadline,
             },
         )
 
@@ -141,51 +135,49 @@ class DataprocSubmitTrigger(DataprocBaseTrigger):
     if not AIRFLOW_V_3_3_PLUS:
 
         @provide_session
-        def get_task_instance(self, *, session: Session) -> TaskInstance:
+        def get_task_instance(self, session: Session) -> TaskInstance:
             """
             Get the task instance for the current task.
 
             :param session: Sqlalchemy session
             """
-            ti = self.task_instance
-            if ti is None:
-                raise RuntimeError("task_instance is not set on the trigger")
             task_instance = session.scalar(
                 select(TaskInstance).where(
-                    TaskInstance.dag_id == ti.dag_id,
-                    TaskInstance.task_id == ti.task_id,
-                    TaskInstance.run_id == ti.run_id,
-                    TaskInstance.map_index == ti.map_index,
+                    TaskInstance.dag_id == self.task_instance.dag_id,
+                    TaskInstance.task_id == self.task_instance.task_id,
+                    TaskInstance.run_id == self.task_instance.run_id,
+                    TaskInstance.map_index == self.task_instance.map_index,
                 )
             )
             if task_instance is None:
-                msg = (
-                    f"TaskInstance with dag_id: {ti.dag_id}, task_id: {ti.task_id}, "
-                    f"run_id: {ti.run_id} and map_index: {ti.map_index} is not found"
+                raise AirflowException(
+                    "TaskInstance with dag_id: %s,task_id: %s, run_id: %s and map_index: %s is not found",
+                    self.task_instance.dag_id,
+                    self.task_instance.task_id,
+                    self.task_instance.run_id,
+                    self.task_instance.map_index,
                 )
-                raise AirflowException(msg)
             return task_instance
 
         async def get_task_state(self):
             from airflow.sdk.execution_time.task_runner import RuntimeTaskInstance
 
-            ti = self.task_instance
-            if ti is None:
-                raise RuntimeError("task_instance is not set on the trigger")
             task_states_response = await sync_to_async(RuntimeTaskInstance.get_task_states)(
-                dag_id=ti.dag_id,
-                task_ids=[ti.task_id],
-                run_ids=[ti.run_id],
-                map_index=ti.map_index,
+                dag_id=self.task_instance.dag_id,
+                task_ids=[self.task_instance.task_id],
+                run_ids=[self.task_instance.run_id],
+                map_index=self.task_instance.map_index,
             )
             try:
-                task_state = task_states_response[ti.run_id][ti.task_id]
+                task_state = task_states_response[self.task_instance.run_id][self.task_instance.task_id]
             except Exception:
-                msg = (
-                    f"TaskInstance with dag_id: {ti.dag_id}, task_id: {ti.task_id}, "
-                    f"run_id: {ti.run_id} and map_index: {ti.map_index} is not found"
+                raise AirflowException(
+                    "TaskInstance with dag_id: %s, task_id: %s, run_id: %s and map_index: %s is not found",
+                    self.task_instance.dag_id,
+                    self.task_instance.task_id,
+                    self.task_instance.run_id,
+                    self.task_instance.map_index,
                 )
-                raise AirflowException(msg)
             return task_state
 
         async def safe_to_cancel(self) -> bool:
@@ -210,40 +202,12 @@ class DataprocSubmitTrigger(DataprocBaseTrigger):
 
         try:
             while True:
-                remaining = None if self.execution_deadline is None else self.execution_deadline - time.time()
-                if remaining is not None and remaining <= 0:
-                    if self.cancel_on_kill:
-                        self.log.info("Job %s exceeded execution_timeout; cancelling it.", self.job_id)
-                        try:
-                            await sync_to_async(self.get_sync_hook().cancel_job)(
-                                job_id=self.job_id, project_id=self.project_id, region=self.region
-                            )
-                        except Exception:
-                            self.log.exception("Failed to cancel job %s after execution timeout", self.job_id)
-                    yield TriggerEvent(
-                        {
-                            "job_id": self.job_id,
-                            "job_state": "TIMED_OUT",
-                            "message": f"Job {self.job_id} exceeded the task's execution_timeout "
-                            "while deferred.",
-                        }
-                    )
-                    return
-                try:
-                    job = await asyncio.wait_for(
-                        hook.get_job(project_id=self.project_id, region=self.region, job_id=self.job_id),
-                        timeout=remaining,
-                    )
-                except TimeoutError:
-                    continue
+                job = await hook.get_job(project_id=self.project_id, region=self.region, job_id=self.job_id)
                 state = job.status.state
                 self.log.info("Dataproc job: %s is in state: %s", self.job_id, state)
                 if state in (JobStatus.State.DONE, JobStatus.State.CANCELLED, JobStatus.State.ERROR):
                     break
-                sleep_seconds = self.polling_interval_seconds
-                if self.execution_deadline is not None:
-                    sleep_seconds = min(sleep_seconds, max(self.execution_deadline - time.time(), 0))
-                await asyncio.sleep(sleep_seconds)
+                await asyncio.sleep(self.polling_interval_seconds)
             yield TriggerEvent(
                 {"job_id": self.job_id, "job_state": JobStatus.State(state).name, "job": Job.to_dict(job)}
             )
@@ -266,7 +230,6 @@ class DataprocSubmitTrigger(DataprocBaseTrigger):
                 except Exception as e:
                     self.log.error("Failed to cancel the job: %s with error : %s", self.job_id, str(e))
                     raise e
-            raise
 
 
 class DataprocSubmitJobDirectTrigger(DataprocBaseTrigger):
@@ -276,10 +239,6 @@ class DataprocSubmitJobDirectTrigger(DataprocBaseTrigger):
     Used for direct-to-triggerer functionality where job submission and polling
     are handled entirely by the triggerer without requiring a worker.
 
-    Unless the job resource already names the job, the trigger assigns a job id of its own before
-    submitting, so the job stays identifiable when the trigger is torn down or re-created while the
-    submit call is in flight.
-
     :param job: The job resource dict to submit.
     :param project_id: Google Cloud Project where the job is running.
     :param region: The Cloud Dataproc region in which to handle the request.
@@ -287,8 +246,7 @@ class DataprocSubmitJobDirectTrigger(DataprocBaseTrigger):
     :param impersonation_chain: Optional service account to impersonate using short-term credentials.
     :param polling_interval_seconds: Polling period in seconds to check for the status.
     :param cancel_on_kill: Flag indicating whether to cancel the job when on_kill is called.
-    :param request_id: Optional unique id used to identify the request. Defaults to the job id the
-        trigger assigns, which makes a re-submission by a restarted triggerer a no-op.
+    :param request_id: Optional unique id used to identify the request.
     """
 
     def __init__(
@@ -317,83 +275,61 @@ class DataprocSubmitJobDirectTrigger(DataprocBaseTrigger):
             },
         )
 
-    def _build_assigned_job_id(self) -> str | None:
-        """Derive the job id to assign for this deferral, or None when the trigger should not name it."""
-        ti = self.task_instance
-        if ti is None or self.trigger_id is None or (self.job.get("reference") or {}).get("job_id"):
-            return None
-        # ti.id is a per-try uuid7, so the job id stays unique even where two Airflow deployments
-        # share a Dataproc project; Airflow 2 has no such column and falls back to a task identity
-        # unique only within one deployment. trigger_id separates two deferrals of one attempt.
-        attempt = getattr(ti, "id", None) or (
-            f"{ti.dag_id}:{ti.task_id}:{ti.run_id}:{ti.map_index}:{ti.try_number}"
-        )
-        identity = f"{self.trigger_id}:{attempt}"
-        return f"airflow-{hashlib.sha256(identity.encode()).hexdigest()[:24]}"
-
     async def on_kill(self) -> None:
         """Cancel the Dataproc job when the task is killed by a user action."""
         if self.job_id and self.cancel_on_kill:
             self.log.info("Cancelling Dataproc job: %s.", self.job_id)
-            try:
-                await sync_to_async(self.get_sync_hook().cancel_job)(
-                    job_id=self.job_id, project_id=self.project_id, region=self.region
-                )
-            except NotFound:
-                # The kill can arrive while the submit call is in flight, so the job the trigger
-                # named may never have reached Dataproc.
-                self.log.info("Dataproc job: %s does not exist, nothing to cancel.", self.job_id)
-                return
+            await sync_to_async(self.get_sync_hook().cancel_job)(
+                job_id=self.job_id, project_id=self.project_id, region=self.region
+            )
             self.log.info("Job: %s is cancelled.", self.job_id)
 
     if not AIRFLOW_V_3_3_PLUS:
 
         @provide_session
-        def get_task_instance(self, *, session: Session) -> TaskInstance:
+        def get_task_instance(self, session: Session) -> TaskInstance:
             """
             Get the task instance for the current task.
 
             :param session: Sqlalchemy session
             """
-            ti = self.task_instance
-            if ti is None:
-                raise RuntimeError("task_instance is not set on the trigger")
             task_instance = session.scalar(
                 select(TaskInstance).where(
-                    TaskInstance.dag_id == ti.dag_id,
-                    TaskInstance.task_id == ti.task_id,
-                    TaskInstance.run_id == ti.run_id,
-                    TaskInstance.map_index == ti.map_index,
+                    TaskInstance.dag_id == self.task_instance.dag_id,
+                    TaskInstance.task_id == self.task_instance.task_id,
+                    TaskInstance.run_id == self.task_instance.run_id,
+                    TaskInstance.map_index == self.task_instance.map_index,
                 )
             )
             if task_instance is None:
-                msg = (
-                    f"TaskInstance with dag_id: {ti.dag_id}, task_id: {ti.task_id}, "
-                    f"run_id: {ti.run_id} and map_index: {ti.map_index} is not found"
+                raise RuntimeError(
+                    "TaskInstance with dag_id: %s,task_id: %s, run_id: %s and map_index: %s is not found",
+                    self.task_instance.dag_id,
+                    self.task_instance.task_id,
+                    self.task_instance.run_id,
+                    self.task_instance.map_index,
                 )
-                raise RuntimeError(msg)
             return task_instance
 
         async def get_task_state(self):
             from airflow.sdk.execution_time.task_runner import RuntimeTaskInstance
 
-            ti = self.task_instance
-            if ti is None:
-                raise RuntimeError("task_instance is not set on the trigger")
             task_states_response = await sync_to_async(RuntimeTaskInstance.get_task_states)(
-                dag_id=ti.dag_id,
-                task_ids=[ti.task_id],
-                run_ids=[ti.run_id],
-                map_index=ti.map_index,
+                dag_id=self.task_instance.dag_id,
+                task_ids=[self.task_instance.task_id],
+                run_ids=[self.task_instance.run_id],
+                map_index=self.task_instance.map_index,
             )
             try:
-                task_state = task_states_response[ti.run_id][ti.task_id]
+                task_state = task_states_response[self.task_instance.run_id][self.task_instance.task_id]
             except Exception:
-                msg = (
-                    f"TaskInstance with dag_id: {ti.dag_id}, task_id: {ti.task_id}, "
-                    f"run_id: {ti.run_id} and map_index: {ti.map_index} is not found"
+                raise RuntimeError(
+                    "TaskInstance with dag_id: %s, task_id: %s, run_id: %s and map_index: %s is not found",
+                    self.task_instance.dag_id,
+                    self.task_instance.task_id,
+                    self.task_instance.run_id,
+                    self.task_instance.map_index,
                 )
-                raise RuntimeError(msg)
             return task_state
 
         async def safe_to_cancel(self) -> bool:
@@ -413,31 +349,15 @@ class DataprocSubmitJobDirectTrigger(DataprocBaseTrigger):
     async def run(self) -> AsyncIterator[TriggerEvent]:
         try:
             hook = self.get_async_hook()
-            job_to_submit = self.job
-            assigned_job_id = self._build_assigned_job_id()
-            if assigned_job_id is not None:
-                # Naming the job up front keeps its id known when the submit call is interrupted, and
-                # sends a re-submission by a restarted triggerer back to the job already running.
-                reference = {**(self.job.get("reference") or {}), "job_id": assigned_job_id}
-                job_to_submit = {**self.job, "reference": reference}
-                self.job_id = assigned_job_id
             self.log.info("Submitting Dataproc job.")
-            try:
-                job_object = await hook.submit_job(
-                    project_id=self.project_id,
-                    region=self.region,
-                    job=job_to_submit,
-                    request_id=self.request_id or assigned_job_id,
-                )
-            except AlreadyExists:
-                # Only a job this trigger named can be assumed to be its own earlier submission; a
-                # job id the caller chose is theirs to keep unique.
-                if assigned_job_id is None:
-                    raise
-                self.log.info("Dataproc job %s was already submitted, resuming polling.", self.job_id)
-            else:
-                self.job_id = job_object.reference.job_id
-                self.log.info("Dataproc job %s submitted successfully.", self.job_id)
+            job_object = await hook.submit_job(
+                project_id=self.project_id,
+                region=self.region,
+                job=self.job,
+                request_id=self.request_id,
+            )
+            self.job_id = job_object.reference.job_id
+            self.log.info("Dataproc job %s submitted successfully.", self.job_id)
 
             while True:
                 job = await hook.get_job(project_id=self.project_id, region=self.region, job_id=self.job_id)
@@ -466,12 +386,9 @@ class DataprocSubmitJobDirectTrigger(DataprocBaseTrigger):
                                 "job_state": ClusterStatus.State.DELETING.name,  # type: ignore[attr-defined]
                             }
                         )
-                except NotFound:
-                    self.log.info("Dataproc job: %s does not exist, nothing to cancel.", self.job_id)
                 except Exception as e:
                     self.log.error("Failed to cancel the job: %s with error : %s", self.job_id, str(e))
                     raise e
-            raise
 
 
 class DataprocClusterTrigger(DataprocBaseTrigger):
@@ -514,46 +431,44 @@ class DataprocClusterTrigger(DataprocBaseTrigger):
     if not AIRFLOW_V_3_0_PLUS:
 
         @provide_session
-        def get_task_instance(self, *, session: Session) -> TaskInstance:
-            ti = self.task_instance
-            if ti is None:
-                raise RuntimeError("task_instance is not set on the trigger")
+        def get_task_instance(self, session: Session) -> TaskInstance:
             task_instance = session.scalar(
                 select(TaskInstance).where(
-                    TaskInstance.dag_id == ti.dag_id,
-                    TaskInstance.task_id == ti.task_id,
-                    TaskInstance.run_id == ti.run_id,
-                    TaskInstance.map_index == ti.map_index,
+                    TaskInstance.dag_id == self.task_instance.dag_id,
+                    TaskInstance.task_id == self.task_instance.task_id,
+                    TaskInstance.run_id == self.task_instance.run_id,
+                    TaskInstance.map_index == self.task_instance.map_index,
                 )
             )
             if task_instance is None:
-                msg = (
-                    f"TaskInstance with dag_id: {ti.dag_id}, task_id: {ti.task_id}, "
-                    f"run_id: {ti.run_id} and map_index: {ti.map_index} is not found"
+                raise AirflowException(
+                    "TaskInstance with dag_id: %s,task_id: %s, run_id: %s and map_index: %s is not found.",
+                    self.task_instance.dag_id,
+                    self.task_instance.task_id,
+                    self.task_instance.run_id,
+                    self.task_instance.map_index,
                 )
-                raise AirflowException(msg)
             return task_instance
 
     async def get_task_state(self):
         from airflow.sdk.execution_time.task_runner import RuntimeTaskInstance
 
-        ti = self.task_instance
-        if ti is None:
-            raise RuntimeError("task_instance is not set on the trigger")
         task_states_response = await sync_to_async(RuntimeTaskInstance.get_task_states)(
-            dag_id=ti.dag_id,
-            task_ids=[ti.task_id],
-            run_ids=[ti.run_id],
-            map_index=ti.map_index,
+            dag_id=self.task_instance.dag_id,
+            task_ids=[self.task_instance.task_id],
+            run_ids=[self.task_instance.run_id],
+            map_index=self.task_instance.map_index,
         )
         try:
-            task_state = task_states_response[ti.run_id][ti.task_id]
+            task_state = task_states_response[self.task_instance.run_id][self.task_instance.task_id]
         except Exception:
-            msg = (
-                f"TaskInstance with dag_id: {ti.dag_id}, task_id: {ti.task_id}, "
-                f"run_id: {ti.run_id} and map_index: {ti.map_index} is not found"
+            raise AirflowException(
+                "TaskInstance with dag_id: %s, task_id: %s, run_id: %s and map_index: %s is not found",
+                self.task_instance.dag_id,
+                self.task_instance.task_id,
+                self.task_instance.run_id,
+                self.task_instance.map_index,
             )
-            raise AirflowException(msg)
         return task_state
 
     async def safe_to_cancel(self) -> bool:
@@ -617,9 +532,7 @@ class DataprocClusterTrigger(DataprocBaseTrigger):
                     self.log.info("Deleted cluster %s during cancellation.", self.cluster_name)
             except Exception as e:
                 self.log.error("Error during cancellation handling: %s", e)
-                msg = f"Error during cancellation handling: {e}"
-                raise AirflowException(msg)
-            raise
+                raise AirflowException("Error during cancellation handling: %s", e)
 
     async def fetch_cluster(self) -> Cluster:
         """Fetch the cluster status."""
@@ -681,10 +594,8 @@ class DataprocBatchTrigger(DataprocBaseTrigger):
         )
 
     async def run(self):
-        hook = self.get_async_hook()
-
         while True:
-            batch = await hook.get_batch(
+            batch = await self.get_async_hook().get_batch(
                 project_id=self.project_id, region=self.region, batch_id=self.batch_id
             )
             state = batch.state

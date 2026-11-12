@@ -44,10 +44,7 @@ class TableauJobStatusSensor(BaseSensorOperator):
         of an error or cancellation, to account for transient errors.
     """
 
-    template_fields: Sequence[str] = (
-        "job_id",
-        "tableau_conn_id",
-    )
+    template_fields: Sequence[str] = ("job_id",)
 
     def __init__(
         self,

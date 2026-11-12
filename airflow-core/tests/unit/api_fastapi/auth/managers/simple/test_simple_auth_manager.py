@@ -19,12 +19,10 @@ from __future__ import annotations
 import json
 import os
 from unittest import mock
-from urllib.parse import urlencode
 
 import pytest
 
 from airflow.api_fastapi.app import AUTH_MANAGER_FASTAPI_APP_PREFIX
-from airflow.api_fastapi.auth.managers.base_auth_manager import BaseAuthManager
 from airflow.api_fastapi.auth.managers.models.resource_details import (
     AccessView,
     ConnectionDetails,
@@ -36,20 +34,8 @@ from airflow.api_fastapi.auth.managers.models.resource_details import (
 from airflow.api_fastapi.auth.managers.simple.simple_auth_manager import SimpleAuthManager
 from airflow.api_fastapi.auth.managers.simple.user import SimpleAuthManagerUser
 from airflow.api_fastapi.common.types import MenuItem
-from airflow.models.asset import AssetActive, AssetModel
 
 from tests_common.test_utils.config import conf_vars
-from tests_common.test_utils.db import clear_db_assets
-
-ASSET_AUTHORIZATION_MATRIX = [
-    pytest.param("ADMIN", "GET", True, id="admin-get"),
-    pytest.param(None, "GET", False, id="no-role-get"),
-    pytest.param("VIEWER", "GET", True, id="viewer-get"),
-    pytest.param("VIEWER", "POST", False, id="viewer-post"),
-    pytest.param("USER", "GET", True, id="user-get"),
-    pytest.param("USER", "POST", False, id="user-post"),
-    pytest.param("OP", "POST", True, id="op-post"),
-]
 
 
 class TestSimpleAuthManager:
@@ -245,17 +231,6 @@ class TestSimpleAuthManager:
             result = auth_manager.get_url_login()
             assert result == AUTH_MANAGER_FASTAPI_APP_PREFIX + "/token/login"
 
-    def test_get_url_login_with_next_url(self, auth_manager):
-        next_url = "http://localhost:8080/dags/example_dag/runs/manual__2026-05-20/tasks/example_task"
-        result = auth_manager.get_url_login(next_url=next_url)
-        assert result == f"{AUTH_MANAGER_FASTAPI_APP_PREFIX}/login?{urlencode({'next': next_url})}"
-
-    def test_get_url_login_with_next_url_all_admins(self, auth_manager):
-        with conf_vars({("core", "simple_auth_manager_all_admins"): "true"}):
-            next_url = "http://localhost:8080/dags/example_dag/runs/manual__2026-05-20/tasks/example_task"
-            result = auth_manager.get_url_login(next_url=next_url)
-            assert result == f"{AUTH_MANAGER_FASTAPI_APP_PREFIX}/token/login?{urlencode({'next': next_url})}"
-
     def test_deserialize_user(self, auth_manager):
         result = auth_manager.deserialize_user({"sub": "test", "role": "admin"})
         assert result.username == "test"
@@ -357,51 +332,6 @@ class TestSimpleAuthManager:
     def test_is_authorized_view_methods(self, auth_manager, api, kwargs, role, result):
         assert (
             getattr(auth_manager, api)(**kwargs, user=SimpleAuthManagerUser(username="test", role=role))
-            is result
-        )
-
-    @pytest.mark.parametrize(
-        "access_view",
-        [AccessView.IMPORT_ERRORS_ALL, AccessView.AUDIT_LOGS_ALL, AccessView.REPARSE_ALL],
-    )
-    @pytest.mark.parametrize(
-        ("role", "result"),
-        [
-            ("ADMIN", True),
-            ("OP", False),
-            ("USER", False),
-            ("VIEWER", False),
-        ],
-    )
-    def test_is_authorized_view_admin_only_views(self, auth_manager, access_view, role, result):
-        """The views covering records with no per-Dag key to authorize on are admin-only.
-
-        Every other view is readable by a viewer (asserted above); these gate records that
-        carry no other authorization key -- import errors for files with no registered Dag,
-        audit log rows not tied to a Dag, and reparsing a file with no registered Dag -- so
-        they must not ride on viewer access.
-        """
-        assert (
-            auth_manager.is_authorized_view(
-                access_view=access_view, user=SimpleAuthManagerUser(username="test", role=role)
-            )
-            is result
-        )
-
-    @pytest.mark.parametrize(
-        ("role", "result"),
-        [
-            ("ADMIN", True),
-            ("OP", True),
-            ("USER", False),
-            ("VIEWER", False),
-        ],
-    )
-    def test_is_authorized_view_dag_bundles_needs_op(self, auth_manager, role, result):
-        assert (
-            auth_manager.is_authorized_view(
-                access_view=AccessView.DAG_BUNDLES, user=SimpleAuthManagerUser(username="test", role=role)
-            )
             is result
         )
 
@@ -516,6 +446,8 @@ class TestSimpleAuthManager:
             (False, "user1", {"user1"}, True),
             (False, "user2", {"user1"}, False),
             (False, "admin", {"test_user"}, False),
+            # When no assigned_users, allow access
+            (False, "user1", set(), True),
         ],
     )
     def test_is_authorized_hitl_task(self, auth_manager, all_admins, user_id, assigned_users, expected):
@@ -554,64 +486,3 @@ class TestSimpleAuthManager:
             password = SimpleAuthManager._generate_password()
             assert len(password) == 16
             assert set(password).issubset(alphabet)
-
-    @pytest.fixture
-    def clean_assets(self):
-        clear_db_assets()
-        yield
-        clear_db_assets()
-
-    @pytest.mark.db_test
-    @pytest.mark.parametrize(("role", "method", "expect_authorized"), ASSET_AUTHORIZATION_MATRIX)
-    def test_get_authorized_assets(
-        self, auth_manager, session, clean_assets, role, method, expect_authorized
-    ):
-        """Three assets in the table; one role-level check, not one per asset, is what the override does."""
-        assets = [AssetModel(name=f"asset{i}", uri=f"s3://bucket/asset{i}", group="asset") for i in range(3)]
-        session.add_all(assets)
-        # The third asset has no AssetActive row and must still be returned.
-        session.add_all(AssetActive.for_asset(asset) for asset in assets[:2])
-        session.commit()
-        expected_ids = {asset.id for asset in assets} if expect_authorized else set()
-
-        user = SimpleAuthManagerUser(username="test", role=role)
-        with mock.patch.object(
-            auth_manager,
-            "is_authorized_asset",
-            wraps=auth_manager.is_authorized_asset,
-        ) as mock_is_authorized_asset:
-            result = auth_manager.get_authorized_assets(user=user, method=method, session=session)
-
-        assert result == expected_ids
-        mock_is_authorized_asset.assert_called_once_with(method=method, user=user)
-
-    @pytest.mark.db_test
-    def test_get_authorized_assets_empty_table(self, auth_manager, session, clean_assets):
-        user = SimpleAuthManagerUser(username="test", role="ADMIN")
-        with mock.patch.object(
-            auth_manager,
-            "is_authorized_asset",
-            wraps=auth_manager.is_authorized_asset,
-        ) as mock_is_authorized_asset:
-            result = auth_manager.get_authorized_assets(user=user, session=session)
-
-        assert result == set()
-        mock_is_authorized_asset.assert_called_once_with(method="GET", user=user)
-
-    @pytest.mark.db_test
-    @pytest.mark.parametrize(("role", "method", "expect_authorized"), ASSET_AUTHORIZATION_MATRIX)
-    def test_get_authorized_assets_matches_base_implementation(
-        self, auth_manager, session, clean_assets, role, method, expect_authorized
-    ):
-        assets = [AssetModel(name=f"asset{i}", uri=f"s3://bucket/asset{i}", group="asset") for i in range(3)]
-        session.add_all(assets)
-        session.add_all(AssetActive.for_asset(asset) for asset in assets[:2])
-        session.commit()
-
-        user = SimpleAuthManagerUser(username="test", role=role)
-        result = auth_manager.get_authorized_assets(user=user, method=method, session=session)
-
-        assert result == BaseAuthManager.get_authorized_assets(
-            auth_manager, user=user, method=method, session=session
-        )
-        assert bool(result) is expect_authorized

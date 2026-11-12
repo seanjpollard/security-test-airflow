@@ -21,7 +21,7 @@ import os
 import re
 import shlex
 import warnings
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stdout
 from io import StringIO
 
 import pytest
@@ -35,7 +35,6 @@ from airflow.models import Connection
 from airflow.utils.db import merge_conn
 from airflow.utils.session import create_session
 
-from tests_common.test_utils.config import conf_vars
 from tests_common.test_utils.db import clear_db_connections
 from tests_common.test_utils.markers import skip_if_force_lowest_dependencies_marker
 
@@ -148,35 +147,6 @@ class TestCliListConnections:
         with pytest.raises(SystemExit, match="--hide-sensitive can only be used with --show-values"):
             connection_command.connections_list(args)
 
-    def test_cli_connections_list_warns_about_env_var_connections(self, monkeypatch):
-        """An `AIRFLOW_CONN_*` environment variable should trigger a stderr warning."""
-        # The module-level database cleanup fixture may seed default `AIRFLOW_CONN_*`
-        # variables, so remove that ambient state before testing this specific entry.
-        for key in list(os.environ):
-            if key.startswith("AIRFLOW_CONN_"):
-                monkeypatch.delenv(key, raising=False)
-        monkeypatch.setenv("AIRFLOW_CONN_MY_HIDDEN_CONN", "postgresql://u:p@host/db")
-        args = self.parser.parse_args(["connections", "list", "--output", "json"])
-        with redirect_stderr(StringIO()) as stderr_io:
-            connection_command.connections_list(args)
-            stderr = stderr_io.getvalue()
-        assert "AIRFLOW_CONN_" in stderr
-        assert "metadata database" in stderr
-
-    def test_cli_connections_list_does_not_warn_by_default(self, monkeypatch):
-        """With no env-var connections or secrets backend configured, no warning is printed."""
-        for key in list(os.environ):
-            if key.startswith("AIRFLOW_CONN_"):
-                monkeypatch.delenv(key, raising=False)
-        args = self.parser.parse_args(["connections", "list", "--output", "json"])
-        with (
-            conf_vars({("secrets", "backend"): "", ("workers", "secrets_backend"): ""}),
-            redirect_stderr(StringIO()) as stderr_io,
-        ):
-            connection_command.connections_list(args)
-            stderr = stderr_io.getvalue()
-        assert stderr == ""
-
 
 class TestUriMasking:
     """Test URI credential masking functionality."""
@@ -200,40 +170,6 @@ class TestUriMasking:
     def test_mask_uri_credentials(self, uri, expected):
         result = _mask_uri_credentials(uri)
         assert result == expected
-
-
-class TestConnectionDisplayMapper:
-    """Regression tests for ``ConnectionDisplayMapper`` attribute mapping."""
-
-    @pytest.mark.parametrize(
-        "mapper_fn",
-        [
-            pytest.param(
-                connection_command.ConnectionDisplayMapper.full_details,
-                id="full_details",
-            ),
-            pytest.param(
-                connection_command.ConnectionDisplayMapper.masked_sensitive,
-                id="masked_sensitive",
-            ),
-        ],
-    )
-    @pytest.mark.parametrize(
-        ("is_encrypted", "is_extra_encrypted"),
-        [
-            pytest.param(True, False, id="password-only-encrypted"),
-            pytest.param(False, True, id="extra-only-encrypted"),
-        ],
-    )
-    def test_maps_encryption_flags_to_correct_keys(self, mapper_fn, is_encrypted, is_extra_encrypted):
-        conn = Connection(conn_id="test_mapper", conn_type="http")
-        conn.is_encrypted = is_encrypted
-        conn.is_extra_encrypted = is_extra_encrypted
-
-        result = mapper_fn(conn)
-
-        assert result["is_encrypted"] == is_encrypted
-        assert result["is_extra_encrypted"] == is_extra_encrypted
 
 
 class TestCliExportConnections:
@@ -511,7 +447,7 @@ class TestCliAddConnections:
                     "new0-json",
                     f"--conn-json={TEST_JSON}",
                 ],
-                "Successfully added `conn_id`=new0-json",
+                "Successfully added `conn_id`=new0-json : postgres://airflow:******@host:5432/airflow",
                 {
                     "conn_type": "postgres",
                     "description": "new0-json description",
@@ -533,7 +469,7 @@ class TestCliAddConnections:
                     f"--conn-uri={TEST_URL}",
                     "--conn-description=new0 description",
                 ],
-                "Successfully added `conn_id`=new0",
+                "Successfully added `conn_id`=new0 : postgresql://airflow:airflow@host:5432/airflow",
                 {
                     "conn_type": "postgres",
                     "description": "new0 description",
@@ -555,7 +491,7 @@ class TestCliAddConnections:
                     f"--conn-uri={TEST_URL}",
                     "--conn-description=new1 description",
                 ],
-                "Successfully added `conn_id`=new1",
+                "Successfully added `conn_id`=new1 : postgresql://airflow:airflow@host:5432/airflow",
                 {
                     "conn_type": "postgres",
                     "description": "new1 description",
@@ -578,7 +514,7 @@ class TestCliAddConnections:
                     "--conn-extra",
                     '{"extra": "yes"}',
                 ],
-                "Successfully added `conn_id`=new2",
+                "Successfully added `conn_id`=new2 : postgresql://airflow:airflow@host:5432/airflow",
                 {
                     "conn_type": "postgres",
                     "description": None,
@@ -603,7 +539,7 @@ class TestCliAddConnections:
                     "--conn-description",
                     "new3 description",
                 ],
-                "Successfully added `conn_id`=new3",
+                "Successfully added `conn_id`=new3 : postgresql://airflow:airflow@host:5432/airflow",
                 {
                     "conn_type": "postgres",
                     "description": "new3 description",
@@ -630,7 +566,7 @@ class TestCliAddConnections:
                     "--conn-schema=airflow",
                     "--conn-description=  new4 description  ",
                 ],
-                "Successfully added `conn_id`=new4",
+                "Successfully added `conn_id`=new4 : hive_metastore://airflow:******@host:9083/airflow",
                 {
                     "conn_type": "hive_metastore",
                     "description": "  new4 description  ",
@@ -656,7 +592,7 @@ class TestCliAddConnections:
                     '{"extra": "yes"}',
                     "--conn-description=new5 description",
                 ],
-                "Successfully added `conn_id`=new5",
+                "Successfully added `conn_id`=new5 : google_cloud_platform://:@:",
                 {
                     "conn_type": "google_cloud_platform",
                     "description": "new5 description",
@@ -672,7 +608,7 @@ class TestCliAddConnections:
             ),
             pytest.param(
                 ["connections", "add", "new6", "--conn-uri", "aws://?region_name=foo-bar-1"],
-                "Successfully added `conn_id`=new6",
+                "Successfully added `conn_id`=new6 : aws://?region_name=foo-bar-1",
                 {
                     "conn_type": "aws",
                     "description": None,
@@ -688,7 +624,7 @@ class TestCliAddConnections:
             ),
             pytest.param(
                 ["connections", "add", "new7", "--conn-uri", "aws://@/?region_name=foo-bar-1"],
-                "Successfully added `conn_id`=new7",
+                "Successfully added `conn_id`=new7 : aws://@/?region_name=foo-bar-1",
                 {
                     "conn_type": "aws",
                     "description": None,
@@ -1137,10 +1073,9 @@ class TestCliTestConnections:
         mock_test_conn = mocker.patch("airflow.providers.http.hooks.http.HttpHook.test_connection")
         conn_id = "http_default"
         mock_test_conn.return_value = False, "Failed."
-        with stdout_capture as stdout, pytest.raises(SystemExit) as exc_info:
+        with stdout_capture as stdout:
             connection_command.connections_test(self.parser.parse_args(["connections", "test", conn_id]))
-        assert exc_info.value.code == 1
-        assert "Connection failed!\nFailed.\n\n" in stdout.getvalue()
+            assert "Connection failed!\nFailed.\n\n" in stdout.getvalue()
 
     def test_cli_connections_test_missing_conn(self, mocker, stdout_capture):
         mocker.patch.dict(os.environ, {"AIRFLOW__CORE__TEST_CONNECTION": "Enabled"})

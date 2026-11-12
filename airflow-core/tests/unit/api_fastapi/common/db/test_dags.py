@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -45,6 +45,7 @@ class TestGenerateDagWithLatestRunQuery:
     @pytest.fixture(autouse=True)
     def setup_teardown(self):
         """Setup and teardown for each test."""
+        self._clear_db()
         yield
         self._clear_db()
 
@@ -195,9 +196,9 @@ class TestGenerateDagWithLatestRunQuery:
             dag_id=dag_id,
             run_id="manual__older",
             run_type="manual",
-            logical_date=datetime(2025, 1, 1, tzinfo=UTC),
+            logical_date=datetime(2025, 1, 1, tzinfo=timezone.utc),
             state=DagRunState.SUCCESS,
-            start_date=datetime(2025, 1, 1, tzinfo=UTC),
+            start_date=datetime(2025, 1, 1, tzinfo=timezone.utc),
         )
         session.add(older_run)
         newer_run = DagRun(
@@ -300,9 +301,9 @@ class TestGenerateDagWithLatestRunQuery:
                     dag_id=dag_id,
                     run_id=f"manual__{run_idx}",
                     run_type="manual",
-                    logical_date=datetime(2024, 1, 1 + run_idx, tzinfo=UTC),
+                    logical_date=datetime(2024, 1, 1 + run_idx, tzinfo=timezone.utc),
                     state=DagRunState.SUCCESS,
-                    start_date=datetime(2024, 1, 1 + run_idx, 1, tzinfo=UTC),
+                    start_date=datetime(2024, 1, 1 + run_idx, 1, tzinfo=timezone.utc),
                 )
                 session.add(dagrun)
         session.commit()

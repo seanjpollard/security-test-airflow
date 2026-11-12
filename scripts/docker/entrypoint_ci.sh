@@ -44,7 +44,7 @@ chmod 1777 /tmp
 
 AIRFLOW_SOURCES=$(cd "${IN_CONTAINER_DIR}/../.." || exit 1; pwd)
 
-PYTHON_MAJOR_MINOR_VERSION=${PYTHON_MAJOR_MINOR_VERSION:=3.11}
+PYTHON_MAJOR_MINOR_VERSION=${PYTHON_MAJOR_MINOR_VERSION:=3.10}
 
 export AIRFLOW_HOME=${AIRFLOW_HOME:=${HOME}}
 
@@ -136,6 +136,13 @@ function environment_initialization() {
         export AIRFLOW__SCHEDULER__STANDALONE_DAG_PROCESSOR=True
     fi
 
+    if [[ ${GO_WORKER=} == "true" ]]; then
+        echo
+        echo "${COLOR_BLUE}Starting go worker${COLOR_RESET}"
+        echo
+        export AIRFLOW__SCHEDULER__GO_WORKER=True
+    fi
+
     RUN_TESTS=${RUN_TESTS:="false"}
     CI=${CI:="false"}
 
@@ -169,45 +176,24 @@ function environment_initialization() {
     ln -s -f /usr/bin/gcloud /usr/lib/google-cloud-sdk/bin/gcloud
 
     if [[ ${SKIP_SSH_SETUP="false"} == "false" ]]; then
-        # Set up the ssh-to-localhost plumbing used by the SSH/SFTP provider tests under a
-        # dedicated directory instead of ~/.ssh: `breeze --forward-credentials` bind-mounts
-        # the host's ~/.ssh at /root/.ssh and container startup must never modify it.
-        breeze_ssh_dir="/root/.breeze-ssh"
-        mkdir -p "${breeze_ssh_dir}"
-        chmod 700 "${breeze_ssh_dir}"
-        if [[ ! -f "${breeze_ssh_dir}/id_rsa" ]]; then
-            ssh-keygen -t rsa -C airflow-breeze-internal-key -m PEM -P '' -f "${breeze_ssh_dir}/id_rsa" \
-                >"${AIRFLOW_HOME}/logs/ssh-keygen.log" 2>&1
-        fi
-        cp "${breeze_ssh_dir}/id_rsa.pub" "${breeze_ssh_dir}/authorized_keys"
-        chmod 600 "${breeze_ssh_dir}/id_rsa" "${breeze_ssh_dir}/authorized_keys"
-        echo "AuthorizedKeysFile ${breeze_ssh_dir}/authorized_keys .ssh/authorized_keys" \
-            > /etc/ssh/sshd_config.d/airflow-breeze.conf
-        # The heredoc delimiter must not be "EOF": Dockerfile.ci inlines this script inside
-        # a COPY <<"EOF" heredoc and a bare EOF line would terminate it early.
-        cat > /etc/ssh/ssh_config.d/airflow-breeze.conf <<SSH_CONFIG
-Host localhost 127.0.0.1 ::1
-    IdentityFile ${breeze_ssh_dir}/id_rsa
-    UserKnownHostsFile ${breeze_ssh_dir}/known_hosts
-    StrictHostKeyChecking accept-new
-SSH_CONFIG
-        # Paramiko-based hooks do not read /etc/ssh/ssh_config.d but try ssh-agent keys by
-        # default, so expose the key through an agent. The fixed socket path lets shells
-        # entered via entrypoint_exec.sh (breeze exec) pick up the same agent.
-        rm -f "${breeze_ssh_dir}/agent.sock"
-        eval "$(ssh-agent -s -a "${breeze_ssh_dir}/agent.sock")" >/dev/null
-        ssh-add "${breeze_ssh_dir}/id_rsa" >>"${AIRFLOW_HOME}/logs/ssh-keygen.log" 2>&1
+        # Set up ssh keys
+        echo 'yes' | ssh-keygen -t rsa -C your_email@youremail.com -m PEM -P '' -f ~/.ssh/id_rsa \
+            >"${AIRFLOW_HOME}/logs/ssh-keygen.log" 2>&1
 
+        cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+        ln -s -f ~/.ssh/authorized_keys ~/.ssh/authorized_keys2
+        chmod 600 ~/.ssh/*
+
+        # SSH Service
         sudo service ssh restart >/dev/null 2>&1
 
-        # Sometimes the server is not quick enough to load the keys! OpenSSH 10 also prints a
-        # "# localhost:22 SSH-2.0-..." comment line per connection to stdout, so count only the keys.
-        while [[ $(ssh-keyscan -H localhost 2>/dev/null | grep -cv '^#') != "3" ]] ; do
+        # Sometimes the server is not quick enough to load the keys!
+        while [[ $(ssh-keyscan -H localhost 2>/dev/null | wc -l) != "3" ]] ; do
             echo "Not all keys yet loaded by the server"
             sleep 0.05
         done
 
-        ssh-keyscan -H localhost > "${breeze_ssh_dir}/known_hosts" 2>/dev/null
+        ssh-keyscan -H localhost >> ~/.ssh/known_hosts 2>/dev/null
     fi
 
     if [[ ${INTEGRATION_LOCALSTACK:-"false"} == "true" ]]; then
@@ -299,13 +285,9 @@ function determine_airflow_to_use() {
         # Generate constraints from uv.lock and use them to install development dependencies
         # via the Python script. --no-cache is needed - otherwise there is possibility of
         # overriding temporary environments by multiple parallel processes
-        # --all-packages: without it the export only covers the root project's dependencies.
-        # Anything that only a workspace member's dependency group pulls in, such
-        # as mcp through common.ai's pydantic-ai-slim[mcp], stays unpinned and resolves fresh
-        # from PyPI instead of following uv.lock.
         local constraint_file="/tmp/constraints-from-lock.txt"
         uv export --frozen --no-hashes --no-emit-project --no-emit-workspace --no-editable --no-header \
-            --no-annotate --all-packages > "${constraint_file}" 2>/dev/null || true
+            --no-annotate > "${constraint_file}" 2>/dev/null || true
         uv run --no-cache /opt/airflow/scripts/in_container/install_development_dependencies.py \
            --constraint "${constraint_file}"
         # Some packages might leave legacy typing module which causes test issues
@@ -338,22 +320,25 @@ function check_boto_upgrade() {
     # shellcheck disable=SC2086
     ${PACKAGING_TOOL_CMD} uninstall ${EXTRA_UNINSTALL_FLAGS} aiobotocore s3fs || true
 
-    # Urllib 2.6.0 broke kubernetes client by removing getheaders() (restored in 2.6.1+).
-    # Exclude exactly 2.6.0; any other version is fine.
+    # Urllib 2.6.0 breaks kubernetes client because kubernetes client uses deprecated in 2.0.0 and
+    # removed in 2.6.0 `getheaders()` call (instead of `headers` property.
     # Tracked in https://github.com/kubernetes-client/python/issues/2477
     # shellcheck disable=SC2086
-    ${PACKAGING_TOOL_CMD} install ${EXTRA_INSTALL_FLAGS} --upgrade "boto3" "botocore" "urllib3!=2.6.0"
+    ${PACKAGING_TOOL_CMD} install ${EXTRA_INSTALL_FLAGS} --upgrade "boto3<1.38.3" "botocore<1.38.3" "urllib3<2.6.0"
 }
 
 # Upgrade sqlalchemy to the latest version to run tests with it
 function check_upgrade_sqlalchemy() {
-    if [[ "${UPGRADE_SQLALCHEMY=}" != "true" ]]; then
+    # The python version constraint is a TEMPORARY WORKAROUND to exclude all FAB tests. Is should be removed once we
+    # upgrade FAB to v5 (PR #50960).
+    if [[ "${UPGRADE_SQLALCHEMY=}" != "true" || ${PYTHON_MAJOR_MINOR_VERSION} != "3.13" ]]; then
         return
     fi
     echo
     echo "${COLOR_BLUE}Upgrading sqlalchemy to the latest version to run tests with it${COLOR_RESET}"
     echo
-    uv sync --all-packages --resolution highest --no-python-downloads --no-managed-python
+    uv sync --all-packages --no-install-package apache-airflow-providers-fab --resolution highest \
+        --no-python-downloads --no-managed-python
 }
 
 # Download minimum supported version of sqlalchemy to run tests with it
@@ -421,48 +406,6 @@ function reinstall_shared_distributions() {
     uv pip install --no-deps $(ls -d /opt/airflow/shared/*/)
 }
 
-# Providers whose `uv sync --all-extras` (run below by check_force_lowest_dependencies)
-# needs additional native build prerequisites installed at test time rather than baked
-# into the base CI image. Each listed provider must ship a declarative manifest at
-# providers/<id>/pre_extras_install.yaml; the manifest is interpreted by
-# scripts/in_container/run_pre_extras_install.py, which restricts allowed operations
-# to pinned-checksum downloads, archive extraction under /opt or /tmp, and env-var
-# export. Providers cannot run arbitrary code through this hook. Maintainers should
-# review every addition to this list as a privileged change. See
-# contributing-docs/12_provider_distributions.rst.
-PROVIDERS_NEEDING_PRE_EXTRAS_INSTALL=()
-
-# Extras check_force_lowest_dependencies leaves out of a provider's sync, as
-# "<provider id>:<extra>", because the root pyproject.toml declares them as conflicting with
-# another extra of the same provider ([tool.uv] conflicts), and uv rejects syncing both.
-LOWEST_DEPENDENCIES_EXCLUDED_EXTRAS=("common.ai:llamaindex")
-
-function run_pre_extras_install_if_registered() {
-    local provider_id="${1}"
-    local registered_provider
-    for registered_provider in "${PROVIDERS_NEEDING_PRE_EXTRAS_INSTALL[@]}"; do
-        if [[ "${registered_provider}" == "${provider_id}" ]]; then
-            echo
-            echo "${COLOR_BLUE}Running pre-extras install manifest for ${provider_id}${COLOR_RESET}"
-            echo
-            local env_file
-            env_file=$(mktemp)
-            if ! python "${AIRFLOW_SOURCES}/scripts/in_container/run_pre_extras_install.py" \
-                    "${provider_id}" --emit-env-to "${env_file}"; then
-                rm -f "${env_file}"
-                echo "${COLOR_RED}Pre-extras install failed for ${provider_id}${COLOR_RESET}"
-                exit 1
-            fi
-            if [[ -s "${env_file}" ]]; then
-                # shellcheck disable=SC1090
-                source "${env_file}"
-            fi
-            rm -f "${env_file}"
-            return
-        fi
-    done
-}
-
 function check_force_lowest_dependencies() {
     if [[ ${FORCE_LOWEST_DEPENDENCIES=} != "true" ]]; then
         return
@@ -471,8 +414,6 @@ function check_force_lowest_dependencies() {
         local provider_id
         # shellcheck disable=SC2001
         provider_id=$(echo "${TEST_TYPE}" | sed 's/Providers\[\(.*\)\]/\1/')
-        # A split provider's test type names one part of its tests: Providers[<id>:<part>]
-        provider_id=${provider_id%%:*}
         echo
         echo "${COLOR_BLUE}Forcing dependencies to lowest versions for provider: ${provider_id}${COLOR_RESET}"
         echo
@@ -483,18 +424,6 @@ function check_force_lowest_dependencies() {
             exit 0
         fi
         cd "${AIRFLOW_SOURCES}/providers/${provider_id/.//}" || exit 1
-        run_pre_extras_install_if_registered "${provider_id}"
-        # Every extra of the provider is named instead of passing --all-extras: uv rejects
-        # --all-extras whenever a [tool.uv] conflicts group is reachable, even through another
-        # workspace provider (amazon -> common.ai), and --no-extra only accepts the provider's
-        # own extras. Both install the same packages.
-        local -a extra_flags=()
-        local extra
-        while IFS= read -r extra; do
-            if [[ -n "${extra}" && " ${LOWEST_DEPENDENCIES_EXCLUDED_EXTRAS[*]} " != *" ${provider_id}:${extra} "* ]]; then
-                extra_flags+=(--extra "${extra}")
-            fi
-        done < <(python -c 'import tomllib; print("\n".join(tomllib.load(open("pyproject.toml", "rb"))["project"].get("optional-dependencies", {})))')
         # --no-binary  is needed in order to avoid libxml and xmlsec using different version of libxml2
         # (binary lxml embeds its own libxml2, while xmlsec uses system one).
         # See https://bugs.launchpad.net/lxml/+bug/2110068
@@ -503,8 +432,8 @@ function check_force_lowest_dependencies() {
         for attempt in 1 2 3; do
             echo "Attempt ${attempt} of syncing to lowest dependencies"
             set -x
-            if UV_LOCK_TIMEOUT=200 uv sync --resolution lowest-direct --no-binary-package lxml --no-binary-package xmlsec \
-                "${extra_flags[@]}" --no-python-downloads --no-managed-python; then
+            if UV_LOCK_TIMEOUT=200 uv sync --resolution lowest-direct --no-binary-package lxml --no-binary-package xmlsec --all-extras \
+                --no-python-downloads --no-managed-python; then
                 set +x
                 sync_successful="true"
                 break

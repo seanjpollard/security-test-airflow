@@ -17,9 +17,7 @@
 # under the License.
 from __future__ import annotations
 
-import importlib
-import warnings
-from datetime import UTC, datetime
+from datetime import datetime, timezone as stdlib_timezone
 from unittest import mock
 from unittest.mock import Mock, patch
 
@@ -27,35 +25,15 @@ import pytest
 from paramiko.sftp import SFTP_FAILURE
 from pendulum import datetime as pendulum_datetime, timezone
 
-from airflow.providers.common.compat.sdk import AirflowException, PokeReturnValue
+from airflow.providers.common.compat.sdk import AirflowException
 from airflow.providers.sftp.sensors.sftp import SFTPSensor
-
-WARNING_CATEGORY: type[Warning]
-try:
-    from airflow.utils.deprecation_tools import DeprecatedImportWarning
-except ImportError:
-    WARNING_CATEGORY = DeprecationWarning
-else:
-    WARNING_CATEGORY = DeprecatedImportWarning
+from airflow.sensors.base import PokeReturnValue
 
 # Ignore missing args provided by default_args
 # mypy: disable-error-code="arg-type"
 
 
 class TestSFTPSensor:
-    def test_no_timezone_deprecated_import_warning_on_module_reload(self):
-        with warnings.catch_warnings(record=True) as captured_warnings:
-            warnings.simplefilter("always")
-            import airflow.providers.sftp.sensors.sftp as sftp_sensor_module
-
-            importlib.reload(sftp_sensor_module)
-
-        assert not any(
-            issubclass(warning.category, WARNING_CATEGORY)
-            and "airflow.utils.timezone" in str(warning.message)
-            for warning in captured_warnings
-        )
-
     @patch("airflow.providers.sftp.sensors.sftp.SFTPHook")
     def test_file_present(self, sftp_hook_mock):
         sftp_hook_mock.return_value.isfile.return_value = True
@@ -67,7 +45,20 @@ class TestSFTPSensor:
         assert output
 
     @patch("airflow.providers.sftp.sensors.sftp.SFTPHook")
+    def test_file_irregular(self, sftp_hook_mock):
+        # This mocks the behavior of SFTPHook.isfile when an OSError is raised in that method, resulting in
+        # False being returned
+        sftp_hook_mock.return_value.isfile.return_value = False
+        sftp_sensor = SFTPSensor(task_id="unit_test", path="/path/to/file/1970-01-01.txt")
+        context = {"ds": "1970-01-01"}
+        output = sftp_sensor.poke(context)
+        sftp_hook_mock.return_value.isfile.assert_called_once_with("/path/to/file/1970-01-01.txt")
+        sftp_hook_mock.return_value.close_conn.assert_not_called()
+        assert not output
+
+    @patch("airflow.providers.sftp.sensors.sftp.SFTPHook")
     def test_file_absent(self, sftp_hook_mock):
+        # This is the same implementation above, however, it's simulating instead the absence of a file
         sftp_hook_mock.return_value.isfile.return_value = False
         sftp_sensor = SFTPSensor(task_id="unit_test", path="/path/to/file/1970-01-01.txt")
         context = {"ds": "1970-01-01"}
@@ -135,7 +126,7 @@ class TestSFTPSensor:
         "newer_than",
         (
             datetime(2020, 1, 2),
-            datetime(2020, 1, 2, tzinfo=UTC),
+            datetime(2020, 1, 2, tzinfo=stdlib_timezone.utc),
             "2020-01-02",
             "2020-01-02 00:00:00+00:00",
             "2020-01-02 00:00:00.001+00:00",

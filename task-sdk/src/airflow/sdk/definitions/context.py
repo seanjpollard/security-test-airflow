@@ -18,34 +18,11 @@
 from __future__ import annotations
 
 import copy
-import enum
 import os
 from collections.abc import MutableMapping
-from typing import TYPE_CHECKING, Any, NamedTuple, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict, cast
 
-
-class CallbackSource(str, enum.Enum):
-    """Whether a callback was triggered at the Dag level or the task level."""
-
-    DAG = "dag"
-    TASK = "task"
-
-    def __str__(self) -> str:
-        return self.value
-
-
-class CallbackMeta(NamedTuple):
-    """
-    Metadata about the callback that is being executed.
-
-    Present in the callback context as ``context["callback"]``.
-
-    ``source`` tells whether the callback was defined on the Dag or on a task.
-    More fields may be added in the future without breaking existing callbacks.
-    """
-
-    source: CallbackSource
-
+from typing_extensions import NotRequired
 
 if TYPE_CHECKING:
     import jinja2
@@ -54,11 +31,10 @@ if TYPE_CHECKING:
     from airflow.sdk.bases.operator import BaseOperator
     from airflow.sdk.definitions.dag import DAG
     from airflow.sdk.execution_time.context import (
-        AssetStateStoreAccessors,
+        AssetStateAccessors,
         InletEventsAccessors,
-        TaskStateStoreAccessor,
+        TaskStateAccessor,
     )
-    from airflow.sdk.execution_time.loop import LoopContextAccessor
     from airflow.sdk.types import (
         DagRunProtocol,
         Operator,
@@ -70,7 +46,6 @@ if TYPE_CHECKING:
 class Context(TypedDict, total=False):
     """Jinja2 template context for task rendering."""
 
-    callback: NotRequired[CallbackMeta]
     conn: Any
     dag: DAG
     dag_run: DagRunProtocol
@@ -84,13 +59,11 @@ class Context(TypedDict, total=False):
     inlets: list
     inlet_events: InletEventsAccessors
     logical_date: DateTime
-    loop: LoopContextAccessor
     macros: Any
     map_index_template: NotRequired[str | None]
     outlets: list
     params: dict[str, Any]
     partition_key: NotRequired[str | None]
-    partition_date: NotRequired[DateTime | None]
     prev_data_interval_start_success: NotRequired[DateTime | None]
     prev_data_interval_end_success: NotRequired[DateTime | None]
     prev_start_date_success: NotRequired[DateTime | None]
@@ -103,8 +76,8 @@ class Context(TypedDict, total=False):
     task_reschedule_count: int
     task_instance: RuntimeTaskInstanceProtocol
     task_instance_key_str: str
-    task_state_store: TaskStateStoreAccessor
-    asset_state_store: AssetStateStoreAccessors
+    task_state: TaskStateAccessor
+    asset_state: AssetStateAccessors
     # `templates_dict` is only set in PythonOperator
     templates_dict: NotRequired[dict[str, Any] | None]
     test_mode: bool
@@ -118,7 +91,7 @@ class Context(TypedDict, total=False):
     var: Any
 
 
-KNOWN_CONTEXT_KEYS: set[str] = set(Context.__annotations__.keys()) - {"loop"}
+KNOWN_CONTEXT_KEYS: set[str] = set(Context.__annotations__.keys())
 
 
 def context_merge(context: Context, *args: Any, **kwargs: Any) -> None:

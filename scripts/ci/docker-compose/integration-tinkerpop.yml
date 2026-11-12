@@ -21,9 +21,6 @@ services:
     container_name: gremlin
     image: tinkerpop/gremlin-server:3.4.2
     labels:
-      org.apache.airflow.breeze: "true"
-      org.apache.airflow.breeze.worktree: "${BREEZE_WORKTREE_PATH:-}"
-      org.apache.airflow.breeze.host: "${BREEZE_HOST_ID:-}"
       breeze.description: "Integration required for gremlin operator and hook."
     volumes:
       - ./gremlin:/opt/gremlin-server/conf
@@ -41,7 +38,3 @@ services:
     stdin_open: true
 volumes:
   graph-data:
-    labels:
-      org.apache.airflow.breeze: "true"
-      org.apache.airflow.breeze.worktree: "${BREEZE_WORKTREE_PATH:-}"
-      org.apache.airflow.breeze.host: "${BREEZE_HOST_ID:-}"

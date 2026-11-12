@@ -45,12 +45,7 @@ class BigQueryToMySqlOperator(BigQueryToSqlBaseOperator):
         The `mysql_table` parameter has been deprecated. Use `target_table_name` instead.
     """
 
-    template_fields: Sequence[str] = (
-        *BigQueryToSqlBaseOperator.template_fields,
-        "dataset_id",
-        "table_id",
-        "mysql_conn_id",
-    )
+    template_fields: Sequence[str] = (*BigQueryToSqlBaseOperator.template_fields, "dataset_id", "table_id")
 
     def __init__(
         self,

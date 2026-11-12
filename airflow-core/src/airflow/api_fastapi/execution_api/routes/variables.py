@@ -20,30 +20,20 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 
-from airflow.api_fastapi.common.db.common import AsyncSessionDep
 from airflow.api_fastapi.execution_api.datamodels.variable import (
-    VariableKeysResponse,
     VariablePostBody,
     VariableResponse,
 )
-from airflow.api_fastapi.execution_api.security import (
-    CurrentExecutionToken,
-    ExecutionAPIRoute,
-    ExecutionOrDagParseToken,
-    ExecutionOrProcessorSecretsToken,
-    allow_non_ti_writer,
-    get_team_name_dep,
-)
+from airflow.api_fastapi.execution_api.security import CurrentTIToken, get_team_name_dep
 from airflow.models.variable import Variable
 
 
 async def has_variable_access(
     request: Request,
     variable_key: Annotated[str, Path(min_length=1)],
-    token=CurrentExecutionToken,
+    token=CurrentTIToken,
 ):
     """Check if the task has access to the variable."""
     write = request.method not in {"GET", "HEAD", "OPTIONS"}
@@ -64,59 +54,19 @@ async def has_variable_access(
     return True
 
 
-router = APIRouter(route_class=ExecutionAPIRoute)
+router = APIRouter(
+    responses={status.HTTP_404_NOT_FOUND: {"description": "Variable not found"}},
+    dependencies=[Depends(has_variable_access)],
+)
 
 log = logging.getLogger(__name__)
 
 
-# /keys must be declared before /{variable_key:path} so the static path is
-# matched first; otherwise the catch-all path param would swallow it.
-# has_variable_access is applied per-route below (not at router level) because
-# it requires a variable_key path parameter that /keys does not have.
-@router.get(
-    "/keys",
-    dependencies=[ExecutionOrDagParseToken],
-    responses={
-        status.HTTP_401_UNAUTHORIZED: {"description": "Unauthorized"},
-    },
-)
-async def get_variable_keys(
-    session: AsyncSessionDep,
-    team_name: Annotated[str | None, Depends(get_team_name_dep)] = None,
-    prefix: Annotated[str | None, Query()] = None,
-    limit: Annotated[int, Query(ge=1, le=10_000)] = 1000,
-    offset: Annotated[int, Query(ge=0)] = 0,
-) -> VariableKeysResponse:
-    """
-    Get Airflow Variable keys, optionally filtered by prefix.
-
-    .. note::
-        This endpoint deliberately bypasses the per-variable ``has_variable_access``
-        check, since access scoping requires a specific variable key. Any authenticated
-        task within a team can therefore enumerate every variable key in that team —
-        including keys for variables it would not be allowed to read. This is consistent
-        with Airflow's security model (workers within a deployment trust each other),
-        but the asymmetry between key enumeration and value access is intentional.
-    """
-    stmt = select(Variable.key).order_by(Variable.key)
-    if prefix is not None:
-        stmt = stmt.where(Variable.key.startswith(prefix, autoescape=True))
-    if team_name is not None:
-        stmt = stmt.where(Variable.team_name == team_name)
-
-    total_entries = await session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    keys = (await session.scalars(stmt.offset(offset).limit(limit))).all()
-    return VariableKeysResponse(keys=list(keys), total_entries=total_entries)
-
-
 @router.get(
     "/{variable_key:path}",
-    dependencies=[ExecutionOrProcessorSecretsToken, Depends(has_variable_access)],
     responses={
-        status.HTTP_404_NOT_FOUND: {"description": "Variable not found"},
         status.HTTP_401_UNAUTHORIZED: {"description": "Unauthorized"},
-        status.HTTP_400_BAD_REQUEST: {"description": "A Dag processor token did not name its Dag bundle"},
-        status.HTTP_403_FORBIDDEN: {"description": "The caller does not have access to the variable"},
+        status.HTTP_403_FORBIDDEN: {"description": "Task does not have access to the variable"},
     },
 )
 def get_variable(
@@ -140,15 +90,12 @@ def get_variable(
 
 @router.put(
     "/{variable_key:path}",
-    dependencies=[ExecutionOrDagParseToken, Depends(has_variable_access)],
     status_code=status.HTTP_201_CREATED,
     responses={
-        status.HTTP_404_NOT_FOUND: {"description": "Variable not found"},
         status.HTTP_401_UNAUTHORIZED: {"description": "Unauthorized"},
-        status.HTTP_403_FORBIDDEN: {"description": "The caller does not have access to the variable"},
+        status.HTTP_403_FORBIDDEN: {"description": "Task does not have access to the variable"},
     },
 )
-@allow_non_ti_writer
 def put_variable(
     variable_key: Annotated[str, Path(min_length=1)],
     body: VariablePostBody,
@@ -161,15 +108,12 @@ def put_variable(
 
 @router.delete(
     "/{variable_key:path}",
-    dependencies=[ExecutionOrDagParseToken, Depends(has_variable_access)],
     status_code=status.HTTP_204_NO_CONTENT,
     responses={
-        status.HTTP_404_NOT_FOUND: {"description": "Variable not found"},
         status.HTTP_401_UNAUTHORIZED: {"description": "Unauthorized"},
-        status.HTTP_403_FORBIDDEN: {"description": "The caller does not have access to the variable"},
+        status.HTTP_403_FORBIDDEN: {"description": "Task does not have access to the variable"},
     },
 )
-@allow_non_ti_writer
 def delete_variable(
     variable_key: Annotated[str, Path(min_length=1)],
     team_name: Annotated[str | None, Depends(get_team_name_dep)],

@@ -27,13 +27,7 @@ import attrs
 from sqlalchemy import select
 
 from airflow._shared.timezones import timezone
-from airflow.models.deadline import (
-    DAGRUN_CREATED_TIMING,
-    DAGRUN_QUEUED_TIMING,
-    _get_evaluation_kwargs,
-    classproperty,
-)
-from airflow.models.variable import Variable
+from airflow.models.deadline import classproperty
 from airflow.utils.log.logging_mixin import LoggingMixin
 from airflow.utils.session import provide_session
 from airflow.utils.sqlalchemy import get_dialect_name
@@ -43,8 +37,6 @@ if TYPE_CHECKING:
 
     from sqlalchemy import ColumnElement
     from sqlalchemy.orm import Session
-
-    from airflow.models.deadline import DeadlineDagRunProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -102,20 +94,33 @@ class SerializedReferenceModels:
     class SerializedBaseDeadlineReference(LoggingMixin, ABC):
         """Base class for all serialized Deadline implementations."""
 
-        evaluation_timing: str = DAGRUN_CREATED_TIMING
+        required_kwargs: set[str] = set()
 
         @classproperty
         def reference_name(cls: Any) -> str:
             return cls.__name__
 
         def evaluate_with(self, *, session: Session, interval: timedelta, **kwargs: Any) -> datetime | None:
-            """Evaluate this deadline with the supplied context."""
-            evaluation_kwargs = _get_evaluation_kwargs(self, self._evaluate_with, kwargs)
-            base_time = self._evaluate_with(session=session, **evaluation_kwargs)
+            """Validate the provided kwargs and evaluate this deadline with the given conditions."""
+            filtered_kwargs = {k: v for k, v in kwargs.items() if k in self.required_kwargs}
+
+            if missing_kwargs := self.required_kwargs - filtered_kwargs.keys():
+                raise ValueError(
+                    f"{self.__class__.__name__} is missing required parameters: {', '.join(missing_kwargs)}"
+                )
+
+            if extra_kwargs := kwargs.keys() - filtered_kwargs.keys():
+                self.log.debug(
+                    "%s ignoring unexpected parameters: %s",
+                    self.reference_name,
+                    ", ".join(extra_kwargs),
+                )
+
+            base_time = self._evaluate_with(session=session, **filtered_kwargs)
             return base_time + interval if base_time is not None else None
 
         @abstractmethod
-        def _evaluate_with(self, *, session: Session, dagrun: DeadlineDagRunProtocol) -> datetime | None:
+        def _evaluate_with(self, *, session: Session, **kwargs: Any) -> datetime | None:
             """Must be implemented by subclasses to perform the actual evaluation."""
             raise NotImplementedError
 
@@ -162,16 +167,23 @@ class SerializedReferenceModels:
     class DagRunLogicalDateDeadline(SerializedBaseDeadlineReference):
         """A deadline that returns a DagRun's logical date."""
 
-        def _evaluate_with(self, *, session: Session, dagrun: DeadlineDagRunProtocol) -> datetime | None:
-            return dagrun.logical_date
+        required_kwargs = {"dag_id", "run_id"}
+
+        def _evaluate_with(self, *, session: Session, **kwargs: Any) -> datetime | None:
+            from airflow.models import DagRun
+
+            return _fetch_from_db(DagRun.logical_date, session=session, **kwargs)
 
     class DagRunQueuedAtDeadline(SerializedBaseDeadlineReference):
         """A deadline that returns when a DagRun was queued."""
 
-        evaluation_timing: str = DAGRUN_QUEUED_TIMING
+        required_kwargs = {"dag_id", "run_id"}
 
-        def _evaluate_with(self, *, session: Session, dagrun: DeadlineDagRunProtocol) -> datetime | None:
-            return dagrun.queued_at
+        @provide_session
+        def _evaluate_with(self, *, session: Session, **kwargs: Any) -> datetime | None:
+            from airflow.models import DagRun
+
+            return _fetch_from_db(DagRun.queued_at, session=session, **kwargs)
 
     @dataclass
     class AverageRuntimeDeadline(SerializedBaseDeadlineReference):
@@ -180,6 +192,7 @@ class SerializedReferenceModels:
         DEFAULT_LIMIT = 10
         max_runs: int
         min_runs: int | None = None
+        required_kwargs = {"dag_id"}
 
         def __post_init__(self):
             if self.min_runs is None:
@@ -188,13 +201,12 @@ class SerializedReferenceModels:
                 raise ValueError("min_runs must be at least 1")
 
         @provide_session
-        def _evaluate_with(self, *, session: Session, dagrun: DeadlineDagRunProtocol) -> datetime | None:
-            from sqlalchemy import func, text
+        def _evaluate_with(self, *, session: Session, **kwargs: Any) -> datetime | None:
+            from sqlalchemy import func, select, text
 
             from airflow.models import DagRun
-            from airflow.utils.state import DagRunState
 
-            dag_id = dagrun.dag_id
+            dag_id = kwargs["dag_id"]
 
             dialect = get_dialect_name(session)
 
@@ -208,17 +220,9 @@ class SerializedReferenceModels:
             else:
                 raise ValueError(f"Unsupported database dialect: {dialect}")
 
-            # Only SUCCESSFUL runs represent a "normal" runtime. A run that failed fast or hung
-            # before failing would otherwise skew the average and produce a misleading deadline
-            # (too short -> spurious misses, or too long -> real slowness never trips it).
             query = (
                 select(duration_expr)
-                .filter(
-                    DagRun.dag_id == dag_id,
-                    DagRun.state == DagRunState.SUCCESS,
-                    DagRun.start_date.isnot(None),
-                    DagRun.end_date.isnot(None),
-                )
+                .filter(DagRun.dag_id == dag_id, DagRun.start_date.isnot(None), DagRun.end_date.isnot(None))
                 .order_by(DagRun.logical_date.desc())
                 .limit(self.max_runs)
             )
@@ -265,21 +269,34 @@ class SerializedReferenceModels:
         """
         Wrapper for custom deadline references.
 
-        This class dynamically delegates to the wrapped reference's evaluation logic.
+        This class dynamically delegates to the wrapped reference for required_kwargs and evaluation logic.
         """
 
         def __init__(self, inner_ref):
             self.inner_ref = inner_ref
-            self.evaluation_timing = getattr(inner_ref, "evaluation_timing", DAGRUN_CREATED_TIMING)
 
         @property
         def reference_name(self) -> str:
             return self.inner_ref.reference_name
 
         def evaluate_with(self, *, session: Session, interval: timedelta, **kwargs: Any) -> datetime | None:
-            """Evaluate the wrapped custom reference with the supplied context."""
-            evaluation_kwargs = _get_evaluation_kwargs(self.inner_ref, self.inner_ref._evaluate_with, kwargs)
-            deadline = self.inner_ref._evaluate_with(session=session, **evaluation_kwargs)
+            """Validate the provided kwargs and evaluate this deadline with the given conditions."""
+            required_kwargs: set[str] = getattr(self.inner_ref, "required_kwargs", set())
+            filtered_kwargs = {k: v for k, v in kwargs.items() if k in required_kwargs}
+
+            if missing_kwargs := required_kwargs - filtered_kwargs.keys():
+                raise ValueError(
+                    f"{self.inner_ref.__class__.__name__} is missing required parameters: {', '.join(missing_kwargs)}"
+                )
+
+            if extra_kwargs := kwargs.keys() - filtered_kwargs.keys():
+                self.log.debug(
+                    "%s ignoring unexpected parameters: %s",
+                    self.reference_name,
+                    ", ".join(extra_kwargs),
+                )
+
+            deadline = self.inner_ref._evaluate_with(session=session, **filtered_kwargs)
             return deadline + interval if deadline is not None else None
 
         def _evaluate_with(self, *, session: Session, **kwargs: Any) -> datetime | None:
@@ -290,17 +307,9 @@ class SerializedReferenceModels:
 
         @classmethod
         def deserialize_reference(cls, reference_data: dict):
-            from airflow.serialization.helpers import find_registered_custom_deadline_reference
+            from airflow._shared.module_loading import import_string
 
-            class_path = reference_data.get("__class_path")
-            if not class_path:
-                raise ValueError(
-                    "Cannot deserialize deadline reference: unrecognized reference_type "
-                    f"{reference_data.get(SerializedReferenceModels.REFERENCE_TYPE_FIELD)!r} with no "
-                    "'__class_path' to import. The stored reference is corrupt, from a newer "
-                    "Airflow version, or references a custom class whose plugin is no longer installed."
-                )
-            custom_class = find_registered_custom_deadline_reference(class_path)
+            custom_class = import_string(reference_data["__class_path"])
             inner_ref = custom_class.deserialize_reference(reference_data)
             return cls(inner_ref)
 
@@ -338,38 +347,18 @@ SerializedReferenceModels.TYPES.DAGRUN = (
 )
 
 
-@attrs.define(frozen=True)
-class SerializedVariableInterval:
-    """Core-side serialized representation of a variable-backed deadline interval."""
+def _fetch_from_db(column, *, session: Session, dag_id: str, run_id: str) -> datetime | None:
+    """
+    Fetch a datetime column from the DagRun table.
 
-    key: str
+    :meta private:
+    """
+    from airflow.models import DagRun
 
-    def resolve(self, *, session: Session | None = None) -> timedelta:
-        """
-        Get the Airflow Variable and return it as a ``timedelta``.
-
-        :param session: Existing SQLAlchemy Session. Callers holding an open transaction must pass it.
-        """
-        try:
-            value = Variable.get(self.key, session=session)
-        except KeyError as e:
-            raise ValueError(f"VariableInterval '{self.key}' not found") from e
-
-        try:
-            seconds = int(value)
-        except (TypeError, ValueError) as e:
-            raise ValueError(
-                f"VariableInterval '{self.key}' must be an integer (seconds), got: {value!r}"
-            ) from e
-
-        try:
-            return timedelta(seconds=seconds)
-        except OverflowError as e:
-            # ``timedelta`` raises OverflowError, which is not a ValueError, so callers
-            # inspecting for a bad interval would otherwise miss it.
-            raise ValueError(
-                f"VariableInterval '{self.key}' is too large to be a valid interval: {seconds} seconds"
-            ) from e
+    result = session.execute(select(column).where(DagRun.dag_id == dag_id, DagRun.run_id == run_id)).scalar()
+    if result is None:
+        logger.warning("Could not find DagRun for dag_id=%s, run_id=%s", dag_id, run_id)
+    return result
 
 
 @attrs.define
@@ -377,6 +366,6 @@ class SerializedDeadlineAlert:
     """Serialized representation of a deadline alert."""
 
     reference: SerializedReferenceModels.SerializedBaseDeadlineReference
-    interval: timedelta | SerializedVariableInterval
+    interval: timedelta
     callback: Any
     name: str | None = None

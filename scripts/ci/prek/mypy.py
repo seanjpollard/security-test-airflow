@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # /// script
-# requires-python = ">=3.11,<3.12"
+# requires-python = ">=3.10,<3.11"
 # dependencies = [
 #   "rich>=13.6.0",
 # ]
@@ -33,7 +33,7 @@ from common_prek_utils import (
     console,
     initialize_breeze_prek,
     pre_process_mypy_files,
-    run_command_via_breeze_run,
+    run_command_via_breeze_shell,
 )
 
 initialize_breeze_prek(__name__, __file__)
@@ -52,7 +52,7 @@ cmd = [
     f"TERM=ansi mypy {' '.join([shlex.quote(str(Path(file).absolute().relative_to(repo_root))) for file in files_to_test])}",
 ]
 
-res = run_command_via_breeze_run(
+res = run_command_via_breeze_shell(
     cmd=cmd,
     warn_image_upgrade_needed=True,
     extra_env={
@@ -75,6 +75,6 @@ if res.returncode != 0:
         "[yellow]If you see strange stacktraces above, and can't reproduce it, please run"
         " this command and try again:\n"
     )
-    console.print(f"breeze ci-image build --python 3.11{flag}\n")
+    console.print(f"breeze ci-image build --python 3.10{flag}\n")
     console.print("[yellow]You can also run `breeze down --cleanup-mypy-cache` to clean up the cache used.\n")
 sys.exit(res.returncode)

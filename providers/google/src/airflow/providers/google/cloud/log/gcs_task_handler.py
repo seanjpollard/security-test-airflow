@@ -17,7 +17,6 @@
 # under the License.
 from __future__ import annotations
 
-import inspect
 import logging
 import os
 import shutil
@@ -71,33 +70,7 @@ class GCSRemoteLogIO(LoggingMixin):  # noqa: D101
 
     processors = ()
 
-    @classmethod
-    def from_config(cls) -> GCSRemoteLogIO:
-        """Build the remote log IO from Airflow logging configuration."""
-        remote_task_handler_kwargs = conf.getjson("logging", "remote_task_handler_kwargs", fallback={})
-        if not isinstance(remote_task_handler_kwargs, dict):
-            raise ValueError(
-                "logging/remote_task_handler_kwargs must be a JSON object (a python dict), we got "
-                f"{type(remote_task_handler_kwargs)}"
-            )
-        # remote_task_handler_kwargs mixes FileTaskHandler kwargs with IO kwargs; only the
-        # latter belong to this class (same split as airflow_local_settings.py).
-        fth_params = frozenset(inspect.signature(FileTaskHandler.__init__).parameters) - {
-            "self",
-            "base_log_folder",
-        }
-        io_kwargs = {k: v for k, v in remote_task_handler_kwargs.items() if k not in fth_params}
-        return cls(
-            **{
-                "base_log_folder": os.path.expanduser(conf.get_mandatory_value("logging", "base_log_folder")),
-                "remote_base": conf.get_mandatory_value("logging", "remote_base_log_folder"),
-                "delete_local_copy": conf.getboolean("logging", "delete_local_logs"),
-                "gcp_key_path": conf.get_mandatory_value("logging", "google_key_path", fallback=None),
-            }
-            | io_kwargs,
-        )
-
-    def upload(self, path: os.PathLike | str, ti: RuntimeTI | None = None) -> None:
+    def upload(self, path: os.PathLike | str, ti: RuntimeTI):
         """Upload the given log path to the remote storage."""
         path = Path(path)
         if path.is_absolute():
@@ -107,23 +80,12 @@ class GCSRemoteLogIO(LoggingMixin):  # noqa: D101
             local_loc = self.base_log_folder.joinpath(path)
             remote_loc = os.path.join(self.remote_base, path)
 
-        # ``joinpath``/``relative_to`` are lexical and do not normalise ``..``, so a caller-supplied
-        # path can escape ``base_log_folder``. Mirrors the check in ``CloudWatchRemoteLogIO.upload``.
-        base = self.base_log_folder.resolve()
-        try:
-            local_loc.resolve().relative_to(base)
-        except ValueError:
-            self.log.warning("Skipping upload: path %s is outside base_log_folder %s", local_loc, base)
-            return
-
         if local_loc.is_file():
             # read log and remove old logs to get just the latest additions
             log = local_loc.read_text()
             has_uploaded = self.write(log, remote_loc)
             if has_uploaded and self.delete_local_copy:
                 shutil.rmtree(os.path.dirname(local_loc))
-            elif has_uploaded:
-                local_loc.write_text("")
 
     @cached_property
     def hook(self) -> GCSHook | None:
@@ -133,16 +95,7 @@ class GCSRemoteLogIO(LoggingMixin):  # noqa: D101
             try:
                 return GCSHook(gcp_conn_id=conn_id)
             except AirflowNotFoundException:
-                # The operator configured a ``remote_log_conn_id`` that doesn't exist. We
-                # fall back to Application Default Credentials, but the operator almost
-                # certainly didn't mean that — a misconfigured remote-log connection is a
-                # security control failure (logs going through the wrong credentials) and
-                # must be visible in the worker log.
-                self.log.warning(
-                    "remote_log_conn_id %r is not configured; falling back to Application "
-                    "Default Credentials for GCS log handler.",
-                    conn_id,
-                )
+                pass
         return None
 
     @cached_property
@@ -177,19 +130,7 @@ class GCSRemoteLogIO(LoggingMixin):  # noqa: D101
             log = f"{old_log}\n{log}" if old_log else log
         except Exception as e:
             if not self.no_log_found(e):
-                # Read failed for a reason other than "object does not exist" (e.g. transient
-                # GCS outage, IAM glitch, network blip). Fall through to the upload would
-                # overwrite the existing blob with only the new content and *truncate* the
-                # prior log history. Fail closed instead: keep local logs and let the next
-                # heartbeat retry. ``no_log_found`` covers the 404 case, where it is safe to
-                # write the new content as a fresh blob.
-                self.log.warning(
-                    "Refusing to overwrite remote log %s: could not read existing content (%s). "
-                    "Keeping local logs for later retry.",
-                    remote_log_location,
-                    e,
-                )
-                return False
+                self.log.warning("Error checking for previous log: %s", e)
         try:
             blob = storage.Blob.from_string(remote_log_location, self.client)
             blob.upload_from_string(log, content_type="text/plain")
@@ -209,7 +150,7 @@ class GCSRemoteLogIO(LoggingMixin):  # noqa: D101
             exc, "resp", {}
         ).get("status") == "404"
 
-    def read(self, relative_path: str, ti: RuntimeTI | None) -> LogResponse:
+    def read(self, relative_path: str, ti: RuntimeTI) -> LogResponse:
         messages, log_streams = self.stream(relative_path, ti)
         if not log_streams:
             return messages, None
@@ -224,7 +165,7 @@ class GCSRemoteLogIO(LoggingMixin):  # noqa: D101
 
         return messages, logs
 
-    def stream(self, relative_path: str, ti: RuntimeTI | None) -> StreamingLogResponse:
+    def stream(self, relative_path: str, ti: RuntimeTI) -> StreamingLogResponse:
         messages: list[str] = []
         log_streams: list[RawLogStream] = []
         remote_loc = os.path.join(self.remote_base, relative_path)

@@ -204,10 +204,6 @@ class AwaitMessageTriggerFunctionSensor(BaseSensorOperator):
             )
 
     def execute(self, context, event=None) -> Any:
-        if isinstance(self.timeout, (int, float)):
-            timeout = timedelta(seconds=self.timeout)
-        else:
-            timeout = self.timeout
         self.defer(
             trigger=AwaitMessageTrigger(
                 topics=self.topics,
@@ -219,7 +215,6 @@ class AwaitMessageTriggerFunctionSensor(BaseSensorOperator):
                 poll_interval=self.poll_interval,
             ),
             method_name="execute_complete",
-            timeout=timeout,
         )
 
         return event
@@ -227,10 +222,6 @@ class AwaitMessageTriggerFunctionSensor(BaseSensorOperator):
     def execute_complete(self, context, event=None):
         self.event_triggered_function(event, **context)
 
-        if isinstance(self.timeout, (int, float)):
-            timeout = timedelta(seconds=self.timeout)
-        else:
-            timeout = self.timeout
         self.defer(
             trigger=AwaitMessageTrigger(
                 topics=self.topics,
@@ -242,5 +233,4 @@ class AwaitMessageTriggerFunctionSensor(BaseSensorOperator):
                 poll_interval=self.poll_interval,
             ),
             method_name="execute_complete",
-            timeout=timeout,
         )

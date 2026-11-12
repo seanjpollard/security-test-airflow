@@ -16,28 +16,17 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from "react";
-
 import { Box, Button, Center, CloseButton, FileUpload, HStack, Spinner } from "@chakra-ui/react";
 import type { TFunction } from "i18next";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FiUploadCloud } from "react-icons/fi";
 import { LuFileUp } from "react-icons/lu";
 
-import type { BulkActionOnExistence, BulkBody_VariableBody_ } from "openapi/requests/types.gen";
-
-import { RadioCardItem, RadioCardLabel, RadioCardRoot } from "src/system-components";
-
+import type { BulkBody_VariableBody_ } from "openapi/requests/types.gen";
 import { ErrorAlert } from "src/components/ErrorAlert";
-
+import { RadioCardItem, RadioCardLabel, RadioCardRoot } from "src/components/ui/RadioCard";
 import { useImportVariables } from "src/queries/useImportVariables";
-import { isOneOf } from "src/utils";
-
-const isActionOnExistence = isOneOf([
-  "fail",
-  "overwrite",
-  "skip",
-] as const satisfies ReadonlyArray<BulkActionOnExistence>);
 
 type ImportVariablesFormProps = {
   readonly onClose: () => void;
@@ -67,7 +56,7 @@ const ImportVariablesForm = ({ onClose }: ImportVariablesFormProps) => {
     onSuccessConfirm: onClose,
   });
 
-  const [actionIfExists, setActionIfExists] = useState<BulkActionOnExistence>("fail");
+  const [actionIfExists, setActionIfExists] = useState<"fail" | "overwrite" | "skip">("fail");
   const [isParsing, setIsParsing] = useState(false);
   const [fileContent, setFileContent] = useState<Record<string, unknown> | undefined>(undefined);
 
@@ -78,23 +67,17 @@ const ImportVariablesForm = ({ onClose }: ImportVariablesFormProps) => {
     reader.addEventListener("load", (event) => {
       const text = event.target?.result as string;
 
-      let parsedContent: unknown;
-
       try {
-        parsedContent = JSON.parse(text);
-      } catch {
-        parsedContent = undefined;
-      }
+        const parsedContent = JSON.parse(text) as Record<string, unknown>;
 
-      if (parsedContent === null || typeof parsedContent !== "object" || Array.isArray(parsedContent)) {
+        setFileContent(parsedContent);
+      } catch {
         setError({
           body: {
             detail: translate("variables.import.errorParsingJsonFile"),
           },
         });
         setFileContent(undefined);
-      } else {
-        setFileContent(parsedContent as Record<string, unknown>);
       }
 
       setIsParsing(false);
@@ -173,19 +156,18 @@ const ImportVariablesForm = ({ onClose }: ImportVariablesFormProps) => {
         </FileUpload.ItemGroup>
         {isParsing ? (
           <Center mt={2}>
-            <Spinner color="brand.solid" marginRight={2} size="sm" />{" "}
-            {translate("variables.import.parsingFile")}
+            <Spinner color="brand.solid" marginRight={2} size="sm" /> Parsing file...
           </Center>
         ) : undefined}
       </FileUpload.Root>
       <RadioCardRoot
+        defaultValue="fail"
         mb={6}
-        onValueChange={(details) => {
-          if (isActionOnExistence(details.value)) {
-            setActionIfExists(details.value);
-          }
+        onChange={(event) => {
+          const target = event.target as HTMLInputElement;
+
+          setActionIfExists(target.value as "fail" | "overwrite" | "skip");
         }}
-        value={actionIfExists}
       >
         <RadioCardLabel fontSize="md" mb={3}>
           {translate("variables.import.conflictResolution")}
@@ -210,7 +192,7 @@ const ImportVariablesForm = ({ onClose }: ImportVariablesFormProps) => {
             </Center>
           </Box>
         ) : undefined}
-        <Button disabled={!Boolean(fileContent) || isPending} onClick={onSubmit}>
+        <Button colorPalette="brand" disabled={!Boolean(fileContent) || isPending} onClick={onSubmit}>
           <FiUploadCloud /> {translate("variables.import.button")}
         </Button>
       </Box>

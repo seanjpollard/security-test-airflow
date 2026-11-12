@@ -34,9 +34,6 @@ This is where *Deferrable Operators* can be used. When it has nothing to do but 
 
    For guidance on when to use deferred operators versus async tasks,
    see `Deferred vs Async Operators <https://airflow.apache.org/docs/task-sdk/stable/deferred-vs-async-operators.html>`__.
-   For guidance on when to use deferrable operators versus resumable tasks
-   (crash-safe synchronous operators that use the task state store), see
-   :ref:`Resumable Tasks <concepts-resumable-tasks>`.
 
 An overview of how this process works:
 
@@ -56,12 +53,6 @@ If you want to use pre-written deferrable operators that come with Airflow, such
 * Use deferrable operators/sensors in your Dags
 
 Airflow automatically handles and implements the deferral processes for you.
-
-.. note::
-
-    :doc:`Human-in-the-loop <../tutorial/hitl>` operators do **not** use deferral or the triggerer.
-    They wait in the scheduler-managed ``awaiting_input`` task state, so a deployment that waits only
-    on human input rather than deferrable operators does not need a running triggerer.
 
 If you're upgrading existing Dags to use deferrable operators, Airflow contains API-compatible sensor variants. Add these variants into your Dag to use deferrable operators with no other changes required.
 
@@ -86,7 +77,8 @@ When writing a deferrable operators these are the main points to consider:
     from datetime import timedelta
     from typing import Any
 
-    from airflow.sdk import BaseSensorOperator, Context, conf
+    from airflow.configuration import conf
+    from airflow.sdk import BaseSensorOperator, Context
     from airflow.providers.standard.triggers.temporal import TimeDeltaTrigger
 
 
@@ -310,8 +302,7 @@ In the sensor part, we'll need to provide the path to ``TimeDeltaTrigger`` as ``
     from datetime import timedelta
     from typing import Any
 
-    from airflow.sdk import BaseSensorOperator, Context
-    from airflow.triggers.base import StartTriggerArgs
+    from airflow.sdk import BaseSensorOperator, Context, StartTriggerArgs
 
 
     class WaitOneHourSensor(BaseSensorOperator):
@@ -338,8 +329,7 @@ In the sensor part, we'll need to provide the path to ``TimeDeltaTrigger`` as ``
     from datetime import timedelta
     from typing import Any
 
-    from airflow.sdk import BaseSensorOperator, Context
-    from airflow.triggers.base import StartTriggerArgs
+    from airflow.sdk import BaseSensorOperator, Context, StartTriggerArgs
 
 
     class WaitHoursSensor(BaseSensorOperator):
@@ -374,8 +364,7 @@ After the trigger has finished executing, the task may be sent back to the worke
     from datetime import timedelta
     from typing import Any
 
-    from airflow.sdk import BaseSensorOperator, Context
-    from airflow.triggers.base import StartTriggerArgs
+    from airflow.sdk import BaseSensorOperator, Context, StartTriggerArgs
 
 
     class WaitHoursSensor(BaseSensorOperator):
@@ -395,7 +384,7 @@ After the trigger has finished executing, the task may be sent back to the worke
             start_from_trigger: bool,
             **kwargs: dict[str, Any],
         ) -> None:
-            # This whole method will be skipped during task mapping.
+            # This whole method will be skipped during dynamic task mapping.
 
             super().__init__(*args, **kwargs)
             self.start_trigger_args.trigger_kwargs = trigger_kwargs
@@ -495,8 +484,6 @@ According to `benchmarks <https://github.com/apache/airflow/pull/58803#pullreque
 
 You can determine a suitable value for your deployment by creating a large number of triggers (for example, by triggering a Dag with many deferrable tasks) and observing both how the load is distributed across Triggerers in your environment and how long it takes for all Triggerers to pick up the triggers.
 
-.. _deferring/triggerer_queue_assignment:
-
 Controlling Triggerer Host Assignment Per Trigger
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -506,14 +493,6 @@ Under some circumstances, it may be desirable to assign a Trigger to a specific 
 
 * In a multi-tenant Airflow system where you run a distinct set of ``triggerers`` per team.
 * Running distinct sets of ``triggerers`` hosts, where each set of hosts are configured for different trigger operations (e.g. each set of triggerers may have different cloud permissions).
-
-.. tip::
-
-    If you are using :doc:`Multi-Team mode</core-concepts/multi-team>`, the ``--team-name`` option provides
-    native team-scoped triggerer assignment for all trigger types (task-created, event-driven, and callback).
-    See :ref:`Team-scoped Triggerer <multi-team-triggerer>` in the Multi-Team documentation.
-    The ``--queues`` option described below is a distinct queue-based mechanism which may be combined with
-    ``--team-name`` if needed.
 
 To enable queue assignment for triggers, do the following:
 
@@ -536,41 +515,27 @@ Trigger Queue Assignment Caveats
 ''''''''''''''''''''''''''''''''
 
 This feature is only compatible with executors which utilize the task ``queue`` concept
-(such as the :ref:`CeleryExecutor<apache-airflow-providers-celery:celery_executor:queue>`) for
-task-created triggers. :doc:`Event-Driven Triggers<../authoring-and-scheduling/event-scheduling>`
-are not tied to a task queue, but a :class:`~airflow.triggers.base.BaseEventTrigger` subclass can
-be assigned to a queue explicitly by passing ``queue=`` to ``super().__init__()``, independently
-of any executor. Similarly, triggers from async
-:doc:`Callbacks<../administration-and-deployment/logging-monitoring/callbacks>` can be assigned to a
-queue by passing ``queue=`` to :class:`~airflow.sdk.AsyncCallback`.
+(such as the :ref:`CeleryExecutor<apache-airflow-providers-celery:celery_executor:queue>`).
 
-+------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------+
-| Trigger Type                                                                                         | Triggerer assignment source when :ref:`config:triggerer__queues_enabled` is ``True``    |
-+======================================================================================================+=========================================================================================+
-| Task-created Trigger instances                                                                       | Any triggerer with the task queue present in its ``--queues`` option                    |
-+------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------+
-| :doc:`Event-Driven Triggers<../authoring-and-scheduling/event-scheduling>`                           | Any triggerer whose ``--queues`` includes the trigger's ``queue``, or any               |
-|                                                                                                      | triggerer without ``--queues`` if no ``queue`` was set                                  |
-+------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------+
-| Triggers from async :doc:`Callbacks<../administration-and-deployment/logging-monitoring/callbacks>`  | Any triggerer whose ``--queues`` includes the callback's ``queue``, or any              |
-|                                                                                                      | triggerer without ``--queues`` if no ``queue`` was set                                  |
-+------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------+
+Additionally, queue assignment is currently only compatible with the subset of triggers originating from a task's defer ``method``.
 
-If you run a mix of triggers with queues **and** without queues assigned, (of any trigger type), you must run at least one triggerer host
-**without** the ``--queues`` option, so the latter are still run.
++------------------------------------------------------------------------------------------------------+----------------------+----------------------------------------------------------------------------------+
+|          Trigger Type                                                                                |   Supports queues?   |  Triggerer assignment when :ref:`config:triggerer__queues_enabled` is ``True``   |
++======================================================================================================+======================+==================================================================================+
+| Task-created Trigger instances                                                                       |   Yes                |  Any triggerer with the task queue present in its ``--queues`` option            |
++------------------------------------------------------------------------------------------------------+----------------------+----------------------------------------------------------------------------------+
+| :doc:`Event-Driven Triggers<../authoring-and-scheduling/event-scheduling>`                           |   No                 |  Any triggerer running without the ``--queues`` option                           |
++------------------------------------------------------------------------------------------------------+----------------------+----------------------------------------------------------------------------------+
+| Triggers from async :doc:`Callbacks<../administration-and-deployment/logging-monitoring/callbacks>`  |   No                 |  Any triggerer running without the ``--queues`` option                           |
++------------------------------------------------------------------------------------------------------+----------------------+----------------------------------------------------------------------------------+
+
+If you use queues for task-based triggers, while **also** using event-based triggers and/or callback triggers,
+you must run one or more triggerer hosts **without** the ``--queues`` option, so the latter 2 types of triggers are still run.
 
 .. note::
     To enable trigger queues, you must set the ``--queues`` option on one or more triggerers' startup command (these values may differ between the various triggerers).
-    If you set the ``--queue`` value of a triggerer to some value which no triggers are assigned (either from their task queue, or from their explicit ``queue`` field), then that triggerer
-    will never run any triggers. Similarly, all triggerer instances running without the ``--queues`` option will only consume callback-based triggers and event-driven triggers that were not
-    assigned an explicit ``queue``.
-
-An event-driven trigger's ``queue`` is set once, when the trigger is registered for an
-:class:`~airflow.sdk.AssetWatcher` during Dag processing. A callback trigger's ``queue`` is set
-from the ``queue`` passed to :class:`~airflow.sdk.AsyncCallback` when the deadline is missed and the
-callback is queued on the Triggerer. Both are independent of
-:doc:`Multi-Team mode</core-concepts/multi-team>`'s ``team_name`` scoping — the two can be
-combined.
+    If you set the ``--queue`` value of a triggerer to some value which no task queues exist for, that triggerer will never run any triggers.
+    Similarly, all ``triggerer`` instances running without the ``--queues`` option will only consume event-driven and callback-based triggers.
 
 
 The following example shows how to run HA triggerers so that all trigger types are run (assuming all tasks'
@@ -589,7 +554,7 @@ queue values are set to either ``"team_A"`` or ``"team_B"``):
 Difference between Mode='reschedule' and Deferrable=True in Sensors
 -------------------------------------------------------------------
 
-In Airflow, sensors wait for specific conditions to be met before proceeding with downstream tasks. Sensors have two options for managing idle periods: ``mode='reschedule'`` and ``deferrable=True``. Because ``mode='reschedule'`` is a parameter specific to the BaseSensorOperator in Airflow, it allows the sensor to reschedule itself if the condition is not met. ``deferrable=True`` is a parameter supported by individual deferrable operators and sensors to indicate that the task should suspend itself and free the worker slot while waiting, resuming only when the condition is met. The actual behavior varies depending on the specific operator implementation.
+In Airflow, sensors wait for specific conditions to be met before proceeding with downstream tasks. Sensors have two options for managing idle periods: ``mode='reschedule'`` and ``deferrable=True``. Because ``mode='reschedule'`` is a parameter specific to the BaseSensorOperator in Airflow, it allows the sensor to reschedule itself if the condition is not met. ``'deferrable=True'`` is a convention used by some operators to indicate that the task can be retried (or deferred) later, but it is not a built-in parameter or mode in Airflow. The actual behavior of retrying the task varies depending on the specific operator implementation.
 
 +--------------------------------------------------------+--------------------------------------------------------+
 |           mode='reschedule'                            |          deferrable=True                               |

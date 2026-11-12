@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from airflow.providers.common.compat.openlineage.check import require_openlineage_version
 from airflow.providers.common.compat.sdk import AirflowOptionalProviderFeatureException
@@ -60,7 +60,7 @@ def _is_openlineage_provider_accessible() -> bool:
 
 
 @require_openlineage_version(provider_min_version=OPENLINEAGE_PROVIDER_MIN_VERSION)
-def _get_openlineage_parent_info(ti: TaskInstance | RuntimeTI) -> dict[str, Any]:
+def _get_openlineage_parent_info(ti: TaskInstance | RuntimeTI) -> dict[str, str]:
     """Get OpenLineage metadata about the parent task."""
     from airflow.providers.openlineage.plugins.macros import (
         lineage_job_name,
@@ -71,7 +71,7 @@ def _get_openlineage_parent_info(ti: TaskInstance | RuntimeTI) -> dict[str, Any]
         lineage_run_id,
     )
 
-    parent_info: dict[str, Any] = {
+    return {
         "parentRunId": lineage_run_id(ti),
         "parentJobName": lineage_job_name(ti),
         "parentJobNamespace": lineage_job_namespace(),
@@ -80,19 +80,9 @@ def _get_openlineage_parent_info(ti: TaskInstance | RuntimeTI) -> dict[str, Any]
         "rootParentJobNamespace": lineage_root_job_namespace(ti),
     }
 
-    try:
-        from airflow.providers.openlineage.plugins.macros import lineage_job_type, lineage_root_job_type
-    except ImportError:  # Job type macros are missing in older versions of the OpenLineage provider
-        return parent_info
-
-    parent_info["parentJobType"] = lineage_job_type()
-    if (root_job_type := lineage_root_job_type(ti)) is not None:
-        parent_info["rootParentJobType"] = root_job_type
-    return parent_info
-
 
 def _inject_openlineage_parent_info_to_dagrun_conf(
-    dr_conf: dict | None, ol_parent_info: dict[str, Any]
+    dr_conf: dict | None, ol_parent_info: dict[str, str]
 ) -> dict:
     """
     Safely inject OpenLineage parent and root run metadata into a DAG run configuration.
@@ -126,11 +116,9 @@ def _inject_openlineage_parent_info_to_dagrun_conf(
             "parentRunId",
             "parentJobName",
             "parentJobNamespace",
-            "parentJobType",
             "rootParentRunId",
-            "rootParentJobName",
-            "rootParentJobNamespace",
-            "rootParentJobType",
+            "rootJobName",
+            "rootJobNamespace",
         )
 
         if existing := [k for k in forbidden_keys if k in current_ol_dr_conf]:

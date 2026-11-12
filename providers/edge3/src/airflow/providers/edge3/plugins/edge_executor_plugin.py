@@ -18,23 +18,21 @@
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from airflow.providers.common.compat.sdk import AirflowConfigException, AirflowPlugin, conf
+from airflow.exceptions import AirflowConfigException
+from airflow.providers.common.compat.sdk import AirflowPlugin, conf
 from airflow.providers.edge3.version_compat import AIRFLOW_V_3_1_PLUS
 from airflow.utils.session import NEW_SESSION, provide_session
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-    from airflow.plugins_manager import FastAPIAppDict
-
-
 from airflow.utils.db import DBLocks, create_global_lock
 
 
 @provide_session
-def _get_api_endpoint(*, session: Session = NEW_SESSION) -> FastAPIAppDict:
+def _get_api_endpoint(session: Session = NEW_SESSION) -> dict[str, Any]:
     # Ensure all required DB modeals are created before starting the API
     with create_global_lock(session=session, lock=DBLocks.MIGRATIONS):
         engine = session.get_bind().engine

@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from airflow.listeners import hookimpl
 
-new: dict[str, str] = {}
-existing: dict[str, str] = {}
+new = {}
+existing = {}
 
 
 @hookimpl

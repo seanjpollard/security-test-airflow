@@ -51,7 +51,6 @@ from airflow.sdk.definitions._internal.expandinput import (
     is_mappable,
 )
 from airflow.sdk.definitions._internal.types import NOTSET
-from airflow.sdk.definitions.external_clear import SupportsExternalClearTarget
 
 if TYPE_CHECKING:
     import datetime
@@ -215,6 +214,7 @@ class OperatorPartial:
         return self._expand(ListOfDictsExpandInput(kwargs), strict=strict)
 
     def _expand(self, expand_input: ExpandInput, *, strict: bool) -> MappedOperator:
+        from airflow.providers.standard.operators.empty import EmptyOperator
         from airflow.sdk import BaseSensorOperator
         from airflow.sdk.bases.skipmixin import SkipMixin
 
@@ -255,15 +255,9 @@ class OperatorPartial:
             template_fields_renderers=self.operator_class.template_fields_renderers,
             ui_color=self.operator_class.ui_color,
             ui_fgcolor=self.operator_class.ui_fgcolor,
-            # Only a class attribute set to True counts; a property cannot be evaluated without an instance.
-            # A mapped task's clear target is known only once it runs, so an operator that reports one runs.
-            is_empty=(
-                self.operator_class.inherits_from_empty_operator is True
-                and not issubclass(self.operator_class, SupportsExternalClearTarget)
-            ),
+            is_empty=issubclass(self.operator_class, EmptyOperator),
             is_sensor=issubclass(self.operator_class, BaseSensorOperator),
             can_skip_downstream=issubclass(self.operator_class, SkipMixin),
-            is_stub=self.operator_class.is_stub,
             task_module=self.operator_class.__module__,
             task_type=self.operator_class.__name__,
             operator_name=operator_name,
@@ -315,14 +309,12 @@ class MappedOperator(AbstractOperator):
     _is_empty: bool = attrs.field(alias="is_empty")
     _can_skip_downstream: bool = attrs.field(alias="can_skip_downstream")
     _is_sensor: bool = attrs.field(alias="is_sensor", default=False)
-    is_stub: bool = False
     _task_module: str
     task_type: str
     _operator_name: str
     start_trigger_args: StartTriggerArgs | None
     start_from_trigger: bool
     _needs_expansion: bool = True
-    returns_dag_result: bool = False
 
     dag: DAG | None
     task_group: TaskGroup | None
@@ -369,7 +361,7 @@ class MappedOperator(AbstractOperator):
     @classmethod
     def get_serialized_fields(cls):
         # Not using 'cls' here since we only want to serialize base fields.
-        return frozenset(attrs.fields_dict(MappedOperator)) - {
+        return (frozenset(attrs.fields_dict(MappedOperator))) - {
             "_is_empty",
             "_can_skip_downstream",
             "dag",
@@ -384,7 +376,6 @@ class MappedOperator(AbstractOperator):
             "_needs_expansion",
             "partial_kwargs",
             "operator_extra_links",
-            "is_stub",
         }
 
     @property
@@ -801,7 +792,6 @@ class MappedOperator(AbstractOperator):
         op.is_setup = is_setup
         op.is_teardown = is_teardown
         op.on_failure_fail_dagrun = on_failure_fail_dagrun
-        op.returns_dag_result = self.returns_dag_result
         op.downstream_task_ids = self.downstream_task_ids
         op.upstream_task_ids = self.upstream_task_ids
         return op

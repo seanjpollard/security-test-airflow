@@ -286,13 +286,13 @@ PERMISSIONS_CLEANUP_COMMAND = ActionCommand(
     epilog=(
         "examples:\n"
         "To see what orphaned permissions would be cleaned up:\n"
-        "    $ airflow permissions-cleanup --dry-run\n"
+        "    $ airflow fab-auth-manager permissions-cleanup --dry-run\n"
         "To clean up all orphaned permissions:\n"
-        "    $ airflow permissions-cleanup\n"
+        "    $ airflow fab-auth-manager permissions-cleanup\n"
         "To clean up permissions for specific DAG:\n"
-        "    $ airflow permissions-cleanup --dag-id my_dag\n"
+        "    $ airflow fab-auth-manager permissions-cleanup --dag-id my_dag\n"
         "To clean up without confirmation:\n"
-        "    $ airflow permissions-cleanup --yes"
+        "    $ airflow fab-auth-manager permissions-cleanup --yes"
     ),
 )
 

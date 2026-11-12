@@ -70,10 +70,7 @@ class DataflowJobStatusSensor(BaseSensorOperator):
     :param poll_interval: Time (seconds) to wait between two consecutive calls to check the job.
     """
 
-    template_fields: Sequence[str] = (
-        "job_id",
-        "gcp_conn_id",
-    )
+    template_fields: Sequence[str] = ("job_id",)
 
     def __init__(
         self,
@@ -195,10 +192,7 @@ class DataflowJobMetricsSensor(BaseSensorOperator):
 
     """
 
-    template_fields: Sequence[str] = (
-        "job_id",
-        "gcp_conn_id",
-    )
+    template_fields: Sequence[str] = ("job_id",)
 
     def __init__(
         self,
@@ -225,7 +219,7 @@ class DataflowJobMetricsSensor(BaseSensorOperator):
         self.deferrable = deferrable
         self.poll_interval = poll_interval
 
-    def poke(self, context: Context) -> PokeReturnValue | bool:
+    def poke(self, context: Context) -> bool:
         if self.fail_on_terminal_state:
             job = self.hook.get_job(
                 job_id=self.job_id,
@@ -242,35 +236,26 @@ class DataflowJobMetricsSensor(BaseSensorOperator):
             project_id=self.project_id,
             location=self.location,
         )
-        result = result["metrics"] if self.callback is None else self.callback(result["metrics"])
-
-        if isinstance(result, PokeReturnValue):
-            return result
-
-        if bool(result):
-            return PokeReturnValue(
-                is_done=True,
-                xcom_value=result,
-            )
-        return False
+        return result["metrics"] if self.callback is None else self.callback(result["metrics"])
 
     def execute(self, context: Context) -> Any:
         """Airflow runs this method on the worker and defers using the trigger."""
         if not self.deferrable:
-            return super().execute(context)
-        self.defer(
-            timeout=self.execution_timeout,
-            trigger=DataflowJobMetricsTrigger(
-                job_id=self.job_id,
-                project_id=self.project_id,
-                location=self.location,
-                gcp_conn_id=self.gcp_conn_id,
-                poll_sleep=self.poll_interval,
-                impersonation_chain=self.impersonation_chain,
-                fail_on_terminal_state=self.fail_on_terminal_state,
-            ),
-            method_name="execute_complete",
-        )
+            super().execute(context)
+        else:
+            self.defer(
+                timeout=self.execution_timeout,
+                trigger=DataflowJobMetricsTrigger(
+                    job_id=self.job_id,
+                    project_id=self.project_id,
+                    location=self.location,
+                    gcp_conn_id=self.gcp_conn_id,
+                    poll_sleep=self.poll_interval,
+                    impersonation_chain=self.impersonation_chain,
+                    fail_on_terminal_state=self.fail_on_terminal_state,
+                ),
+                method_name="execute_complete",
+            )
 
     def execute_complete(self, context: Context, event: dict[str, str | list]) -> Any:
         """
@@ -328,10 +313,7 @@ class DataflowJobMessagesSensor(BaseSensorOperator):
     :param poll_interval: Time (seconds) to wait between two consecutive calls to check the job.
     """
 
-    template_fields: Sequence[str] = (
-        "job_id",
-        "gcp_conn_id",
-    )
+    template_fields: Sequence[str] = ("job_id",)
 
     def __init__(
         self,
@@ -390,20 +372,21 @@ class DataflowJobMessagesSensor(BaseSensorOperator):
     def execute(self, context: Context) -> Any:
         """Airflow runs this method on the worker and defers using the trigger."""
         if not self.deferrable:
-            return super().execute(context)
-        self.defer(
-            timeout=self.execution_timeout,
-            trigger=DataflowJobMessagesTrigger(
-                job_id=self.job_id,
-                project_id=self.project_id,
-                location=self.location,
-                gcp_conn_id=self.gcp_conn_id,
-                poll_sleep=self.poll_interval,
-                impersonation_chain=self.impersonation_chain,
-                fail_on_terminal_state=self.fail_on_terminal_state,
-            ),
-            method_name="execute_complete",
-        )
+            super().execute(context)
+        else:
+            self.defer(
+                timeout=self.execution_timeout,
+                trigger=DataflowJobMessagesTrigger(
+                    job_id=self.job_id,
+                    project_id=self.project_id,
+                    location=self.location,
+                    gcp_conn_id=self.gcp_conn_id,
+                    poll_sleep=self.poll_interval,
+                    impersonation_chain=self.impersonation_chain,
+                    fail_on_terminal_state=self.fail_on_terminal_state,
+                ),
+                method_name="execute_complete",
+            )
 
     def execute_complete(self, context: Context, event: dict[str, str | list]) -> Any:
         """
@@ -461,10 +444,7 @@ class DataflowJobAutoScalingEventsSensor(BaseSensorOperator):
     :param poll_interval: Time (seconds) to wait between two consecutive calls to check the job.
     """
 
-    template_fields: Sequence[str] = (
-        "job_id",
-        "gcp_conn_id",
-    )
+    template_fields: Sequence[str] = ("job_id",)
 
     def __init__(
         self,
@@ -522,19 +502,20 @@ class DataflowJobAutoScalingEventsSensor(BaseSensorOperator):
     def execute(self, context: Context) -> Any:
         """Airflow runs this method on the worker and defers using the trigger."""
         if not self.deferrable:
-            return super().execute(context)
-        self.defer(
-            trigger=DataflowJobAutoScalingEventTrigger(
-                job_id=self.job_id,
-                project_id=self.project_id,
-                location=self.location,
-                gcp_conn_id=self.gcp_conn_id,
-                poll_sleep=self.poll_interval,
-                impersonation_chain=self.impersonation_chain,
-                fail_on_terminal_state=self.fail_on_terminal_state,
-            ),
-            method_name="execute_complete",
-        )
+            super().execute(context)
+        else:
+            self.defer(
+                trigger=DataflowJobAutoScalingEventTrigger(
+                    job_id=self.job_id,
+                    project_id=self.project_id,
+                    location=self.location,
+                    gcp_conn_id=self.gcp_conn_id,
+                    poll_sleep=self.poll_interval,
+                    impersonation_chain=self.impersonation_chain,
+                    fail_on_terminal_state=self.fail_on_terminal_state,
+                ),
+                method_name="execute_complete",
+            )
 
     def execute_complete(self, context: Context, event: dict[str, str | list]) -> Any:
         """

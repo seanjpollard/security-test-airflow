@@ -32,17 +32,19 @@ describe("estimateTaskNameColumnWidthPx", () => {
   });
 
   it("returns at least the layout minimum for a short label", () => {
-    const nodes: Array<GridTask> = [{ ...baseNode, depth: 0, label: "a" }];
+    const nodes: Array<GridTask> = [{ ...baseNode, depth: 0, label: "a" } as GridTask];
 
     expect(estimateTaskNameColumnWidthPx(nodes)).toBe(200);
   });
 
   it("increases width for longer labels, depth, group chevron, and mapped hint", () => {
-    const plain: Array<GridTask> = [{ ...baseNode, depth: 0, id: "a", label: "x".repeat(40) }];
-    const deep: Array<GridTask> = [{ ...baseNode, depth: 4, id: "b", label: "x".repeat(40) }];
-    const group: Array<GridTask> = [{ ...baseNode, depth: 0, id: "c", isGroup: true, label: "x".repeat(40) }];
+    const plain: Array<GridTask> = [{ ...baseNode, depth: 0, id: "a", label: "x".repeat(40) } as GridTask];
+    const deep: Array<GridTask> = [{ ...baseNode, depth: 4, id: "b", label: "x".repeat(40) } as GridTask];
+    const group: Array<GridTask> = [
+      { ...baseNode, depth: 0, id: "c", isGroup: true, label: "x".repeat(40) } as GridTask,
+    ];
     const mapped: Array<GridTask> = [
-      { ...baseNode, depth: 0, id: "d", is_mapped: true, label: "x".repeat(40) },
+      { ...baseNode, depth: 0, id: "d", is_mapped: true, label: "x".repeat(40) } as GridTask,
     ];
 
     const wPlain = estimateTaskNameColumnWidthPx(plain);

@@ -16,9 +16,7 @@
 # under the License.
 from __future__ import annotations
 
-from typing import Any
-
-cached_functions: list[Any] = []
+cached_functions = []
 
 
 def clearable_cache(func):

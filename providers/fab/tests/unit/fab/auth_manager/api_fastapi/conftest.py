@@ -18,16 +18,12 @@ from __future__ import annotations
 
 import types
 from contextlib import contextmanager
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from airflow.api_fastapi.app import create_auth_manager
 from airflow.api_fastapi.core_api.security import get_user as get_user_dep
 from airflow.providers.fab.auth_manager.fab_auth_manager import FabAuthManager
-
-from tests_common.test_utils.config import conf_vars
 
 
 @pytest.fixture(scope="module")
@@ -67,27 +63,8 @@ def override_deps(test_client):
 @pytest.fixture
 def as_user(override_deps):
     @contextmanager
-    def _as(u=None):
-        if u is None:
-            u = types.SimpleNamespace(id=1, username="tester")
+    def _as(u=types.SimpleNamespace(id=1, username="tester")):
         with override_deps({get_user_dep: lambda: u}):
             yield u
 
     return _as
-
-
-@pytest.fixture
-def real_app_client():
-    """
-    Client for the API of the configured FabAuthManager, backed by its real Flask app and the database.
-
-    Only the user and the authorization check are faked, so requests go through ``_get_flask_app()``.
-    """
-    with conf_vars(
-        {("core", "auth_manager"): "airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager"}
-    ):
-        auth_manager = create_auth_manager()
-        app = auth_manager.get_fastapi_app()
-        app.dependency_overrides[get_user_dep] = lambda: types.SimpleNamespace(id=1, username="tester")
-        with patch.object(auth_manager, "is_authorized_custom_view", return_value=True):
-            yield auth_manager, TestClient(app)

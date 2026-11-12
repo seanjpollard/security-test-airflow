@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # /// script
-# requires-python = ">=3.11,<3.12"
+# requires-python = ">=3.10,<3.11"
 # dependencies = [
 #   "pyyaml>=6.0.3",
 #   "requests>=2.31.0",
@@ -44,9 +44,6 @@ def get_latest_prometheus_statsd_exporter_version() -> str:
             continue
         # Skip "v0"
         if name == "v0":
-            continue
-        # Skip the ones advertised as distroless
-        if "distroless" in name:
             continue
         return name
     raise RuntimeError("ERROR! No version found")

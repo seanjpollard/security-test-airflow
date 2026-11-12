@@ -66,13 +66,7 @@ def get_provider_info():
                 "hook-name": "HTTP",
                 "connection-type": "http",
                 "ui-field-behaviour": {"hidden-fields": [], "relabeling": {}, "placeholders": {}},
-                "conn-fields": {
-                    "srv_lookup": {
-                        "label": "Use DNS SRV Lookup",
-                        "description": "Whether to treat the Host field as a DNS SRV record name and resolve the target host/port at request time.",
-                        "schema": {"type": ["boolean", "null"]},
-                    }
-                },
+                "conn-fields": {},
             }
         ],
     }

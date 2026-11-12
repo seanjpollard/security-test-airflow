@@ -17,7 +17,6 @@
  * under the License.
  */
 import { testConfig } from "playwright.config";
-
 import { expect, test } from "tests/e2e/fixtures";
 import { REPROCESS_API_TO_UI } from "tests/e2e/pages/BackfillPage";
 import type { ReprocessBehaviorApi } from "tests/e2e/pages/BackfillPage";
@@ -25,8 +24,8 @@ import {
   apiCancelAllActiveBackfills,
   apiCreateBackfill,
   apiWaitForBackfillComplete,
-} from "tests/e2e/utils/api/backfills";
-import { waitForDagReady } from "tests/e2e/utils/api/dag-runs";
+  waitForDagReady,
+} from "tests/e2e/utils/test-helpers";
 
 // Fixed past dates avoid non-determinism from relative date calculations.
 // Controls tests use wide, non-overlapping ranges so the scheduler cannot
@@ -102,6 +101,57 @@ test.describe("Backfill", () => {
         expect(details.reprocessBehavior).toEqual(REPROCESS_API_TO_UI[config.behavior]);
       });
     }
+
+    test("Verify backfill table filters", async ({ backfillPage }) => {
+      await backfillPage.navigateToBackfillsTab(testDagId);
+
+      const tableHeaders = backfillPage.backfillsTable.locator("thead th");
+
+      await expect(tableHeaders).toHaveCount(7); // Initial state should have 7 columns
+      const initialColumnCount = await tableHeaders.count();
+
+      await expect(backfillPage.getFilterButton()).toBeVisible();
+
+      await backfillPage.openFilterMenu();
+
+      const filterMenuItems = backfillPage.page.getByRole("menuitem");
+
+      await expect(filterMenuItems).not.toHaveCount(0);
+
+      const firstMenuItem = filterMenuItems.first();
+      const columnToToggle = (await firstMenuItem.textContent())?.trim() ?? "";
+
+      expect(columnToToggle).not.toBe("");
+
+      await backfillPage.toggleColumn(columnToToggle);
+      await backfillPage.page.keyboard.press("Escape");
+
+      await expect(backfillPage.getColumnHeader(columnToToggle)).not.toBeVisible();
+
+      await expect(tableHeaders).toHaveCount(initialColumnCount - 1);
+
+      await backfillPage.openFilterMenu();
+      await backfillPage.toggleColumn(columnToToggle);
+      await backfillPage.page.keyboard.press("Escape");
+
+      await expect(backfillPage.getColumnHeader(columnToToggle)).toBeVisible();
+
+      await expect(tableHeaders).toHaveCount(initialColumnCount);
+    });
+  });
+
+  test.describe("validate date range", () => {
+    test.setTimeout(30_000);
+
+    const testDagId = testConfig.testDag.id;
+
+    test("verify date range selection (start date, end date)", async ({ backfillPage }) => {
+      await backfillPage.navigateToDagDetail(testDagId);
+      await backfillPage.openBackfillDialog();
+      await backfillPage.backfillFromDateInput.fill("2025-01-10T00:00");
+      await backfillPage.backfillToDateInput.fill("2025-01-01T00:00");
+      await expect(backfillPage.backfillDateError).toBeVisible();
+    });
   });
 
   test.describe("Backfill pause, resume, and cancel controls", () => {
@@ -129,8 +179,8 @@ test.describe("Backfill", () => {
         toDate: dates.to,
       });
 
-      // The controls live with the backfill row, so assert them on the Backfills tab.
-      await backfillPage.navigateToBackfillsTab(testDagId);
+      // Navigate to verify UI reflects the paused state, then test toggle cycle.
+      await backfillPage.navigateToDagDetail(testDagId);
       await expect(backfillPage.unpauseButton).toBeVisible({ timeout: 15_000 });
 
       await backfillPage.togglePauseState();
@@ -150,7 +200,7 @@ test.describe("Backfill", () => {
         toDate: dates.to,
       });
 
-      await backfillPage.navigateToBackfillsTab(testDagId);
+      await backfillPage.navigateToDagDetail(testDagId);
       await expect(backfillPage.unpauseButton).toBeVisible({ timeout: 15_000 });
 
       await backfillPage.clickCancelButton();
@@ -171,11 +221,13 @@ test.describe("Backfill", () => {
 
       await backfillPage.cancelBackfillViaApi(backfillId);
 
-      // Assert absence where the controls would render, so the check can fail.
-      await backfillPage.navigateToBackfillsTab(testDagId);
+      // Verify UI: no pause/resume controls visible after cancel.
+      await backfillPage.navigateToDagDetail(testDagId);
       await expect(backfillPage.pauseOrUnpauseButton).not.toBeVisible();
 
       // Verify: completedAt is set in backfills table.
+      await backfillPage.navigateToBackfillsTab(testDagId);
+
       const details = await backfillPage.getBackfillDetailsByDateRange({
         fromDate: dates.from,
         toDate: dates.to,

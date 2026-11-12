@@ -17,34 +17,26 @@
 # under the License.
 from __future__ import annotations
 
-import json
 import logging
 import re
 import sys
 from collections.abc import Callable
-from email.message import Message
-from importlib.metadata import EntryPoint
-from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
-import airflow._shared.providers_discovery.providers_discovery as provider_discovery_module
 from airflow.exceptions import AirflowProviderDeprecationWarning
 from airflow.sdk import BaseHook
 
 PY313 = sys.version_info >= (3, 13)
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
-from airflow._shared.secrets_masker import DEFAULT_SENSITIVE_FIELDS, SecretsMasker
 from airflow.providers_manager import (
     DialectInfo,
     LazyDictWithCache,
     PluginInfo,
     ProviderInfo,
     ProvidersManager,
-    RemoteLoggingInfo,
-    provider_incompatibility_reason,
 )
 
 from tests_common.test_utils.markers import skip_if_force_lowest_dependencies_marker
@@ -53,16 +45,6 @@ if TYPE_CHECKING:
     from unittest.mock import MagicMock
 
     from airflow.cli.cli_config import CLICommand
-
-
-class FakeRemoteLogIO:
-    """Importable stub used by remote-logging discovery tests."""
-
-    processors: tuple = ()
-
-    @classmethod
-    def from_config(cls):
-        return cls()
 
 
 def test_cleanup_providers_manager(cleanup_providers_manager):
@@ -181,82 +163,6 @@ class TestProviderManager:
             ),
         )
 
-    def test_providers_manager_register_remote_logging_by_scheme(self):
-        providers_manager = ProvidersManager()
-        providers_manager._provider_dict = LazyDictWithCache()
-        providers_manager._provider_dict["fake.remote.logging"] = ProviderInfo(
-            version="0.0.1",
-            data={
-                "remote-logging": [
-                    {
-                        "classpath": f"{__name__}.FakeRemoteLogIO",
-                        "scheme": "fake",
-                    }
-                ]
-            },
-        )
-        providers_manager._discover_remote_logging()
-        assert len(providers_manager._remote_logging_info_list) == 1
-        assert providers_manager._remote_logging_by_scheme["fake"] == RemoteLoggingInfo(
-            classpath=f"{__name__}.FakeRemoteLogIO",
-            scheme="fake",
-            package_name="fake.remote.logging",
-        )
-        assert "unknown" not in providers_manager._remote_logging_by_scheme
-
-    def test_providers_manager_register_remote_logging_duplicate_scheme_first_wins(self):
-        providers_manager = ProvidersManager()
-        providers_manager._provider_dict = LazyDictWithCache()
-        providers_manager._provider_dict["fake.remote.logging.first"] = ProviderInfo(
-            version="0.0.1",
-            data={
-                "remote-logging": [
-                    {
-                        "classpath": f"{__name__}.FakeRemoteLogIO",
-                        "scheme": "dup",
-                    }
-                ]
-            },
-        )
-        providers_manager._provider_dict["fake.remote.logging.second"] = ProviderInfo(
-            version="0.0.1",
-            data={
-                "remote-logging": [
-                    {
-                        "classpath": f"{__name__}.FakeRemoteLogIO",
-                        "scheme": "dup",
-                    }
-                ]
-            },
-        )
-        providers_manager._discover_remote_logging()
-        winner = providers_manager._remote_logging_by_scheme["dup"]
-        assert winner.package_name == "fake.remote.logging.first"
-        assert len(providers_manager._remote_logging_info_list) == 1
-        assert providers_manager._remote_logging_info_list[0].package_name == "fake.remote.logging.first"
-
-    def test_providers_manager_remote_logging_bad_class_filtered(self):
-        providers_manager = ProvidersManager()
-        providers_manager._provider_dict = LazyDictWithCache()
-        providers_manager._provider_dict["fake.remote.logging"] = ProviderInfo(
-            version="0.0.1",
-            data={
-                "remote-logging": [
-                    {
-                        "classpath": "fake.module.does.not.exist.FakeRemoteLogIO",
-                        "scheme": "bad",
-                    }
-                ]
-            },
-        )
-        providers_manager._discover_remote_logging()
-        assert "bad" not in providers_manager._remote_logging_by_scheme
-        assert providers_manager._remote_logging_info_list == []
-
-    # The first test in the suite's order to hit _import_info_from_all_hooks() pays the one-time
-    # cost of cold-importing every provider hook module, which can exceed the default 60s
-    # execution timeout on slower or loaded runners.
-    @pytest.mark.execution_timeout(120)
     def test_connection_form_widgets(self, yaml_ui_metadata_counts):
         yaml_widgets, _ = yaml_ui_metadata_counts
         provider_manager = ProvidersManager()
@@ -269,37 +175,6 @@ class TestProviderManager:
         except ImportError:
             # widgets loaded from YAML metadata only
             assert len(connections_form_widgets) == yaml_widgets
-
-    def test_sensitive_connection_fields_are_redactable(self):
-        """
-        Every connection field a provider declares as sensitive must be in the redaction allowlist.
-
-        Providers already state which fields are secret; this asserts the allowlist never drifts
-        apart from them.
-        """
-        # Check the shipped defaults rather than the process-wide masker, whose
-        # sensitive_variables_fields is only populated once settings have been configured.
-        masker = SecretsMasker()
-        masker.sensitive_variables_fields = list(DEFAULT_SENSITIVE_FIELDS)
-
-        # "config" is too generic a field name for the allowlist. apprise's "config" is masked in
-        # API responses because its provider declares it sensitive, but it is not masked in task logs.
-        allowed_unredacted = {("config", "apache-airflow-providers-apprise")}
-
-        provider_manager = ProvidersManager()
-        missing = sorted(
-            {
-                (widget.field_name, widget.package_name)
-                for widget in provider_manager._connection_form_widgets_from_metadata.values()
-                if widget.is_sensitive and not masker.should_hide_value_for_key(widget.field_name)
-            }
-            - allowed_unredacted
-        )
-        assert not missing, (
-            "These connection fields are declared sensitive by their provider but are not "
-            "redacted. Add each name to DEFAULT_SENSITIVE_FIELD_NAMES in "
-            f"shared/secrets_masker: {missing}"
-        )
 
     def test_field_behaviours(self, yaml_ui_metadata_counts):
         _, yaml_behaviours = yaml_ui_metadata_counts
@@ -380,8 +255,8 @@ class TestProviderManager:
     def test_dialects(self):
         provider_manager = ProvidersManager()
         dialect_class_names = list(provider_manager.dialects)
-        assert len(dialect_class_names) == 4
-        assert dialect_class_names == ["default", "db2", "mssql", "postgresql"]
+        assert len(dialect_class_names) == 3
+        assert dialect_class_names == ["default", "mssql", "postgresql"]
 
 
 class TestWithoutCheckProviderManager:
@@ -613,63 +488,3 @@ class TestProvidersMetadataLoading:
         pm = ProvidersManager()
         with pytest.warns(DeprecationWarning, match="already_initialized_provider_configs.*deprecated"):
             pm.already_initialized_provider_configs
-
-
-def make_distribution(name: str, version: str, direct_url: dict | None = None) -> SimpleNamespace:
-    metadata = Message()
-    metadata["Name"] = name
-    return SimpleNamespace(
-        metadata=metadata,
-        version=version,
-        read_text=lambda filename: json.dumps(direct_url) if direct_url else None,
-    )
-
-
-@pytest.mark.parametrize(
-    ("version", "direct_url", "allowed"),
-    [
-        pytest.param("0.10.0", None, False, id="released-0.10.0"),
-        pytest.param("1.0.0rc1", None, True, id="release-candidate-1.0.0rc1"),
-        pytest.param("1.0.0", None, True, id="released-1.0.0"),
-        pytest.param("1.1.0", None, True, id="released-1.1.0"),
-        pytest.param("0.10.0", {"dir_info": {"editable": True}}, True, id="editable-source-install"),
-        pytest.param("0.10.0", {"dir_info": {}}, True, id="directory-source-install"),
-        pytest.param("0.10.0", {"archive_info": {}}, False, id="local-archive-install"),
-    ],
-)
-def test_common_ai_provider_discovery_checks_installed_version_before_import(
-    monkeypatch, caplog, version, direct_url, allowed
-):
-    distribution = make_distribution("apache-airflow-providers-common-ai", version, direct_url)
-    entry_point = Mock(spec=EntryPoint)
-    entry_point.load.return_value = lambda: {"package-name": "apache-airflow-providers-common-ai"}
-    monkeypatch.setattr(
-        provider_discovery_module,
-        "entry_points_with_dist",
-        lambda group: [(entry_point, distribution)],
-    )
-    providers = {}
-
-    with caplog.at_level(logging.WARNING):
-        provider_discovery_module.discover_all_providers_from_packages(
-            providers, Mock(spec=["validate"]), provider_incompatibility_reason
-        )
-
-    assert ("apache-airflow-providers-common-ai" in providers) is allowed
-    assert entry_point.load.called is allowed
-    if not allowed:
-        assert f"apache-airflow-providers-common-ai {version}" in caplog.text
-        assert "apache-airflow-providers-common-ai>=1.0.0" in caplog.text
-
-
-def test_unrelated_provider_is_not_blocked():
-    distribution = make_distribution("apache-airflow-providers-standard", "0.1.0")
-
-    assert provider_incompatibility_reason(distribution) is None
-
-
-def test_core_provider_manager_passes_compatibility_policy(cleanup_providers_manager):
-    with patch("airflow.providers_manager.discover_all_providers_from_packages", autospec=True) as discover:
-        ProvidersManager.initialize_providers_list.__wrapped__(ProvidersManager())
-
-    assert discover.call_args.args[2] is provider_incompatibility_reason

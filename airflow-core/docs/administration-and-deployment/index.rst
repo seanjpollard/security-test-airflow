@@ -29,7 +29,6 @@ This section contains information about deploying Dags into production and the a
     lineage
     listeners
     dag-bundles
-    dag-importers
     dag-serialization
     modules_management
     scheduler
@@ -39,5 +38,3 @@ This section contains information about deploying Dags into production and the a
     priority-weight
     web-stack
     plugins
-    task-and-asset-state-store
-    task-and-asset-state-store-cleanup

@@ -44,6 +44,10 @@ div.admonition.warning {
 /* Patches as of moving to Sphinx 7 to get layout to previous state  */
 /* Needs to be cleaned in a follow-up to source this from the origin style in */
 /* https://github.com/apache/airflow-site/blob/main/landing-pages/site/assets/scss/_rst-content.scss */
+.base-layout {
+  padding-top: 163px !important; /* banner + navbar + 2px padding */
+}
+
 section {
   padding-top: 0rem !important;
   padding-bottom: 0rem !important;
@@ -83,63 +87,13 @@ a.headerlink svg {
 :target::before {
   content: "";
   display: block;
-  height: 130px; /* 90px navbar + 40px gap */
-  margin: -130px 0 0; /* negative of the height above */
+  height: 161px; /* 40px banner + 121px navbar */
+  margin: -161px 0 0; /* negative fixed header height */
 }
 
 @media (max-width: 1280px) {
   :target::before {
-    height: 120px; /* 80px mobile navbar + 40px gap */
-    margin: -120px 0 0; /* negative of the height above */
+    height: 117px; /* 40px banner + 77px mobile navbar */
+    margin: -117px 0 0; /* negative fixed header height */
   }
-}
-
-/*
-Some layout optimization especially for dark mode for Swagger API reference
-*/
-
-/* Hide the authorize button which is use-less in docs w/o API running behind */
-.swagger-ui div.scheme-container {
-  display: none;
-}
-
-/* Set text color to white in dark mode for better readability */
-[data-bs-theme="dark"] .swagger-ui .title,
-[data-bs-theme="dark"] .swagger-ui h4,
-[data-bs-theme="dark"] .swagger-ui .opblock .opblock-section-header h4,
-[data-bs-theme="dark"] .swagger-ui .parameter__name,
-[data-bs-theme="dark"]  .swagger-ui .parameter__type,
-[data-bs-theme="dark"] .swagger-ui p {
-  color: var(--bs-emphasis-color);
-}
-
-[data-bs-theme="dark"] .swagger-ui a.nostyle {
-  color: var(--bs-link-color);
-}
-
-[data-bs-theme="dark"] .swagger-ui .opblock .opblock-summary-description {
-  color: var(--bs-secondary-color);
-}
-
-[data-bs-theme="dark"] .swagger-ui svg {
-  stroke: var(--bs-emphasis-color);
-}
-
-[data-bs-theme="dark"] .swagger-ui .opblock .opblock-section-header {
-  color: var(--bs-emphasis-color);
-  background-color: var(--bs-secondary-bg);
-}
-
-[data-bs-theme="dark"] .swagger-ui input[disabled],
-[data-bs-theme="dark"] .swagger-ui select[disabled],
-[data-bs-theme="dark"] .swagger-ui select,
-[data-bs-theme="dark"] .swagger-ui textarea[disabled]  {
-  border: 1px solid var(--bs-border-color)  ;
-  color: var(--bs-emphasis-color);
-  background-color: var(--bs-secondary-bg);
-}
-
-/* Somehow some dark mode is showing-up also in light mode for code areas, fix it here */
-.swagger-ui pre code {
-  background-color: rgb(51, 51, 51);
 }

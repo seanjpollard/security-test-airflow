@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import jmespath
 import pytest
-import yaml
 from chart_utils.helm_template_generator import render_chart
 
 
@@ -350,6 +349,10 @@ class TestAirflowCommon:
             "AIRFLOW__CORE__FERNET_KEY",
             "AIRFLOW_CONN_AIRFLOW_DB",
             "AIRFLOW__CELERY__BROKER_URL",
+            "OTEL_SERVICE_NAME",
+            "OTEL_EXPORTER_OTLP_PROTOCOL",
+            "OTEL_TRACES_EXPORTER",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
         ]
         expected_vars_in_worker = ["DUMB_INIT_SETSID"] + expected_vars
         for doc in docs:
@@ -376,8 +379,12 @@ class TestAirflowCommon:
             "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN",
             "AIRFLOW_CONN_AIRFLOW_DB",
             "AIRFLOW__API__SECRET_KEY",
-            "AIRFLOW__CELERY__BROKER_URL",
             "AIRFLOW__API_AUTH__JWT_SECRET",
+            "AIRFLOW__CELERY__BROKER_URL",
+            "OTEL_SERVICE_NAME",
+            "OTEL_EXPORTER_OTLP_PROTOCOL",
+            "OTEL_TRACES_EXPORTER",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
         ]
         expected_vars_no_jwt = [
             "AIRFLOW_HOME",
@@ -386,6 +393,10 @@ class TestAirflowCommon:
             "AIRFLOW_CONN_AIRFLOW_DB",
             "AIRFLOW__API__SECRET_KEY",
             "AIRFLOW__CELERY__BROKER_URL",
+            "OTEL_SERVICE_NAME",
+            "OTEL_EXPORTER_OTLP_PROTOCOL",
+            "OTEL_TRACES_EXPORTER",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
         ]
         for doc in docs:
             component = doc["metadata"]["labels"]["component"]
@@ -395,65 +406,6 @@ class TestAirflowCommon:
             assert variables == jmespath.search("spec.template.spec.containers[0].env[*].name", doc), (
                 f"Wrong vars in {component}"
             )
-
-    def test_jwt_secret_injected_into_api_server_and_scheduler(self):
-        docs = render_chart(
-            show_only=[
-                "templates/api-server/api-server-deployment.yaml",
-                "templates/scheduler/scheduler-deployment.yaml",
-            ],
-        )
-
-        for doc in docs:
-            component = doc["metadata"]["labels"]["component"]
-            env_names = jmespath.search(
-                f"spec.template.spec.containers[?name=='{component}'].env[].name", doc
-            )
-            assert env_names.count("AIRFLOW__API_AUTH__JWT_SECRET") == 1, (
-                f"JWT secret missing from {component}"
-            )
-
-            # it must not leak into the sidecars or init containers of those same pods
-            other_env_names = jmespath.search(
-                f"[spec.template.spec.containers[?name!='{component}'], "
-                "spec.template.spec.initContainers][][].env[].name",
-                doc,
-            )
-            assert "AIRFLOW__API_AUTH__JWT_SECRET" not in other_env_names, (
-                f"JWT secret leaked into a non-main container of {component}"
-            )
-
-    def test_jwt_secret_not_injected_into_other_components(self):
-        docs = render_chart(
-            show_only=[
-                "templates/workers/worker-deployment.yaml",
-                "templates/triggerer/triggerer-deployment.yaml",
-                "templates/dag-processor/dag-processor-deployment.yaml",
-            ],
-        )
-
-        for doc in docs:
-            component = doc["metadata"]["labels"]["component"]
-            env_names = jmespath.search(
-                "[spec.template.spec.containers, spec.template.spec.initContainers][][].env[].name", doc
-            )
-            assert "AIRFLOW__API_AUTH__JWT_SECRET" not in env_names, f"JWT secret leaked into {component}"
-
-    def test_jwt_secret_can_be_disabled(self):
-        docs = render_chart(
-            values={"enableBuiltInSecretEnvVars": {"AIRFLOW__API_AUTH__JWT_SECRET": False}},
-            show_only=[
-                "templates/api-server/api-server-deployment.yaml",
-                "templates/scheduler/scheduler-deployment.yaml",
-            ],
-        )
-
-        for doc in docs:
-            component = doc["metadata"]["labels"]["component"]
-            env_names = jmespath.search(
-                f"spec.template.spec.containers[?name=='{component}'].env[].name", doc
-            )
-            assert "AIRFLOW__API_AUTH__JWT_SECRET" not in env_names, f"Wrong vars in {component}"
 
     def test_have_all_config_mounts_on_init_containers(self):
         docs = render_chart(
@@ -475,7 +427,15 @@ class TestAirflowCommon:
         for doc in docs:
             assert expected_mount in jmespath.search("spec.template.spec.initContainers[0].volumeMounts", doc)
 
-    def test_priority_class_name(self):
+    @pytest.mark.parametrize(
+        "workers_values",
+        [
+            {"priorityClassName": "low-priority-worker"},
+            {"celery": {"priorityClassName": "low-priority-worker"}},
+            {"priorityClassName": "test", "celery": {"priorityClassName": "low-priority-worker"}},
+        ],
+    )
+    def test_priority_class_name(self, workers_values):
         docs = render_chart(
             values={
                 "executor": "CeleryExecutor,KubernetesExecutor",
@@ -485,7 +445,7 @@ class TestAirflowCommon:
                 "statsd": {"priorityClassName": "low-priority-statsd"},
                 "triggerer": {"priorityClassName": "low-priority-triggerer"},
                 "dagProcessor": {"priorityClassName": "low-priority-dag-processor"},
-                "workers": {"celery": {"priorityClassName": "low-priority-worker"}},
+                "workers": workers_values,
                 "cleanup": {"enabled": True, "priorityClassName": "low-priority-airflow-cleanup-pods"},
                 "databaseCleanup": {"enabled": True, "priorityClassName": "low-priority-database-cleanup"},
                 "migrateDatabaseJob": {"priorityClassName": "low-priority-run-airflow-migrations"},
@@ -575,149 +535,3 @@ class TestAirflowCommon:
                 else doc["spec"]["template"]["spec"]["imagePullSecrets"]
             )
             assert got_image_pull_secrets == expected_image_pull_secrets
-
-    @pytest.mark.parametrize(
-        "enable_service_links",
-        [True, False],
-    )
-    def test_service_links(
-        self,
-        enable_service_links,
-    ):
-        release_name = "test-basic"
-        docs = render_chart(
-            name=release_name,
-            values={
-                "enableServiceLinks": enable_service_links,
-                "executor": "CeleryExecutor,KubernetesExecutor",
-            },
-            show_only=[
-                "templates/flower/flower-deployment.yaml",
-                "templates/pgbouncer/pgbouncer-deployment.yaml",
-                "templates/scheduler/scheduler-deployment.yaml",
-                "templates/statsd/statsd-deployment.yaml",
-                "templates/triggerer/triggerer-deployment.yaml",
-                "templates/dag-processor/dag-processor-deployment.yaml",
-                "templates/workers/worker-deployment.yaml",
-                "templates/cleanup/cleanup-cronjob.yaml",
-                "templates/database-cleanup/database-cleanup-cronjob.yaml",
-                "templates/jobs/migrate-database-job.yaml",
-                "templates/jobs/create-user-job.yaml",
-                "templates/configmaps/configmap.yaml",
-            ],
-        )
-
-        def matcher(doc):
-            match doc["kind"]:
-                case "Pod":
-                    return doc["spec"].get("enableServiceLinks")
-                case "CronJob":
-                    return doc["spec"]["jobTemplate"]["spec"]["template"]["spec"].get("enableServiceLinks")
-                case "Deployment" | "StatefulSet" | "Job":
-                    return doc["spec"]["template"]["spec"].get("enableServiceLinks")
-                case "ConfigMap":
-                    pod_template_raw = doc["data"]["pod_template_file.yaml"]
-                    k8s_objects = yaml.full_load_all(pod_template_raw)
-                    v = [matcher(doc) for doc in k8s_objects]
-                    assert len(v) == 1
-                    return v[0]
-                case _:
-                    raise ValueError(f"Unhandled document type {doc}")
-
-        for doc in docs:
-            assert matcher(doc) == enable_service_links
-
-
-class TestDatabaseSecretKeys:
-    """Tests for configurable key names in database credential secrets."""
-
-    @staticmethod
-    def _secret_refs(doc):
-        env = jmespath.search("spec.template.spec.containers[0].env", doc)
-        return {
-            e["name"]: e["valueFrom"]["secretKeyRef"]
-            for e in env
-            if e.get("valueFrom", {}).get("secretKeyRef")
-        }
-
-    def test_metadata_secret_key_defaults_to_connection(self):
-        docs = render_chart(
-            values={"data": {"metadataSecretName": "my-metadata-secret"}},
-            show_only=["templates/scheduler/scheduler-deployment.yaml"],
-        )
-        refs = self._secret_refs(docs[0])
-        assert refs["AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"]["key"] == "connection"
-        assert refs["AIRFLOW_CONN_AIRFLOW_DB"]["key"] == "connection"
-
-    def test_metadata_secret_key_custom(self):
-        docs = render_chart(
-            values={"data": {"metadataSecretName": "cnpg-cluster-app", "metadataSecretKey": "uri"}},
-            show_only=["templates/scheduler/scheduler-deployment.yaml"],
-        )
-        refs = self._secret_refs(docs[0])
-        for var in ("AIRFLOW__DATABASE__SQL_ALCHEMY_CONN", "AIRFLOW_CONN_AIRFLOW_DB"):
-            assert refs[var]["name"] == "cnpg-cluster-app"
-            assert refs[var]["key"] == "uri"
-
-    def test_metadata_secret_key_ignored_for_chart_created_secret(self):
-        docs = render_chart(
-            values={"data": {"metadataSecretKey": "uri"}},
-            show_only=["templates/scheduler/scheduler-deployment.yaml"],
-        )
-        refs = self._secret_refs(docs[0])
-        assert refs["AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"]["key"] == "connection"
-        assert refs["AIRFLOW_CONN_AIRFLOW_DB"]["key"] == "connection"
-
-    def test_result_backend_secret_key_custom(self):
-        docs = render_chart(
-            values={
-                "executor": "CeleryExecutor",
-                "data": {"resultBackendSecretName": "my-rb-secret", "resultBackendSecretKey": "uri"},
-            },
-            show_only=["templates/workers/worker-deployment.yaml"],
-        )
-        refs = self._secret_refs(docs[0])
-        assert refs["AIRFLOW__CELERY__RESULT_BACKEND"]["name"] == "my-rb-secret"
-        assert refs["AIRFLOW__CELERY__RESULT_BACKEND"]["key"] == "uri"
-
-    def test_result_backend_secret_key_ignored_for_chart_created_secret(self):
-        docs = render_chart(
-            values={
-                "executor": "CeleryExecutor",
-                "data": {
-                    "resultBackendConnection": {
-                        "user": "postgres",
-                        "pass": "postgres",
-                        "protocol": "postgresql",
-                        "host": "example",
-                        "port": 5432,
-                        "db": "postgres",
-                        "sslmode": "disable",
-                    },
-                    "resultBackendSecretKey": "uri",
-                },
-            },
-            show_only=["templates/workers/worker-deployment.yaml"],
-        )
-        refs = self._secret_refs(docs[0])
-        assert refs["AIRFLOW__CELERY__RESULT_BACKEND"]["key"] == "connection"
-
-    def test_broker_url_secret_key_custom(self):
-        docs = render_chart(
-            values={
-                "executor": "CeleryExecutor",
-                "data": {"brokerUrlSecretName": "my-broker-secret", "brokerUrlSecretKey": "url"},
-            },
-            show_only=["templates/workers/worker-deployment.yaml"],
-        )
-        refs = self._secret_refs(docs[0])
-        assert refs["AIRFLOW__CELERY__BROKER_URL"]["name"] == "my-broker-secret"
-        assert refs["AIRFLOW__CELERY__BROKER_URL"]["key"] == "url"
-
-    def test_broker_url_secret_key_ignored_for_chart_created_secret(self):
-        docs = render_chart(
-            values={"executor": "CeleryExecutor", "data": {"brokerUrlSecretKey": "url"}},
-            show_only=["templates/workers/worker-deployment.yaml"],
-        )
-        refs = self._secret_refs(docs[0])
-        assert refs["AIRFLOW__CELERY__BROKER_URL"]["key"] == "connection"

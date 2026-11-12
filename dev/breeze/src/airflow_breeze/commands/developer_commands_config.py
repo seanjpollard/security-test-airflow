@@ -28,7 +28,6 @@ DEVELOPER_COMMANDS: dict[str, str | list[str]] = {
         "cleanup",
         "generate-migration-file",
         "doctor",
-        "verify",
     ],
 }
 DEVELOPER_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
@@ -140,6 +139,12 @@ DEVELOPER_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
             "options": [
                 "--mount-sources",
                 "--include-mypy-volume",
+            ],
+        },
+        {
+            "name": "Run experimental workers",
+            "options": [
+                "--worker-type",
             ],
         },
         {
@@ -257,6 +262,12 @@ DEVELOPER_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
             ],
         },
         {
+            "name": "Run experimental workers",
+            "options": [
+                "--worker-type",
+            ],
+        },
+        {
             "name": "Installing packages after entering shell",
             "options": [
                 "--airflow-constraints-location",
@@ -323,7 +334,6 @@ DEVELOPER_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
             "name": "Other options",
             "options": [
                 "--forward-credentials",
-                "--include-mypy-volume",
                 "--skip-image-upgrade-check",
             ],
         },
@@ -334,22 +344,21 @@ DEVELOPER_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
             "options": [
                 "--preserve-volumes",
                 "--cleanup-mypy-cache",
-                "--cleanup-pycache",
                 "--cleanup-build-cache",
             ],
         },
         {
             "name": "Project selection",
             "options": [
-                "--all-worktrees",
+                "--all-projects",
                 "--project-name",
             ],
         },
     ],
     "breeze build-docs": [
         {
-            "name": "Build scope (default is to build Python docs and check their spelling)",
-            "options": ["--sdk-docs-only"],
+            "name": "Build scope (default is to build docs and spellcheck)",
+            "options": ["--docs-only", "--spellcheck-only"],
         },
         {
             "name": "Type of build",
@@ -367,7 +376,6 @@ DEVELOPER_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
         {
             "name": "Filtering options",
             "options": [
-                "--sdk",
                 "--package-filter",
                 "--include-not-ready-providers",
                 "--include-removed-providers",
@@ -380,7 +388,6 @@ DEVELOPER_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
                 "--github-repository",
                 "--builder",
                 "--distributions-list",
-                "--sphinx-airflow-theme-path",
             ],
         },
     ],
@@ -399,16 +406,6 @@ DEVELOPER_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
                 "--message",
                 "--github-repository",
                 "--builder",
-            ],
-        },
-    ],
-    "breeze verify": [
-        {
-            "name": "Verify flags",
-            "options": [
-                "--base-ref",
-                "--full",
-                "--json",
             ],
         },
     ],

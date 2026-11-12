@@ -62,39 +62,15 @@ class TestOpenSearchHook:
             hook.delete(index_name="test_index")
 
     @mock.patch(f"{BASEHOOK_PATCH_PATH}.get_connection")
-    @mock.patch("airflow.providers.opensearch.hooks.opensearch.OpenSearch")
-    def test_hook_extra_params(self, mock_opensearch, mock_get_connection):
+    def test_hook_param_bool(self, mock_get_connection):
         mock_conn = Connection(
-            conn_id="opensearch_default",
-            host="opensearch.local",
-            port=9200,
-            extra={
-                "use_ssl": True,
-                "verify_certs": False,
-                "scheme": "https",
-                "timeout": 30,
-                "http_compress": True,
-                "url_prefix": "os",
-                "headers": {"x-trace-id": "abc123"},
-                "opaque_id": "request-1",
-            },
+            conn_id="opensearch_default", extra={"use_ssl": "True", "verify_certs": "True"}
         )
         mock_get_connection.return_value = mock_conn
         hook = OpenSearchHook(open_search_conn_id="opensearch_default", log_query=True)
-        hook.client
 
-        mock_opensearch.assert_called_once_with(
-            hosts=[{"host": "opensearch.local", "port": 9200}],
-            use_ssl=True,
-            verify_certs=False,
-            scheme="https",
-            timeout=30,
-            http_compress=True,
-            url_prefix="os",
-            headers={"x-trace-id": "abc123"},
-            opaque_id="request-1",
-            connection_class=DEFAULT_CONN,
-        )
+        assert isinstance(hook.use_ssl, bool)
+        assert isinstance(hook.verify_certs, bool)
 
     def test_load_conn_param(self, mock_hook):
         hook_default = OpenSearchHook(open_search_conn_id="opensearch_default", log_query=True)

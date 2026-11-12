@@ -38,7 +38,6 @@ def _get_count(
     external_task_group_id,
     external_dag_id,
     states,
-    *,
     session: Session = NEW_SESSION,
 ) -> int:
     """
@@ -57,9 +56,11 @@ def _get_count(
         return 0
 
     if external_task_ids:
-        count = _get_scalar_count(
-            _count_stmt(TI, states, dttm_filter, external_dag_id).where(TI.task_id.in_(external_task_ids)),
-            session,
+        count = (
+            session.scalar(
+                _count_stmt(TI, states, dttm_filter, external_dag_id).where(TI.task_id.in_(external_task_ids))
+            )
+            or 0
         ) / len(external_task_ids)
     elif external_task_group_id:
         external_task_group_task_ids = _get_external_task_group_task_ids(
@@ -69,24 +70,20 @@ def _get_count(
             count = 0
         else:
             count = (
-                _get_scalar_count(
-                    _count_stmt(TI, states, dttm_filter, external_dag_id).where(
-                        tuple_(TI.task_id, TI.map_index).in_(external_task_group_task_ids)
-                    ),
-                    session,
+                (
+                    session.scalar(
+                        _count_stmt(TI, states, dttm_filter, external_dag_id).where(
+                            tuple_(TI.task_id, TI.map_index).in_(external_task_group_task_ids)
+                        )
+                    )
+                    or 0
                 )
                 / len(external_task_group_task_ids)
                 * len(dttm_filter)
             )
     else:
-        count = _get_scalar_count(_count_stmt(DR, states, dttm_filter, external_dag_id), session)
+        count = session.scalar(_count_stmt(DR, states, dttm_filter, external_dag_id)) or 0
     return cast("int", count)
-
-
-def _get_scalar_count(stmt: Select[tuple[int]], session: Session) -> int:
-    # SQLAlchemy 2.0 and 2.1 type `session.scalar()` of a single-column select differently.
-    result: Any = session.scalar(stmt)
-    return result or 0
 
 
 def _count_stmt(
@@ -102,10 +99,9 @@ def _count_stmt(
     """
     date_field = model.logical_date if AIRFLOW_V_3_0_PLUS else model.execution_date
 
-    stmt: Any = select(func.count()).where(
+    return select(func.count()).where(
         model.dag_id == external_dag_id, model.state.in_(states), date_field.in_(dttm_filter)
     )
-    return stmt
 
 
 def _get_external_task_group_task_ids(
@@ -148,11 +144,6 @@ def _get_count_by_matched_states(
 ):
     count = 0
     for _, task_states in run_id_task_state_map.items():
-        # Create this list such that len() can be checked in the conditional (to handle empty inner)
-        matched_states: list = [state in states for state in task_states.values()]
-
-        # An empty inner, such as {"r": {}}, results in count NOT being incremented
-        if len(matched_states) > 0 and all(matched_states):
+        if all(state in states for state in task_states.values() if state):
             count += 1
-
     return count

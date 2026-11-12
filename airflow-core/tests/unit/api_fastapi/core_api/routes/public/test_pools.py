@@ -20,13 +20,11 @@ from unittest import mock
 
 import pytest
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
 
 from airflow.models.pool import Pool
 from airflow.models.team import Team
-from airflow.utils.session import NEW_SESSION, provide_session
+from airflow.utils.session import provide_session
 
-from tests_common.test_utils.asserts import count_queries
 from tests_common.test_utils.config import conf_vars
 from tests_common.test_utils.db import clear_db_pools, clear_db_teams
 from tests_common.test_utils.logs import check_last_log
@@ -51,7 +49,7 @@ POOL3_DESCRIPTION = "Some Description"
 
 
 @provide_session
-def _create_pools(*, session: Session = NEW_SESSION) -> None:
+def _create_pools(session) -> None:
     pool1 = Pool(pool=POOL1_NAME, slots=POOL1_SLOT, include_deferred=POOL1_INCLUDE_DEFERRED, team_name="test")
     pool2 = Pool(pool=POOL2_NAME, slots=POOL2_SLOT, include_deferred=POOL2_INCLUDE_DEFERRED)
     pool3 = Pool(
@@ -64,7 +62,7 @@ def _create_pools(*, session: Session = NEW_SESSION) -> None:
 
 
 @provide_session
-def _create_team(*, session: Session = NEW_SESSION) -> None:
+def _create_team(session) -> None:
     session.add(Team(name="test"))
     session.commit()
 
@@ -73,10 +71,10 @@ class TestPoolsEndpoint:
     @pytest.fixture(autouse=True)
     def setup(self) -> None:
         clear_db_pools()
+        clear_db_teams()
 
     def teardown_method(self) -> None:
         clear_db_pools()
-        clear_db_teams()
 
     def create_pools(self):
         _create_team()
@@ -178,28 +176,6 @@ class TestGetPool(TestPoolsEndpoint):
             "team_name": None,
         }
 
-    def test_get_unlimited_pool_should_respond_200(self, test_client, session):
-        """Regression for #65377: an unlimited (-1 slots) pool has open_slots == inf internally; the
-        response must serialize open_slots as -1 and return 200, not 500."""
-        # Seed the DB row directly to exercise the GET/read path that #65377 reported.
-        session.add(Pool(pool="unlimited_pool", slots=-1, include_deferred=False))
-        session.commit()
-        response = test_client.get("/pools/unlimited_pool")
-        assert response.status_code == 200
-        assert response.json() == {
-            "deferred_slots": 0,
-            "description": None,
-            "include_deferred": False,
-            "name": "unlimited_pool",
-            "occupied_slots": 0,
-            "open_slots": -1,
-            "queued_slots": 0,
-            "running_slots": 0,
-            "scheduled_slots": 0,
-            "slots": -1,
-            "team_name": None,
-        }
-
 
 class TestGetPools(TestPoolsEndpoint):
     @pytest.mark.parametrize(
@@ -259,26 +235,6 @@ class TestGetPools(TestPoolsEndpoint):
 
         assert body["total_entries"] == 2
         assert [pool["name"] for pool in body["pools"]] == [Pool.DEFAULT_POOL_NAME, POOL1_NAME]
-
-    def test_get_pools_with_unlimited_pool_should_respond_200(self, test_client, session):
-        """Regression for #65377: listing pools that include an unlimited (-1 slots) pool must serialize
-        open_slots as -1 through the collection serializer and return 200, not 500."""
-        # Seed the DB row directly to exercise the GET/read path that #65377 reported.
-        session.add(Pool(pool="unlimited_pool", slots=-1, include_deferred=False))
-        session.commit()
-        response = test_client.get("/pools")
-        assert response.status_code == 200
-        pools = {pool["name"]: pool for pool in response.json()["pools"]}
-        assert pools["unlimited_pool"]["slots"] == -1
-        assert pools["unlimited_pool"]["open_slots"] == -1
-
-    def test_should_not_query_on_event_loop(self, test_client, event_loop_queries):
-        """Regression for #74239: the slot counts of each pool must not be queried during serialization."""
-        self.create_pools()
-        response = test_client.get("/pools")
-        assert response.status_code == 200
-        assert response.json()["pools"][1]["open_slots"] == POOL1_SLOT
-        assert event_loop_queries == []
 
 
 class TestPatchPool(TestPoolsEndpoint):
@@ -486,20 +442,6 @@ class TestPatchPool(TestPoolsEndpoint):
             in response.json()["detail"][0]["msg"]
         )
 
-    def test_patch_pool_rejects_blank_name_instead_of_renaming(self, test_client, session):
-        # The guard tested the body name for truthiness, so a blank one was read as "no name
-        # supplied", skipped the mismatch check and renamed the pool to "" instead.
-        self.create_pools()
-        response = test_client.patch(
-            f"/pools/{POOL1_NAME}",
-            json={"name": "", "slots": POOL1_SLOT, "include_deferred": POOL1_INCLUDE_DEFERRED},
-        )
-        assert response.status_code == 400
-        assert response.json()["detail"] == (
-            "Invalid body, pool name from request body doesn't match uri parameter"
-        )
-        assert session.scalar(select(Pool.pool).where(Pool.pool == POOL1_NAME)) == POOL1_NAME
-
 
 class TestPostPool(TestPoolsEndpoint):
     @conf_vars({("core", "multi_team"): "True"})
@@ -608,16 +550,6 @@ class TestPostPool(TestPoolsEndpoint):
             },
         )
         assert response.status_code == 422
-
-    @pytest.mark.parametrize("name", ["", " ", "   ", "\t", "\n"])
-    def test_post_pool_rejects_blank_name(self, test_client, session, name):
-        n_pools = session.scalar(select(func.count()).select_from(Pool))
-        response = test_client.post(
-            "/pools",
-            json={"name": name, "slots": 1, "include_deferred": False},
-        )
-        assert response.status_code == 422
-        assert session.scalar(select(func.count()).select_from(Pool)) == n_pools
 
     @conf_vars({("core", "multi_team"): "False"})
     def test_post_pool_rejects_team_name_when_multi_team_disabled(self, test_client):
@@ -1201,83 +1133,6 @@ class TestBulkPools(TestPoolsEndpoint):
         assert updated_pool.description is None  # unchanged
         assert updated_pool.include_deferred is True  # unchanged
 
-    @pytest.mark.parametrize(
-        ("pool_count"),
-        [5, 10, 20],
-    )
-    def test_bulk_delete_query_count_is_independent_of_pool_count(self, test_client, session, pool_count):
-        # Regression guard for the N+1 fix in BulkPoolService.handle_bulk_delete:
-        # the query count for a bulk delete must be the same regardless of how
-        # many pools are deleted. A regression that re-queries each pool inside
-        # the loop would add one SELECT per pool, so the larger run would issue
-        # strictly more queries than the smaller one.
-
-        EXPECTED_QUERY_COUNT = 4
-
-        pool_names = [f"perf_pool_{pool_count}_{i}" for i in range(pool_count)]
-        session.add_all(Pool(pool=name, slots=1, include_deferred=False) for name in pool_names)
-        session.commit()
-
-        request_body = {
-            "actions": [{"action": "delete", "entities": pool_names, "action_on_non_existence": "fail"}]
-        }
-
-        with count_queries() as result:
-            response = test_client.patch("/pools", json=request_body)
-
-        assert response.status_code == 200
-        assert sorted(response.json()["delete"]["success"]) == sorted(pool_names)
-        assert session.scalars(select(Pool).where(Pool.pool.in_(pool_names))).all() == []
-
-        query_count = sum(result.values())
-
-        assert query_count == EXPECTED_QUERY_COUNT, (
-            f"Bulk-delete query count {query_count} does not match expected {EXPECTED_QUERY_COUNT}. "
-            f"A regression that re-queries pools inside the loop would add one SELECT per pool."
-        )
-
-    @pytest.mark.parametrize(
-        ("pool_count"),
-        [5, 10, 20],
-    )
-    def test_bulk_update_query_count_is_independent_of_pool_count(self, test_client, session, pool_count):
-        # Regression guard for the N+1 fix in BulkPoolService.handle_bulk_update:
-        # the query count for a bulk update must be the same regardless of how
-        # many pools are updated. A regression that re-queries each pool inside
-        # the loop would add one SELECT per pool, so the larger run would issue
-        # strictly more queries than the smaller one.
-
-        EXPECTED_QUERY_COUNT = 4
-
-        pool_names = [f"perf_update_pool_{pool_count}_{i}" for i in range(pool_count)]
-        session.add_all(Pool(pool=name, slots=1, include_deferred=False) for name in pool_names)
-        session.commit()
-
-        request_body = {
-            "actions": [
-                {
-                    "action": "update",
-                    "entities": [
-                        {"name": name, "slots": 99, "include_deferred": False} for name in pool_names
-                    ],
-                    "action_on_non_existence": "fail",
-                }
-            ]
-        }
-
-        with count_queries() as result:
-            response = test_client.patch("/pools", json=request_body)
-
-        assert response.status_code == 200
-        assert sorted(response.json()["update"]["success"]) == sorted(pool_names)
-
-        query_count = sum(result.values())
-
-        assert query_count == EXPECTED_QUERY_COUNT, (
-            f"Bulk-update query count {query_count} does not match expected {EXPECTED_QUERY_COUNT}. "
-            f"A regression that re-queries pools inside the loop would add one SELECT per pool."
-        )
-
     def test_should_respond_401(self, unauthenticated_test_client):
         response = unauthenticated_test_client.patch("/pools", json={})
         assert response.status_code == 401
@@ -1348,92 +1203,3 @@ class TestBulkPools(TestPoolsEndpoint):
 
         expected_error_names = {err["input"]["name"] for err in detail}
         assert sorted(expected_error_names) == ["pool_2", "pool_3"]
-
-    @pytest.mark.parametrize("action", ["create", "update"])
-    @pytest.mark.parametrize("name", ["", " ", "\t"])
-    def test_bulk_rejects_blank_name(self, test_client, session, action, name):
-        # The bulk endpoint validates its entities as PoolBody, so it picks up the same
-        # constraint as POST. One bad entity rejects the whole request before any action runs.
-        self.create_pools()
-        n_pools = session.scalar(select(func.count()).select_from(Pool))
-        response = test_client.patch(
-            "/pools",
-            json={
-                "actions": [
-                    {
-                        "action": action,
-                        "entities": [
-                            {"name": POOL1_NAME, "slots": 1, "include_deferred": False},
-                            {"name": name, "slots": 1, "include_deferred": False},
-                        ],
-                    }
-                ]
-            },
-        )
-        assert response.status_code == 422
-        assert session.scalar(select(func.count()).select_from(Pool)) == n_pools
-
-    @conf_vars({("core", "multi_team"): "True"})
-    def test_bulk_create_overwrite_preserves_unset_team_name(self, test_client, session):
-        """A bulk create+overwrite that omits ``team_name`` must NOT reset an existing pool's
-        ``team_name`` to ``None``.
-
-        ``POOL1_NAME`` is owned by team ``test``. Overwriting it with a body that changes only
-        ``slots`` (no ``team_name``) previously clobbered every unset field back to its default via
-        ``model_dump()`` — silently nulling the pool's multi-team ownership. With
-        ``model_dump(exclude_unset=True)`` the omitted ``team_name`` keeps its current value.
-        """
-        self.create_pools()
-        before = session.scalar(select(Pool).where(Pool.pool == POOL1_NAME))
-        assert before.team_name == "test"
-
-        response = test_client.patch(
-            "/pools",
-            json={
-                "actions": [
-                    {
-                        "action": "create",
-                        "action_on_existence": "overwrite",
-                        "entities": [{"name": POOL1_NAME, "slots": 99}],
-                    }
-                ]
-            },
-        )
-        assert response.status_code == 200
-        assert response.json()["create"]["success"] == [POOL1_NAME]
-
-        session.expire_all()
-        after = session.scalar(select(Pool).where(Pool.pool == POOL1_NAME))
-        assert after.slots == 99  # the field that WAS provided is applied
-        assert after.team_name == "test", (
-            "bulk overwrite that omitted team_name must preserve existing ownership, "
-            f"got team_name={after.team_name!r}"
-        )
-
-    @conf_vars({("core", "multi_team"): "True"})
-    def test_bulk_create_overwrite_applies_explicit_team_name(self, test_client, session):
-        """An explicitly-provided ``team_name`` on a bulk overwrite is still applied (the fix only
-        skips *omitted* fields, it must not skip fields the request actually set)."""
-        _create_team()
-        session.add(Team(name="other"))
-        session.commit()
-        _create_pools()  # POOL1 owned by team "test"
-
-        response = test_client.patch(
-            "/pools",
-            json={
-                "actions": [
-                    {
-                        "action": "create",
-                        "action_on_existence": "overwrite",
-                        "entities": [{"name": POOL1_NAME, "slots": 7, "team_name": "other"}],
-                    }
-                ]
-            },
-        )
-        assert response.status_code == 200
-
-        session.expire_all()
-        after = session.scalar(select(Pool).where(Pool.pool == POOL1_NAME))
-        assert after.team_name == "other"
-        assert after.slots == 7

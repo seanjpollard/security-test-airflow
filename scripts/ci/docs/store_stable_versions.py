@@ -105,11 +105,6 @@ def get_package_version(package_name: str, airflow_root: Path) -> str | None:
     if package_name == "apache-airflow-ctl":
         return get_version_from_init_py(airflow_root / "airflow-ctl" / "src" / "airflowctl" / "__init__.py")
 
-    if package_name == "apache-airflow-mypy":
-        return get_version_from_init_py(
-            airflow_root / "dev" / "mypy" / "src" / "airflow_mypy" / "__init__.py"
-        )
-
     if package_name == "task-sdk":
         return get_version_from_init_py(airflow_root / "task-sdk" / "src" / "airflow" / "sdk" / "__init__.py")
 

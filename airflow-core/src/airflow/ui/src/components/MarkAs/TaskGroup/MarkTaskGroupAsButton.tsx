@@ -16,22 +16,16 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { Box, HStack, IconButton, useDisclosure } from "@chakra-ui/react";
 import { useState } from "react";
-
-import type { ButtonProps } from "@chakra-ui/react";
-import { Box, HStack, useDisclosure } from "@chakra-ui/react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { useTranslation } from "react-i18next";
 import { FiX } from "react-icons/fi";
 import { LuCheck } from "react-icons/lu";
 
 import type { LightGridTaskInstanceSummary, TaskInstanceState } from "openapi/requests/types.gen";
-
-import { IconButton, Menu, Tooltip } from "src/system-components";
-
 import { StateBadge } from "src/components/StateBadge";
-
-import { SHORTCUTS } from "src/context/keyboardShortcuts";
-import { useShortcut } from "src/hooks/useShortcut";
+import { Menu, Tooltip } from "src/components/ui";
 
 import { allowedStates } from "../utils";
 import MarkTaskGroupAsDialog from "./MarkTaskGroupAsDialog";
@@ -39,46 +33,58 @@ import MarkTaskGroupAsDialog from "./MarkTaskGroupAsDialog";
 type Props = {
   readonly groupTaskInstance: LightGridTaskInstanceSummary;
   readonly isHotkeyEnabled?: boolean;
-} & ButtonProps;
+};
 
-export const MarkTaskGroupAsButton = ({ groupTaskInstance, isHotkeyEnabled = false, ...rest }: Props) => {
+const MarkTaskGroupAsButton = ({ groupTaskInstance, isHotkeyEnabled = false }: Props) => {
   const { onClose, onOpen, open } = useDisclosure();
   const { t: translate } = useTranslation();
+
   const [state, setState] = useState<TaskInstanceState>("success");
 
-  useShortcut({
-    ...SHORTCUTS.runActions.markTaskGroupFailed,
-    callback: () => {
+  useHotkeys(
+    "shift+f",
+    () => {
       setState("failed");
       onOpen();
     },
-    options: { enabled: isHotkeyEnabled },
-  });
+    { enabled: isHotkeyEnabled && groupTaskInstance.state !== "failed" },
+  );
 
-  useShortcut({
-    ...SHORTCUTS.runActions.markTaskGroupSuccess,
-    callback: () => {
+  useHotkeys(
+    "shift+s",
+    () => {
       setState("success");
       onOpen();
     },
-    options: { enabled: isHotkeyEnabled },
-  });
-
-  const label = translate("dags:runAndTaskActions.markAs.button", {
-    type: translate("taskGroup_one"),
-  });
+    { enabled: isHotkeyEnabled && groupTaskInstance.state !== "success" },
+  );
 
   return (
     <Box>
-      <Menu.Root positioning={{ gutter: 0, placement: "bottom" }} tooltipLabel={label}>
+      <Menu.Root positioning={{ gutter: 0, placement: "bottom" }}>
         <Menu.Trigger asChild>
-          <IconButton {...rest} aria-label={label}>
-            <HStack gap={1} mx={1}>
-              <LuCheck />
-              <span>/</span>
-              <FiX />
-            </HStack>
-          </IconButton>
+          <div>
+            <Tooltip
+              content={translate("dags:runAndTaskActions.markAs.button", {
+                type: translate("taskGroup_one"),
+              })}
+            >
+              <IconButton
+                aria-label={translate("dags:runAndTaskActions.markAs.button", {
+                  type: translate("taskGroup_one"),
+                })}
+                colorPalette="brand"
+                size="md"
+                variant="ghost"
+              >
+                <HStack gap={1} mx={1}>
+                  <LuCheck />
+                  <span>/</span>
+                  <FiX />
+                </HStack>
+              </IconButton>
+            </Tooltip>
+          </div>
         </Menu.Trigger>
         <Menu.Content>
           {allowedStates.map((menuState) => {
@@ -90,17 +96,19 @@ export const MarkTaskGroupAsButton = ({ groupTaskInstance, isHotkeyEnabled = fal
               <Tooltip
                 closeDelay={100}
                 content={content}
-                disabled={!isHotkeyEnabled}
+                disabled={!isHotkeyEnabled || groupTaskInstance.state === menuState}
                 key={menuState}
                 openDelay={100}
               >
-                {/* Not disabled when state matches: re-applying lets users also flip upstream/downstream tasks */}
                 <Menu.Item
                   asChild
+                  disabled={groupTaskInstance.state === menuState}
                   key={menuState}
                   onClick={() => {
-                    setState(menuState);
-                    onOpen();
+                    if (groupTaskInstance.state !== menuState) {
+                      setState(menuState);
+                      onOpen();
+                    }
                   }}
                   value={menuState}
                 >
@@ -114,12 +122,16 @@ export const MarkTaskGroupAsButton = ({ groupTaskInstance, isHotkeyEnabled = fal
         </Menu.Content>
       </Menu.Root>
 
-      <MarkTaskGroupAsDialog
-        groupTaskInstance={groupTaskInstance}
-        onClose={onClose}
-        open={open}
-        state={state}
-      />
+      {open ? (
+        <MarkTaskGroupAsDialog
+          groupTaskInstance={groupTaskInstance}
+          onClose={onClose}
+          open={open}
+          state={state}
+        />
+      ) : undefined}
     </Box>
   );
 };
+
+export default MarkTaskGroupAsButton;

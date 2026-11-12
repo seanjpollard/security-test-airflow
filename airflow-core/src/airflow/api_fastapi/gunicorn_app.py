@@ -30,25 +30,20 @@ The pattern follows gunicorn's recommended extension approach:
 
 from __future__ import annotations
 
-import os
 import signal
 import sys
 import time
-import warnings
 from typing import TYPE_CHECKING, Any
 
 import structlog
 from gunicorn.app.base import BaseApplication
 from gunicorn.arbiter import Arbiter
 from gunicorn.glogging import Logger as GunicornLogger
-from uvicorn_worker import UvicornWorker
+from uvicorn.workers import UvicornWorker
 
 from airflow.configuration import conf
-from airflow.exceptions import RemovedInAirflow4Warning
 
 if TYPE_CHECKING:
-    from ssl import VerifyMode
-
     from fastapi import FastAPI
     from gunicorn.app.base import Application
 
@@ -248,9 +243,6 @@ def create_gunicorn_app(
     worker_timeout: int,
     ssl_cert: str | None = None,
     ssl_key: str | None = None,
-    ssl_ca_file: str | None = None,
-    ssl_cert_reqs: VerifyMode | None = None,
-    ssl_ciphers: str | None = None,
     log_level: str = "info",
     proxy_headers: bool = False,
 ) -> AirflowGunicornApp:
@@ -263,9 +255,6 @@ def create_gunicorn_app(
     :param worker_timeout: Worker timeout in seconds
     :param ssl_cert: Path to SSL certificate file
     :param ssl_key: Path to SSL key file
-    :param ssl_ca_file: Path to the SSL CA certs file
-    :param ssl_cert_reqs: SSL client certificate requirements
-    :param ssl_ciphers: OpenSSL cipher list; ``None`` keeps the Python default
     :param log_level: Log level (debug, info, warning, error, critical)
     :param proxy_headers: Whether to trust proxy headers
     """
@@ -286,27 +275,8 @@ def create_gunicorn_app(
     if ssl_cert and ssl_key:
         options["certfile"] = ssl_cert
         options["keyfile"] = ssl_key
-        if ssl_ca_file:
-            options["ca_certs"] = ssl_ca_file
-        if ssl_cert_reqs is not None:
-            options["cert_reqs"] = ssl_cert_reqs
-        if ssl_ciphers:
-            options["ciphers"] = ssl_ciphers
 
-    if not proxy_headers:
-        # ``UvicornWorker`` leaves uvicorn's ``proxy_headers`` at its default of True, so
-        # trusting nobody is the only way to keep the worker off X-Forwarded-*.
-        options["forwarded_allow_ips"] = ""
-    elif "FORWARDED_ALLOW_IPS" not in os.environ:
-        # Deployments that never set the variable are still relying on this server type
-        # trusting every client, so keep that until the next major version.
-        warnings.warn(
-            "Under gunicorn the API server trusts X-Forwarded-* from all clients by default. "
-            "Set FORWARDED_ALLOW_IPS to restrict trusted proxies; this default will become "
-            "restrictive in Airflow 4.",
-            category=RemovedInAirflow4Warning,
-            stacklevel=2,
-        )
+    if proxy_headers:
         options["forwarded_allow_ips"] = "*"
 
     return AirflowGunicornApp(options)

@@ -31,7 +31,7 @@ class NotInRetryPeriodDep(BaseTIDep):
     IS_TASK_DEP = True
 
     @provide_session
-    def _get_dep_statuses(self, ti, dep_context, *, session):
+    def _get_dep_statuses(self, ti, session, dep_context):
         if dep_context.ignore_in_retry_period:
             yield self._passing_status(
                 reason="The context specified that being in a retry period was permitted."
@@ -42,9 +42,11 @@ class NotInRetryPeriodDep(BaseTIDep):
             yield self._passing_status(reason="The task instance was not marked for retrying.")
             return
 
+        # Calculate the date first so that it is always smaller than the timestamp used by
+        # ready_for_retry
         cur_date = timezone.utcnow()
-        next_task_retry_date = ti.next_retry_datetime(session=session)
-        if next_task_retry_date >= cur_date:
+        next_task_retry_date = ti.next_retry_datetime()
+        if ti.is_premature:
             yield self._failing_status(
                 reason=(
                     f"Task is not ready for retry yet but will be retried automatically. "

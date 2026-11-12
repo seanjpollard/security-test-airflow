@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from importlib.util import find_spec
 
-import docker
 import pytest
 
 from airflow.providers.common.compat.sdk import DAG, AirflowException, setup, task, teardown
@@ -33,31 +32,12 @@ DILL_INSTALLED = find_spec("dill") is not None
 DILL_MARKER = pytest.mark.skipif(not DILL_INSTALLED, reason="`dill` is not installed")
 CLOUDPICKLE_INSTALLED = find_spec("cloudpickle") is not None
 CLOUDPICKLE_MARKER = pytest.mark.skipif(not CLOUDPICKLE_INSTALLED, reason="`cloudpickle` is not installed")
-PYTHON_IMAGE = "python:3.11-slim"
-
-
-@pytest.fixture(scope="module")
-def warm_up_docker():
-    """
-    Pull the image and start one container before the first test runs.
-
-    On a fresh runner the pull and the first container start on a cold daemon take most of a
-    test's execution timeout, so whichever test ran first timed out. Done here, they count
-    against the more generous setup timeout instead.
-    """
-    client = docker.from_env()
-    try:
-        client.images.pull(PYTHON_IMAGE)
-        client.containers.run(PYTHON_IMAGE, ["python3", "-c", "pass"], remove=True)
-    finally:
-        client.close()
 
 
 class TestDockerDecorator:
-    @pytest.mark.usefixtures("warm_up_docker")
     @pytest.mark.db_test
     def test_basic_docker_operator(self, dag_maker, session):
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force")
+        @task.docker(image="python:3.9-slim", auto_remove="force")
         def f():
             import random
 
@@ -72,10 +52,9 @@ class TestDockerDecorator:
         ti = dr.get_task_instances(session=session)[0]
         assert len(ti.xcom_pull()) == 100
 
-    @pytest.mark.usefixtures("warm_up_docker")
     @pytest.mark.db_test
     def test_basic_docker_operator_with_param(self, dag_maker, session):
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force")
+        @task.docker(image="python:3.9-slim", auto_remove="force")
         def f(num_results):
             import random
 
@@ -97,7 +76,7 @@ class TestDockerDecorator:
         from docker.types import Mount
 
         @task.docker(
-            image=PYTHON_IMAGE,
+            image="python:3.9-slim",
             container_name="python_{{dag_run.dag_id}}",
             auto_remove="force",
             mounts=[Mount(source="workspace", target="/{{task_instance.run_id}}")],
@@ -113,10 +92,9 @@ class TestDockerDecorator:
         assert rendered.container_name == f"python_{ti.dag_id}"
         assert rendered.mounts[0]["Target"] == f"/{ti.run_id}"
 
-    @pytest.mark.usefixtures("warm_up_docker")
     @pytest.mark.db_test
     def test_basic_docker_operator_multiple_output(self, dag_maker, session):
-        @task.docker(image=PYTHON_IMAGE, multiple_outputs=True, auto_remove="force")
+        @task.docker(image="python:3.9-slim", multiple_outputs=True, auto_remove="force")
         def return_dict(number: int):
             return {"number": number + 1, "43": 43}
 
@@ -132,10 +110,9 @@ class TestDockerDecorator:
         assert ti.xcom_pull(key="43", session=session) == 43
         assert ti.xcom_pull(session=session) == {"number": test_number + 1, "43": 43}
 
-    @pytest.mark.usefixtures("warm_up_docker")
     @pytest.mark.db_test
     def test_no_return(self, dag_maker, session):
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force")
+        @task.docker(image="python:3.9-slim", auto_remove="force")
         def f():
             pass
 
@@ -151,7 +128,7 @@ class TestDockerDecorator:
     def test_call_decorated_multiple_times(self):
         """Test calling decorated function 21 times in a DAG"""
 
-        @task.docker(image=PYTHON_IMAGE, network_mode="bridge", api_version="auto", auto_remove="force")
+        @task.docker(image="python:3.9-slim", network_mode="bridge", api_version="auto", auto_remove="force")
         def do_run():
             return 4
 
@@ -186,9 +163,8 @@ class TestDockerDecorator:
             ({"skip_on_exit_code": (100,)}, 101, TaskInstanceState.FAILED),
         ],
     )
-    @pytest.mark.usefixtures("warm_up_docker")
     def test_skip_docker_operator(self, kwargs, actual_exit_code, expected_state, dag_maker, session):
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force", **kwargs)
+        @task.docker(image="python:3.9-slim", auto_remove="force", **kwargs)
         def f(exit_code):
             raise SystemExit(exit_code)
 
@@ -209,7 +185,7 @@ class TestDockerDecorator:
     @pytest.mark.db_test
     def test_setup_decorator_with_decorated_docker_task(self, dag_maker):
         @setup
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force")
+        @task.docker(image="python:3.9-slim", auto_remove="force")
         def f():
             pass
 
@@ -223,7 +199,7 @@ class TestDockerDecorator:
     @pytest.mark.db_test
     def test_teardown_decorator_with_decorated_docker_task(self, dag_maker):
         @teardown
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force")
+        @task.docker(image="python:3.9-slim", auto_remove="force")
         def f():
             pass
 
@@ -240,7 +216,7 @@ class TestDockerDecorator:
         self, dag_maker, on_failure_fail_dagrun
     ):
         @teardown(on_failure_fail_dagrun=on_failure_fail_dagrun)
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force")
+        @task.docker(image="python:3.9-slim", auto_remove="force")
         def f():
             pass
 
@@ -267,7 +243,7 @@ class TestDockerDecorator:
 
         from airflow.providers.docker.decorators.docker import _DockerDecoratedOperator
 
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force", serializer=serializer)
+        @task.docker(image="python:3.9-slim", auto_remove="force", serializer=serializer)
         def f():
             import logging
 
@@ -308,7 +284,7 @@ class TestDockerDecorator:
     def test_respect_docker_host_env(self, monkeypatch, dag_maker):
         monkeypatch.setenv("DOCKER_HOST", "tcp://docker-host-from-env:2375")
 
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force")
+        @task.docker(image="python:3.9-slim", auto_remove="force")
         def f():
             pass
 
@@ -321,7 +297,7 @@ class TestDockerDecorator:
     def test_docker_host_env_empty(self, monkeypatch, dag_maker):
         monkeypatch.setenv("DOCKER_HOST", "")
 
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force")
+        @task.docker(image="python:3.9-slim", auto_remove="force")
         def f():
             pass
 
@@ -336,7 +312,7 @@ class TestDockerDecorator:
     def test_docker_host_env_unset(self, monkeypatch, dag_maker):
         monkeypatch.delenv("DOCKER_HOST", raising=False)
 
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force")
+        @task.docker(image="python:3.9-slim", auto_remove="force")
         def f():
             pass
 
@@ -345,7 +321,6 @@ class TestDockerDecorator:
 
         assert ret.operator.docker_url == "unix://var/run/docker.sock"
 
-    @pytest.mark.usefixtures("warm_up_docker")
     @pytest.mark.db_test
     def test_failing_task(self, dag_maker, session, caplog):
         """Test regression #39319
@@ -353,7 +328,7 @@ class TestDockerDecorator:
         Check the log content of the DockerOperator when the task fails.
         """
 
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force")
+        @task.docker(image="python:3.9-slim", auto_remove="force")
         def f():
             raise ValueError("This task is expected to fail")
 
@@ -373,7 +348,7 @@ class TestDockerDecorator:
 
     @pytest.mark.db_test
     def test_invalid_serializer(self, dag_maker):
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force", serializer="airflow")
+        @task.docker(image="python:3.9-slim", auto_remove="force", serializer="airflow")
         def f():
             """Ensure dill is correctly installed."""
             import dill  # noqa: F401
@@ -405,7 +380,7 @@ class TestDockerDecorator:
     def test_advanced_serializer_not_installed(self, dag_maker, serializer, caplog):
         """Test case for check raising an error if dill/cloudpickle is not installed."""
 
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force", serializer=serializer)
+        @task.docker(image="python:3.9-slim", auto_remove="force", serializer=serializer)
         def f(): ...
 
         with dag_maker():
@@ -416,7 +391,7 @@ class TestDockerDecorator:
     @pytest.mark.db_test
     @CLOUDPICKLE_MARKER
     def test_add_cloudpickle(self, dag_maker):
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force", serializer="cloudpickle")
+        @task.docker(image="python:3.9-slim", auto_remove="force", serializer="cloudpickle")
         def f():
             """Ensure cloudpickle is correctly installed."""
             import cloudpickle  # noqa: F401
@@ -427,7 +402,7 @@ class TestDockerDecorator:
     @pytest.mark.db_test
     @DILL_MARKER
     def test_add_dill(self, dag_maker):
-        @task.docker(image=PYTHON_IMAGE, auto_remove="force", serializer="dill")
+        @task.docker(image="python:3.9-slim", auto_remove="force", serializer="dill")
         def f():
             """Ensure dill is correctly installed."""
             import dill  # noqa: F401

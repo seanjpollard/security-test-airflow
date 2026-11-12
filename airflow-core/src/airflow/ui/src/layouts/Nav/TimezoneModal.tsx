@@ -16,9 +16,10 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import React from "react";
 import { useTranslation } from "react-i18next";
 
-import { Modal } from "src/system-components";
+import { Dialog } from "src/components/ui";
 
 import TimezoneSelector from "./TimezoneSelector";
 
@@ -27,13 +28,19 @@ type TimezoneModalProps = {
   readonly onClose: () => void;
 };
 
-const TimezoneModal = ({ isOpen, onClose }: TimezoneModalProps) => {
-  const { t: translate } = useTranslation();
+const TimezoneModal: React.FC<TimezoneModalProps> = ({ isOpen, onClose }) => {
+  const { t: translate } = useTranslation("common");
 
   return (
-    <Modal lazyMount onOpenChange={onClose} open={isOpen} title={translate("timezoneModal.title")}>
-      <TimezoneSelector />
-    </Modal>
+    <Dialog.Root lazyMount onOpenChange={onClose} open={isOpen} size="xl">
+      <Dialog.Content backdrop>
+        <Dialog.Header>{translate("timezoneModal.title")}</Dialog.Header>
+        <Dialog.CloseTrigger />
+        <Dialog.Body>
+          <TimezoneSelector />
+        </Dialog.Body>
+      </Dialog.Content>
+    </Dialog.Root>
   );
 };
 

@@ -25,8 +25,7 @@ from airflow.partition_mappers.base import PartitionMapper
 class AllowedKeyMapper(PartitionMapper):
     """Partition mapper that validates keys against a set of allowed keys."""
 
-    def __init__(self, allowed_keys: list[str], *, max_downstream_keys: int | None = None) -> None:
-        super().__init__(max_downstream_keys=max_downstream_keys)
+    def __init__(self, allowed_keys: list[str]) -> None:
         self.allowed_keys = allowed_keys
 
     def to_downstream(self, key: str) -> str:
@@ -35,11 +34,8 @@ class AllowedKeyMapper(PartitionMapper):
         return key
 
     def serialize(self) -> dict[str, Any]:
-        data: dict[str, Any] = {"allowed_keys": self.allowed_keys}
-        if self.max_downstream_keys is not None:
-            data["max_downstream_keys"] = self.max_downstream_keys
-        return data
+        return {"allowed_keys": self.allowed_keys}
 
     @classmethod
     def deserialize(cls, data: dict[str, Any]) -> PartitionMapper:
-        return cls(allowed_keys=data["allowed_keys"], max_downstream_keys=data.get("max_downstream_keys"))
+        return cls(allowed_keys=data["allowed_keys"])

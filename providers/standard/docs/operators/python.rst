@@ -24,8 +24,8 @@ PythonOperator
 
 Use the :class:`~airflow.providers.standard.operators.python.PythonOperator` to execute Python callables.
 
-.. note::
-    The ``@task`` decorator is the Taskflow equivalent of ``PythonOperator`` to execute Python callables.
+.. tip::
+    The ``@task`` decorator is recommended over the classic ``PythonOperator`` to execute Python callables.
 
 .. tab-set::
 
@@ -159,8 +159,8 @@ Additionally, the ``cloudpickle`` package needs to be installed as an optional d
 Cloudpickle offers a strong advantage for its focus on standard pickling protocol, ensuring wider compatibility and
 smoother data exchange, while still effectively handling common Python objects and global variables within functions.
 
-.. note::
-    The ``@task.virtualenv`` decorator is the Taskflow equivalent of ``PythonVirtualenvOperator``
+.. tip::
+    The ``@task.virtualenv`` decorator is recommended over the classic ``PythonVirtualenvOperator``
     to execute Python callables inside new Python virtual environments.
 
 .. tab-set::
@@ -257,7 +257,7 @@ different workers, it might happen that virtual environment are created on multi
 of the worker will drop the cache (assuming ``venv_cache_path`` is not on a persistent volume).
 
 In case you have problems during runtime with broken cached virtual environments, you can influence the cache directory hash by setting the Airflow variable
-``python_virtualenv_operator_cache_key`` to any text. The content of this variable is used in the vector to calculate the cache directory key.
+``PythonVirtualenvOperator.cache_key`` to any text. The content of this variable is uses in the vector to calculate the cache directory key.
 
 Note that any modification of a cached virtual environment (like temp files in binary path, post-installing further requirements) might pollute a cached virtual environment and the
 operator is not maintaining or cleaning the cache path.
@@ -283,8 +283,8 @@ pre-defined environment. The virtualenv package should be preinstalled in the en
 In case ``dill`` is used, it has to be preinstalled in the environment (the same version that is installed
 in main Airflow environment).
 
-.. note::
-    The ``@task.external_python`` decorator is the Taskflow equivalent of ``ExternalPythonOperator``
+.. tip::
+    The ``@task.external_python`` decorator is recommended over the classic ``ExternalPythonOperator``
     to execute Python code in pre-defined Python environments.
 
 .. tab-set::
@@ -340,8 +340,8 @@ BranchPythonOperator
 Use the :class:`~airflow.providers.standard.operators.python.BranchPythonOperator` to execute Python :ref:`branching <concepts:branching>`
 tasks.
 
-.. note::
-    The ``@task.branch`` decorator is the Taskflow equivalent of ``BranchPythonOperator``
+.. tip::
+    The ``@task.branch`` decorator is recommended over the classic ``BranchPythonOperator``
     to execute Python code.
 
 .. tab-set::
@@ -377,8 +377,8 @@ BranchPythonVirtualenvOperator
 Use the :class:`~airflow.providers.standard.operators.python.BranchPythonVirtualenvOperator` decorator to execute Python :ref:`branching <concepts:branching>`
 tasks and is a hybrid of the :class:`~airflow.providers.standard.operators.python.BranchPythonOperator` with execution in a virtual environment.
 
-.. note::
-    The ``@task.branch_virtualenv`` decorator is the Taskflow equivalent of
+.. tip::
+    The ``@task.branch_virtualenv`` decorator is recommended over the classic
     ``BranchPythonVirtualenvOperator`` to execute Python code.
 
 .. tab-set::
@@ -415,8 +415,8 @@ Use the :class:`~airflow.providers.standard.operators.python.BranchExternalPytho
 tasks and is a hybrid of the :class:`~airflow.providers.standard.operators.python.BranchPythonOperator` with execution in an
 external Python environment.
 
-.. note::
-    The ``@task.branch_external_python`` decorator is the Taskflow equivalent of
+.. tip::
+    The ``@task.branch_external_python`` decorator is recommended over the classic
     ``BranchExternalPythonOperator`` to execute Python code.
 
 .. tab-set::
@@ -460,8 +460,8 @@ based on the configured short-circuiting (more on this later). In the example be
 "condition_is_true" task will execute while the tasks downstream of the "condition_is_false" task will be
 skipped.
 
-.. note::
-    The ``@task.short_circuit`` decorator is the Taskflow equivalent of ``ShortCircuitOperator``
+.. tip::
+    The ``@task.short_circuit`` decorator is recommended over the classic ``ShortCircuitOperator``
     to short-circuit pipelines via Python callables.
 
 .. tab-set::

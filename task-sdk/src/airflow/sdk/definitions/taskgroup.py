@@ -23,15 +23,15 @@ import copy
 import re
 import weakref
 from collections import deque
-from collections.abc import Collection, Generator, Iterator, Sequence
+from collections.abc import Generator, Iterator, Sequence
 from typing import TYPE_CHECKING, Any
 
 import attrs
 
 from airflow.sdk import TriggerRule
-from airflow.sdk._shared.dagnode.node import TaskGroupMixin
 from airflow.sdk.definitions._internal.node import DAGNode, validate_group_key
 from airflow.sdk.exceptions import (
+    AirflowDagCycleException,
     DuplicateTaskIdFound,
     NodeNotFound,
     TaskAlreadyInTaskGroup,
@@ -76,23 +76,8 @@ def _validate_group_id(instance, attribute, value: str) -> None:
     validate_group_key(value)
 
 
-def _convert_doc_md(doc_md: str | None) -> str | None:
-    """Convert markdown file paths to file contents."""
-    if doc_md is None:
-        return doc_md
-
-    if doc_md.endswith(".md"):
-        try:
-            with open(doc_md) as fh:
-                return fh.read()
-        except FileNotFoundError:
-            return doc_md
-
-    return doc_md
-
-
 @attrs.define(repr=False)
-class TaskGroup(TaskGroupMixin, DAGNode):
+class TaskGroup(DAGNode):
     """
     A collection of tasks.
 
@@ -116,11 +101,8 @@ class TaskGroup(TaskGroupMixin, DAGNode):
         here and `'depends_on_past': False` in the operator's call
         `default_args`, the actual value will be `False`.
     :param tooltip: The tooltip of the TaskGroup node when displayed in the UI
-    :param doc_md: Markdown documentation for the TaskGroup displayed in the UI
-    :param ui_color: The fill color of the TaskGroup node in the graph view -- a raw color (hex code
-        or CSS name) or a Chakra palette or semantic token (e.g. ``blue.500`` or ``brand.solid``)
-    :param ui_fgcolor: The label color of the TaskGroup node in the graph view -- a raw color (hex
-        code or CSS name) or a Chakra palette or semantic token
+    :param ui_color: The fill color of the TaskGroup node when displayed in the UI
+    :param ui_fgcolor: The label color of the TaskGroup node when displayed in the UI
     :param add_suffix_on_collision: If this task group name already exists,
         automatically add `__1` etc suffixes
     :param group_display_name: If set, this will be the display name for the TaskGroup node in the UI.
@@ -137,7 +119,6 @@ class TaskGroup(TaskGroupMixin, DAGNode):
     dag: DAG = attrs.field(default=attrs.Factory(_default_dag, takes_self=True))
     default_args: dict[str, Any] = attrs.field(factory=dict, converter=copy.deepcopy)
     tooltip: str = attrs.field(default="", validator=attrs.validators.instance_of(str))
-    doc_md: str | None = attrs.field(default=None, converter=_convert_doc_md)
     children: dict[str, DAGNode] = attrs.field(factory=dict, init=False)
 
     upstream_group_ids: set[str | None] = attrs.field(factory=set, init=False)
@@ -151,14 +132,8 @@ class TaskGroup(TaskGroupMixin, DAGNode):
         on_setattr=attrs.setters.frozen,
     )
 
-    ui_color: str = attrs.field(
-        default="CornflowerBlue",
-        validator=attrs.validators.instance_of(str),
-    )
-    ui_fgcolor: str = attrs.field(
-        default="#000",
-        validator=attrs.validators.instance_of(str),
-    )
+    ui_color: str = attrs.field(default="CornflowerBlue", validator=attrs.validators.instance_of(str))
+    ui_fgcolor: str = attrs.field(default="#000", validator=attrs.validators.instance_of(str))
 
     add_suffix_on_collision: bool = False
 
@@ -548,167 +523,57 @@ class TaskGroup(TaskGroupMixin, DAGNode):
             key=lambda node: (not isinstance(node, TaskGroup), node.node_id),
         )
 
-    def topological_sort(self, *, group_dict: dict[str, TaskGroup] | None = None) -> list[DAGNode]:
+    def topological_sort(self):
         """
-        Sort children topologically — a task always comes after its upstream dependencies.
+        Sorts children in topographical order, such that a task comes after any of its upstream dependencies.
 
-        Projects per-task upstream edges onto sibling-level integer indices, then dispatches:
-
-        - Forward-declared DAGs (few/no children declared after their dependents): greedy
-          multi-pass sweep over the projection, O(V + E) for the common case.
-        - Reverse-declared DAGs (many children declared before their dependents): pass-number
-          traversal, O((V + E) log V), avoids the O(N²) blowup the sweep would hit.
-
-        Both branches produce the same emission order: level-by-legacy-pass, ties broken by
-        children insertion order. Siblings that depend on each other in a cycle, which
-        ``DAG.check_cycle`` allows, are ordered as one unit (see ``_sort_cyclic_projection``).
+        :return: list of tasks in topological order
         """
-        children = self.children
-        if not children:
-            return []
+        # This uses a modified version of Kahn's Topological Sort algorithm to
+        # not have to pre-compute the "in-degree" of the nodes.
+        graph_unsorted = copy.copy(self.children)
 
-        nodes = list(children.values())
-        n = len(nodes)
-        id_to_idx = {nid: i for i, nid in enumerate(children)}
-        if group_dict is None:
-            group_dict = self.dag.task_group.get_task_group_dict()
+        graph_sorted: list[DAGNode] = []
 
-        projected: list[tuple[int, ...]] = [()] * n
-        nodes_with_back_edge = 0
-        for i, child in enumerate(nodes):
-            deps = self._project_child_deps(i, child, id_to_idx, group_dict)
-            if deps:
-                projected[i] = deps
-                if any(d > i for d in deps):
-                    nodes_with_back_edge += 1
+        # special case
+        if not self.children:
+            return graph_sorted
 
-        # The ratio catches dense back-heavy groups; a 32-node absolute cutoff keeps
-        # padded reverse-declared runs on the fast path once sweep rescans overtake pass-numbering.
-        if nodes_with_back_edge >= 32 or nodes_with_back_edge * 2 > n:
-            return self._sort_via_pass_numbering(nodes, projected)
-        return self._sweep_projection(nodes, projected)
-
-    def _project_child_deps(
-        self,
-        child_idx: int,
-        child: DAGNode,
-        id_to_idx: dict[str, int],
-        group_dict: dict[str, TaskGroup],
-    ) -> tuple[int, ...]:
-        return self._project_upstream_ids(child_idx, child._topological_upstream_ids, id_to_idx, group_dict)
-
-    def _project_upstream_ids(
-        self,
-        child_idx: int,
-        upstream_ids: Collection[str],
-        id_to_idx: dict[str, int],
-        group_dict: dict[str, TaskGroup],
-    ) -> tuple[int, ...]:
-        if not upstream_ids:
-            return ()
-        sib_deps: set[int] = set()
-        for edge_id in upstream_ids:
-            j = id_to_idx.get(edge_id)
-            if j is not None:
-                if j != child_idx:
-                    sib_deps.add(j)
-                continue
-            tg = group_dict.get(edge_id)
-            if tg is None:
-                edge = self.dag.get_task(edge_id)
-                tg = edge.task_group
-            while tg is not None:
-                anc_idx = id_to_idx.get(tg.node_id)
-                if anc_idx is not None:
-                    if anc_idx != child_idx:
-                        sib_deps.add(anc_idx)
-                    break
-                tg = tg.parent_group
-        return tuple(sib_deps)
-
-    def _sweep_projection(self, nodes: list[DAGNode], projected: list[tuple[int, ...]]) -> list[DAGNode]:
-        # Greedy multi-pass sweep. emitted[i] == 1 iff nodes[i] has been emitted.
-        # Pass 1 iterates range(n) directly; only blocked nodes are recorded into
-        # `pending` and re-checked in subsequent passes. Avoids paying for a
-        # `list(range(n))` allocation on single-pass shapes (the common case) while
-        # still skipping already-emitted nodes on multi-pass shapes (e.g. a diamond's
-        # single trailing sink).
-        n = len(nodes)
-        emitted = bytearray(n)
-        order: list[DAGNode] = []
-        order_append = order.append
-        pending: list[int] = []
-        pending_append = pending.append
-        for i in range(n):
-            blocked = False
-            for d in projected[i]:
-                if not emitted[d]:
-                    blocked = True
-                    break
-            if blocked:
-                pending_append(i)
-                continue
-            emitted[i] = 1
-            order_append(nodes[i])
-        while pending:
-            next_pending: list[int] = []
-            next_pending_append = next_pending.append
-            for i in pending:
-                blocked = False
-                for d in projected[i]:
-                    if not emitted[d]:
-                        blocked = True
+        # Run until the unsorted graph is empty.
+        while graph_unsorted:
+            # Go through each of the node/edges pairs in the unsorted graph. If a set of edges doesn't contain
+            # any nodes that haven't been resolved, that is, that are still in the unsorted graph, remove the
+            # pair from the unsorted graph, and append it to the sorted graph. Note here that by using
+            # the values() method for iterating, a copy of the unsorted graph is used, allowing us to modify
+            # the unsorted graph as we move through it.
+            #
+            # We also keep a flag for checking that graph is acyclic, which is true if any nodes are resolved
+            # during each pass through the graph. If not, we need to exit as the graph therefore can't be
+            # sorted.
+            acyclic = False
+            for node in list(graph_unsorted.values()):
+                for edge in node.upstream_list:
+                    if edge.node_id in graph_unsorted:
                         break
-                if blocked:
-                    next_pending_append(i)
-                    continue
-                emitted[i] = 1
-                order_append(nodes[i])
-            if len(next_pending) == len(pending):
-                return self._sort_cyclic_projection(nodes, projected)
-            pending = next_pending
-        return order
+                    # Check for task's group is a child (or grand child) of this TG,
+                    tg = edge.task_group
+                    while tg:
+                        if tg.node_id in graph_unsorted:
+                            break
+                        tg = tg.parent_group
 
-    def _sort_via_pass_numbering(
-        self, nodes: list[DAGNode], projected: list[tuple[int, ...]]
-    ) -> list[DAGNode]:
-        sorted_indices = self._compute_pass_order(projected)
-        if len(sorted_indices) != len(nodes):
-            return self._sort_cyclic_projection(nodes, projected)
-        return [nodes[i] for i in sorted_indices]
+                    if tg:
+                        # We are already going to visit that TG
+                        break
+                else:
+                    acyclic = True
+                    del graph_unsorted[node.node_id]
+                    graph_sorted.append(node)
 
-    def _find_dependency_cycles(self, *, group_dict: dict[str, TaskGroup]) -> list[list[str]]:
-        """
-        Find children that depend on each other in a cycle when each child TaskGroup is one unit.
+            if not acyclic:
+                raise AirflowDagCycleException(f"A cyclic dependency occurred in dag: {self.dag_id}")
 
-        An edge into any task of a child group counts as an edge into the group, so a path that
-        leaves a group and comes back into it is a cycle even though the task-level graph is
-        acyclic. This is stricter than the ordering ``topological_sort`` needs, which only looks
-        at edges into a group's roots.
-
-        :return: one list of child node ids per cycle, each in insertion order
-        """
-        nodes = list(self.children.values())
-        id_to_idx = {nid: i for i, nid in enumerate(self.children)}
-        projected = [
-            self._project_upstream_ids(i, self._get_unit_upstream_ids(child), id_to_idx, group_dict)
-            for i, child in enumerate(nodes)
-        ]
-        members: dict[int, list[str]] = {}
-        for i, component in enumerate(self._find_projection_components(projected)):
-            members.setdefault(component, []).append(nodes[i].node_id)
-        return [node_ids for node_ids in members.values() if len(node_ids) > 1]
-
-    @staticmethod
-    def _get_unit_upstream_ids(child: DAGNode) -> Collection[str]:
-        if not isinstance(child, TaskGroup):
-            return child._topological_upstream_ids
-        # Not _topological_upstream_ids or iter(child): MappedTaskGroup.__iter__ raises for a
-        # trigger_rule="always" child, which would turn an acyclic Dag into an import error.
-        upstream_ids = set(child.upstream_task_ids)
-        upstream_ids.update(group_id for group_id in child.upstream_group_ids if group_id is not None)
-        upstream_ids.update(edge_id for task in child.iter_tasks() for edge_id in task.upstream_task_ids)
-        return upstream_ids
+        return graph_sorted
 
     def iter_mapped_task_groups(self) -> Iterator[MappedTaskGroup]:
         """

@@ -16,10 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { ButtonGroup } from "@chakra-ui/react";
+import { ButtonGroup, IconButton } from "@chakra-ui/react";
 import { MdCompress, MdExpand } from "react-icons/md";
-
-import { IconButton } from "src/system-components";
 
 type Props = {
   readonly collapseLabel: string;
@@ -41,21 +39,25 @@ export const ExpandCollapseButtons = ({
   onExpand,
   ...rest
 }: Props) => (
-  <ButtonGroup attached variant="outline" zIndex={2} {...rest}>
+  <ButtonGroup attached colorPalette="brand" size="sm" variant="outline" {...rest}>
     <IconButton
+      aria-label={expandLabel}
       data-testid="expand-all-button"
       disabled={isExpandDisabled}
-      label={expandLabel}
       onClick={onExpand}
+      size="sm"
+      title={expandLabel}
       variant={isExpanded === true ? "solid" : "outline"}
     >
       <MdExpand />
     </IconButton>
     <IconButton
+      aria-label={collapseLabel}
       data-testid="collapse-all-button"
       disabled={isCollapseDisabled}
-      label={collapseLabel}
       onClick={onCollapse}
+      size="sm"
+      title={collapseLabel}
       variant={isExpanded === false ? "solid" : "outline"}
     >
       <MdCompress />

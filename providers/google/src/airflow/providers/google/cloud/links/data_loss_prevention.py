@@ -17,7 +17,9 @@
 
 from __future__ import annotations
 
-from airflow.providers.google.cloud.links.base import BASE_LINK, BaseGoogleLink
+from airflow.providers.google.cloud.links.base import BaseGoogleLink
+
+BASE_LINK = "https://console.cloud.google.com"
 
 DLP_BASE_LINK = BASE_LINK + "/security/dlp"
 

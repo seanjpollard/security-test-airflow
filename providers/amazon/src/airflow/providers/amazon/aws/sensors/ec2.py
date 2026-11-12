@@ -75,8 +75,6 @@ class EC2InstanceStateSensor(AwsBaseSensor[EC2Hook]):
                     aws_conn_id=self.aws_conn_id,
                     region_name=self.region_name,
                     poll_interval=int(self.poke_interval),
-                    verify=self.verify,
-                    botocore_config=self.botocore_config,
                 ),
                 method_name="execute_complete",
             )

@@ -21,10 +21,8 @@ import { useTranslation } from "react-i18next";
 import { LuInfo } from "react-icons/lu";
 
 import type { DAGRunResponse } from "openapi/requests/types.gen";
-
-import { Tooltip } from "src/system-components";
-
 import { RunTypeIcon } from "src/components/RunTypeIcon";
+import { Tooltip } from "src/components/ui";
 
 const runTypes: Array<DAGRunResponse["run_type"]> = [
   "scheduled",
@@ -40,26 +38,21 @@ export const RunTypeLegend = () => {
   return (
     <Tooltip
       content={
-        <div>
+        <Box>
           <Text fontSize="xs" fontWeight="bold" mb={1}>
             {translate("dag:grid.runTypeLegend")}
           </Text>
           {runTypes.map((runType) => (
             <Flex align="center" gap={2} key={runType}>
-              {/* Grid bars show no icon for scheduled runs; the spacer keeps the labels aligned. */}
-              {runType === "scheduled" ? (
-                <Box flexShrink={0} width="1em" />
-              ) : (
-                <RunTypeIcon runType={runType} />
-              )}
+              <RunTypeIcon runType={runType} />
               <Text fontSize="xs">{translate(`common:runTypes.${runType}`)}</Text>
             </Flex>
           ))}
-        </div>
+        </Box>
       }
       portalled
     >
-      <Box color="fg.muted" cursor="pointer" p={2}>
+      <Box as="span" cursor="pointer">
         <LuInfo />
       </Box>
     </Tooltip>

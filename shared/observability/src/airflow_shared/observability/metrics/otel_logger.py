@@ -19,7 +19,6 @@ from __future__ import annotations
 import atexit
 import datetime
 import logging
-import os
 import random
 import warnings
 from collections.abc import Callable
@@ -35,7 +34,6 @@ from opentelemetry.sdk.metrics.view import ExponentialBucketHistogramAggregation
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
 from ..common import get_otel_data_exporter
-from ..exceptions import InvalidStatsNameException
 from ..otel_env_config import load_metrics_env_config
 from .protocols import Timer
 from .validators import (
@@ -77,11 +75,6 @@ DEFAULT_METRIC_NAME_PREFIX = "airflow"
 # Delimiter is placed between the universal metric prefix and the unique metric name.
 DEFAULT_METRIC_NAME_DELIMITER = "."
 
-# Not imported from ``opentelemetry.sdk.environment_variables``: the constant postdates the
-# ``opentelemetry-api>=1.27.0`` floor this distribution declares, while the name is spec-fixed.
-# https://opentelemetry.io/docs/specs/otel/configuration/sdk/#declarative-configuration
-OTEL_CONFIG_FILE = "OTEL_CONFIG_FILE"
-
 
 def full_name(name: str, *, prefix: str = DEFAULT_METRIC_NAME_PREFIX) -> str:
     """Assembles the prefix, delimiter, and name and returns it as a string."""
@@ -110,11 +103,7 @@ def name_is_otel_safe(prefix: str, name: str) -> bool:
     Legal names are defined here:
     https://opentelemetry.io/docs/reference/specification/metrics/api/#instrument-name-syntax
     """
-    try:
-        return bool(stat_name_otel_handler(prefix, name, max_length=OTEL_NAME_MAX_LENGTH))
-    except InvalidStatsNameException:
-        log.warning("Invalid stat name: %s.%s.", prefix, name)
-        return False
+    return bool(stat_name_otel_handler(prefix, name, max_length=OTEL_NAME_MAX_LENGTH))
 
 
 def _type_as_str(obj: Instrument) -> str:
@@ -186,29 +175,17 @@ class SafeOtelLogger:
         self,
         otel_provider,
         prefix: str = DEFAULT_METRIC_NAME_PREFIX,
-        metrics_validator: ListValidator | None = None,
+        metrics_validator: ListValidator = PatternAllowListValidator(),
         stat_name_handler: Callable[[str], str] | None = None,
         statsd_influxdb_enabled: bool = False,
     ):
         self.otel: Callable = otel_provider
         self.prefix: str = prefix
-        self.metrics_validator = metrics_validator or PatternAllowListValidator()
+        self.metrics_validator = metrics_validator
         self.meter = otel_provider.get_meter(__name__)
         self.metrics_map = MetricsMap(self.meter)
         self.stat_name_handler = stat_name_handler
         self.statsd_influxdb_enabled = statsd_influxdb_enabled
-
-    def _is_recordable(self, stat: str | None) -> bool:
-        """
-        Return True if ``stat`` may be recorded: non-empty, allowed by the validator, and OTel-safe.
-
-        Every recording method must gate on this before emitting; otherwise an unsafe name reaches
-        the OTel SDK, which raises and crashes the emitting process. Keeping the check in one place
-        stops a new recording method from silently omitting it.
-        """
-        if not stat:
-            return False
-        return self.metrics_validator.test(stat) and name_is_otel_safe(self.prefix, stat)
 
     def incr(
         self,
@@ -231,7 +208,7 @@ class SafeOtelLogger:
         if count < 0:
             raise ValueError("count must be a positive value.")
 
-        if self._is_recordable(stat):
+        if self.metrics_validator.test(stat) and name_is_otel_safe(self.prefix, stat):
             counter = self.metrics_map.get_counter(full_name(prefix=self.prefix, name=stat), attributes=tags)
             counter.add(count, attributes=tags)
             return counter
@@ -257,7 +234,7 @@ class SafeOtelLogger:
         if count < 0:
             raise ValueError("count must be a positive value.")
 
-        if self._is_recordable(stat):
+        if self.metrics_validator.test(stat) and name_is_otel_safe(self.prefix, stat):
             counter = self.metrics_map.get_counter(full_name(prefix=self.prefix, name=stat))
             counter.add(-count, attributes=tags)
             return counter
@@ -288,12 +265,12 @@ class SafeOtelLogger:
         if _skip_due_to_rate(rate):
             return
 
-        if self._is_recordable(back_compat_name):
+        if back_compat_name and self.metrics_validator.test(back_compat_name):
             self.metrics_map.set_gauge_value(
                 full_name(prefix=self.prefix, name=back_compat_name), value, delta, tags
             )
 
-        if self._is_recordable(stat):
+        if self.metrics_validator.test(stat):
             self.metrics_map.set_gauge_value(full_name(prefix=self.prefix, name=stat), value, delta, tags)
 
     def timing(
@@ -304,7 +281,7 @@ class SafeOtelLogger:
         tags: Attributes = None,
     ) -> None:
         """Record a timing observation as a Histogram to preserve distribution information."""
-        if self._is_recordable(stat):
+        if self.metrics_validator.test(stat) and name_is_otel_safe(self.prefix, stat):
             if isinstance(dt, datetime.timedelta):
                 dt = dt.total_seconds() * 1000.0
             self.metrics_map.record_histogram_value(full_name(prefix=self.prefix, name=stat), float(dt), tags)
@@ -317,8 +294,7 @@ class SafeOtelLogger:
         **kwargs,
     ) -> Timer:
         """Timer context manager returns the duration and can be cancelled."""
-        safe_stat = stat if self._is_recordable(stat) else None
-        return _OtelTimer(self, safe_stat, tags)
+        return _OtelTimer(self, stat, tags)
 
 
 class InternalGauge:
@@ -463,24 +439,11 @@ def get_otel_logger(
     so that bucket boundaries adapt automatically to the observed data range.  This avoids
     the need to hand-tune explicit bucket boundaries for metrics that span very different
     scales (milliseconds to hours).
-
-    A ``MeterProvider`` already built from ``OTEL_CONFIG_FILE`` is used as-is: the declarative
-    configuration spec makes that file the sole source of SDK construction.
     """
-    effective_prefix: str = prefix or DEFAULT_METRIC_NAME_PREFIX
-    validator = get_validator(metrics_allow_list, metrics_block_list)
-
-    configured_provider = metrics.get_meter_provider()
-    if os.environ.get(OTEL_CONFIG_FILE) and isinstance(configured_provider, MeterProvider):
-        log.info("%s is set; using the MeterProvider it built.", OTEL_CONFIG_FILE)
-        atexit_register_metrics_flush()
-        return SafeOtelLogger(
-            configured_provider, effective_prefix, validator, stat_name_handler, statsd_influxdb_enabled
-        )
-
     otel_env_config = load_metrics_env_config()
 
     effective_service_name: str = otel_env_config.service_name or service_name or "airflow"
+    effective_prefix: str = prefix or DEFAULT_METRIC_NAME_PREFIX
     resource = Resource.create(attributes={SERVICE_NAME: effective_service_name})
 
     # https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/#periodic-exporting-metricreader
@@ -542,6 +505,8 @@ def get_otel_logger(
 
     # Register a hook that flushes any in-memory metrics at shutdown.
     atexit_register_metrics_flush()
+
+    validator = get_validator(metrics_allow_list, metrics_block_list)
 
     return SafeOtelLogger(
         metrics.get_meter_provider(), effective_prefix, validator, stat_name_handler, statsd_influxdb_enabled

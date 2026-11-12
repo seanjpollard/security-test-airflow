@@ -67,6 +67,8 @@ def __getattr__(name):
     # Delegate anything else to the yaml module
     import yaml
 
-    # FullLoader stays pyyaml's on purpose: CFullLoader does not see add_constructor
-    # registrations, so custom tags would raise ConstructorError instead of resolving.
+    if name == "FullLoader":
+        # Try to use CFullLoader by default
+        getattr(yaml, "CFullLoader", yaml.FullLoader)
+
     return getattr(yaml, name)

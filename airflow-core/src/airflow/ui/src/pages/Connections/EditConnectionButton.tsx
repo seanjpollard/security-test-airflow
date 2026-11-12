@@ -16,14 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useDisclosure } from "@chakra-ui/react";
+import { Heading, IconButton, useDisclosure } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
 import { FiEdit } from "react-icons/fi";
 
 import type { ConnectionResponse } from "openapi/requests/types.gen";
-
-import { Modal, IconButton } from "src/system-components";
-
+import { Dialog, Tooltip } from "src/components/ui";
 import { useEditConnection } from "src/queries/useEditConnection";
 
 import ConnectionForm from "./ConnectionForm";
@@ -60,24 +58,38 @@ const EditConnectionButton = ({ connection, disabled }: Props) => {
 
   return (
     <>
-      <IconButton disabled={disabled} label={translate("connections.edit")} onClick={onOpen}>
-        <FiEdit />
-      </IconButton>
-      <Modal
-        lazyMount
-        onOpenChange={handleClose}
-        open={open}
-        title={translate("connections.edit")}
-        unmountOnExit
-      >
-        <ConnectionForm
-          error={error}
-          initialConnection={initialConnectionValue}
-          isEditMode
-          isPending={isPending}
-          mutateConnection={editConnection}
-        />
-      </Modal>
+      <Tooltip content={translate("connections.edit")}>
+        <IconButton
+          aria-label={translate("connections.edit")}
+          colorPalette="brand"
+          disabled={disabled}
+          onClick={onOpen}
+          size="md"
+          variant="ghost"
+        >
+          <FiEdit />
+        </IconButton>
+      </Tooltip>
+
+      <Dialog.Root onOpenChange={handleClose} open={open} size="xl">
+        <Dialog.Content backdrop>
+          <Dialog.Header>
+            <Heading size="xl">{translate("connections.edit")}</Heading>
+          </Dialog.Header>
+
+          <Dialog.CloseTrigger />
+
+          <Dialog.Body>
+            <ConnectionForm
+              error={error}
+              initialConnection={initialConnectionValue}
+              isEditMode
+              isPending={isPending}
+              mutateConnection={editConnection}
+            />
+          </Dialog.Body>
+        </Dialog.Content>
+      </Dialog.Root>
     </>
   );
 };

@@ -69,7 +69,6 @@ class RunEvaluationOperator(GoogleCloudBaseOperator):
         "prompt_template",
         "experiment_name",
         "experiment_run_name",
-        "gcp_conn_id",
     )
 
     def __init__(

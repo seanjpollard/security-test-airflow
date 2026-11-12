@@ -20,7 +20,6 @@ import json
 from unittest import mock
 from unittest.mock import patch
 
-import httpx
 import pytest
 
 from airflowctl.api.client import Client, ClientKind
@@ -51,9 +50,7 @@ class TestCliConnectionCommands:
                 port=1234,
                 extra="{}",
                 description="Test connection description",
-                schema=None,
-                team_name=None,
-            )  # type: ignore[call-arg]
+            )
         ],
         total_entries=1,
     )
@@ -183,103 +180,6 @@ class TestCliConnectionCommands:
             description="",
         )
 
-    def test_import_preserves_schema(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        json_path = tmp_path / self.export_file_name
-        connection_file = {
-            self.connection_id: {
-                "conn_type": "postgres",
-                "host": "test_host",
-                "schema": "warehouse",
-            }
-        }
-
-        json_path.write_text(json.dumps(connection_file))
-
-        def handle_request(request: httpx.Request) -> httpx.Response:
-            assert request.method == "PATCH"
-            assert request.url.path == "/api/v2/connections"
-            request_body = json.loads(request.content.decode())
-            entity = request_body["actions"][0]["entities"][0]
-            assert entity["schema"] == "warehouse"
-            assert "schema_" not in entity
-            return httpx.Response(200, json=self.bulk_response_success.model_dump())
-
-        api_client = Client(
-            base_url="test://server",
-            transport=httpx.MockTransport(handle_request),
-            token="",
-            kind=ClientKind.CLI,
-        )
-
-        connection_command.import_(
-            self.parser.parse_args(["connections", "import", json_path.as_posix()]),
-            api_client=api_client,
-        )
-
-    @pytest.mark.parametrize(
-        ("file_content", "expected_message"),
-        [
-            ([{"conn_type": "postgres"}], "expected a JSON object mapping connection ids"),
-            ("not-an-object", "expected a JSON object mapping connection ids"),
-            ({"my_conn": "postgres://host"}, "Invalid connection 'my_conn'"),
-            ({"my_conn": None}, "Invalid connection 'my_conn'"),
-        ],
-        ids=["list", "string", "string-entry", "null-entry"],
-    )
-    def test_import_rejects_malformed_file_structure(
-        self, tmp_path, monkeypatch, file_content, expected_message
-    ):
-        monkeypatch.chdir(tmp_path)
-        json_path = tmp_path / self.export_file_name
-        json_path.write_text(json.dumps(file_content))
-        mock_client = mock.MagicMock(spec=Client)
-
-        with pytest.raises(SystemExit) as exc_info:
-            connection_command.import_(
-                self.parser.parse_args(["connections", "import", json_path.as_posix()]),
-                api_client=mock_client,
-            )
-
-        message = str(exc_info.value)
-        assert expected_message in message
-        assert json_path.as_posix() in message
-        assert "has no attribute" not in message
-        mock_client.connections.bulk.assert_not_called()
-
-    @pytest.mark.parametrize(
-        ("details", "expected_reason"),
-        [
-            ({"host": "h"}, "missing required field(s): conn_type"),
-            (
-                {"conn_type": "postgres", "port": "not-a-port"},
-                "port: Input should be a valid integer, unable to parse string as an integer",
-            ),
-            (
-                {"port": "not-a-port"},
-                "missing required field(s): conn_type; "
-                "port: Input should be a valid integer, unable to parse string as an integer",
-            ),
-        ],
-        ids=["missing-conn-type", "invalid-port", "missing-and-invalid"],
-    )
-    def test_import_reports_invalid_connection(self, tmp_path, monkeypatch, details, expected_reason):
-        monkeypatch.chdir(tmp_path)
-        json_path = tmp_path / self.export_file_name
-        json_path.write_text(json.dumps({"my_conn": details}))
-        mock_client = mock.MagicMock(spec=Client)
-
-        with pytest.raises(SystemExit) as exc_info:
-            connection_command.import_(
-                self.parser.parse_args(["connections", "import", json_path.as_posix()]),
-                api_client=mock_client,
-            )
-
-        assert str(exc_info.value) == (
-            f"Invalid connection 'my_conn' in {json_path.as_posix()}: {expected_reason}"
-        )
-        mock_client.connections.bulk.assert_not_called()
-
     @pytest.mark.parametrize(
         ("action_on_existing_key", "expected_enum"),
         [
@@ -323,28 +223,3 @@ class TestCliConnectionCommands:
         bulk_body = mock_client.connections.bulk.call_args[0][0]
         action = bulk_body.actions[0]
         assert action.action_on_existence == expected_enum
-
-
-@pytest.mark.parametrize(
-    "bulk_setup",
-    [
-        pytest.param(
-            lambda bulk: setattr(bulk.return_value.create, "errors", ["bad [/x]"]), id="bulk-errors"
-        ),
-        pytest.param(lambda bulk: setattr(bulk, "side_effect", RuntimeError("bad [/x]")), id="exception"),
-    ],
-)
-def test_import_prints_failure_containing_markup(bulk_setup, tmp_path, capsys):
-    connections_file = tmp_path / "connections.json"
-    connections_file.write_text(json.dumps({"my_conn": {"conn_type": "http"}}))
-    api_client = mock.MagicMock(spec=Client)
-    bulk_setup(api_client.connections.bulk)
-
-    with pytest.raises(SystemExit) as exc_info:
-        connection_command.import_(
-            cli_parser.get_parser().parse_args(["connections", "import", connections_file.as_posix()]),
-            api_client=api_client,
-        )
-
-    assert exc_info.value.code == 1
-    assert "bad [/x]" in capsys.readouterr().out

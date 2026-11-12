@@ -39,7 +39,7 @@ class SegmentTrackEventOperator(BaseOperator):
         Defaults to False
     """
 
-    template_fields: Sequence[str] = ("user_id", "event", "properties", "segment_conn_id")
+    template_fields: Sequence[str] = ("user_id", "event", "properties")
     ui_color = "#ffd700"
 
     def __init__(

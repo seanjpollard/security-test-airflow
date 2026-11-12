@@ -123,10 +123,7 @@ TEST_PARAMS: list[dict[str, str | list[str]]] = [
             "--skip-db-tests",
         ],
     },
-    {
-        **TEST_ENVIRONMENT_DB,
-        "options": [*TEST_ENVIRONMENT_DB["options"], "--project-name"],
-    },
+    TEST_ENVIRONMENT_DB,
     TEST_PARALLELISM_OPTIONS,
     TEST_UPGRADING_PACKAGES,
 ]
@@ -316,7 +313,6 @@ TESTING_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
                 "--include-success-outputs",
                 "--github-repository",
                 "--e2e-test-mode",
-                "--airflow-version",
             ],
         }
     ],

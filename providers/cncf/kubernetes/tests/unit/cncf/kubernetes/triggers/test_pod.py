@@ -21,25 +21,20 @@ import asyncio
 import contextlib
 import datetime
 import logging
-import time
 from asyncio import Future
-from types import SimpleNamespace
 from unittest import mock
 from unittest.mock import MagicMock
 
 import pytest
 from kubernetes.client import models as k8s
 from pendulum import DateTime
-from sqlalchemy.orm.session import Session
 
-from airflow.providers.cncf.kubernetes.hooks.kubernetes import AsyncKubernetesHook
 from airflow.providers.cncf.kubernetes.triggers.pod import ContainerState, KubernetesPodTrigger
 from airflow.providers.cncf.kubernetes.utils.pod_manager import PodPhase
-from airflow.providers.common.compat.sdk import AirflowException
 from airflow.triggers.base import TriggerEvent
 from airflow.utils.state import TaskInstanceState
 
-from tests_common.test_utils.version_compat import AIRFLOW_V_3_0_PLUS, AIRFLOW_V_3_3_PLUS
+from tests_common.test_utils.version_compat import AIRFLOW_V_3_3_PLUS
 
 TRIGGER_PATH = "airflow.providers.cncf.kubernetes.triggers.pod.KubernetesPodTrigger"
 HOOK_PATH = "airflow.providers.cncf.kubernetes.hooks.kubernetes.AsyncKubernetesHook"
@@ -53,7 +48,7 @@ IN_CLUSTER = False
 GET_LOGS = True
 STARTUP_TIMEOUT_SECS = 120
 STARTUP_CHECK_INTERVAL_SECS = 0.1
-TRIGGER_START_TIME = datetime.datetime.now(tz=datetime.UTC)
+TRIGGER_START_TIME = datetime.datetime.now(tz=datetime.timezone.utc)
 FAILED_RESULT_MSG = "Test message that appears when trigger have failed event."
 BASE_CONTAINER_NAME = "base"
 ON_FINISH_ACTION = "delete_pod"
@@ -139,15 +134,6 @@ class TestKubernetesPodTrigger:
             "logging_interval": None,
             "trigger_kwargs": {},
         }
-
-    def test_serialize_emits_log_events_on_startup_only_when_disabled(self, trigger):
-        assert "log_events_on_startup" not in trigger.serialize()[1]
-
-        trigger.log_events_on_startup = False
-
-        _, kwargs_dict = trigger.serialize()
-
-        assert kwargs_dict["log_events_on_startup"] is False
 
     def test_serialize_with_connection_extras(self):
         extras = {"token": "abc"}
@@ -279,93 +265,6 @@ class TestKubernetesPodTrigger:
 
     @pytest.mark.asyncio
     @mock.patch(f"{TRIGGER_PATH}._wait_for_pod_start")
-    @mock.patch(f"{TRIGGER_PATH}.define_pod_container_state")
-    @mock.patch(f"{TRIGGER_PATH}.hook")
-    async def test_run_loop_emits_timeout_event_when_execution_deadline_reached(
-        self, mock_hook, mock_define_state, mock_wait_pod
-    ):
-        """
-        When the execution deadline has already elapsed before the trigger
-        starts polling, the trigger immediately emits a timeout event instead
-        of entering the polling loop.
-        """
-        # Already-past deadline → ``run()`` short-circuit trips it.
-        past_deadline = 1
-        trigger_with_deadline = KubernetesPodTrigger(
-            pod_name=POD_NAME,
-            pod_namespace=NAMESPACE,
-            base_container_name=BASE_CONTAINER_NAME,
-            kubernetes_conn_id=CONN_ID,
-            poll_interval=POLL_INTERVAL,
-            cluster_context=CLUSTER_CONTEXT,
-            config_dict=CONFIG_DICT,
-            in_cluster=IN_CLUSTER,
-            get_logs=GET_LOGS,
-            startup_timeout=STARTUP_TIMEOUT_SECS,
-            startup_check_interval=STARTUP_CHECK_INTERVAL_SECS,
-            schedule_timeout=STARTUP_TIMEOUT_SECS,
-            trigger_start_time=TRIGGER_START_TIME,
-            on_finish_action=ON_FINISH_ACTION,
-            trigger_kwargs={"_execution_deadline": past_deadline},
-        )
-        # If the short-circuit fails, ``_wait_for_pod_start`` would be called
-        # next; making it RUNNING ensures the test fails loudly rather than
-        # accidentally emitting some other terminal event.
-        mock_wait_pod.return_value = ContainerState.RUNNING
-        mock_define_state.return_value = ContainerState.RUNNING
-        mock_hook.get_pod.return_value = self._mock_pod_result(mock.AsyncMock())
-
-        actual_event = await trigger_with_deadline.run().asend(None)
-
-        # ``last_log_time`` is intentionally absent from this short-circuit and
-        # from the ``PodLaunchTimeoutException`` handler — both fire before any
-        # log fetching has happened. The mid-poll deadline check (in
-        # ``_wait_for_container_completion``) is the only timeout site that
-        # carries ``last_log_time`` because that's where it can be meaningfully
-        # populated.
-        assert actual_event.payload["status"] == "timeout"
-        assert actual_event.payload["namespace"] == NAMESPACE
-        assert actual_event.payload["name"] == POD_NAME
-        assert "execution_timeout" in actual_event.payload["message"]
-
-    @pytest.mark.asyncio
-    async def test_run_emits_timeout_when_deadline_passed_during_pod_startup(self):
-        """
-        The trigger emits a timeout event if the execution deadline expires
-        during pod startup.
-        """
-        trigger_with_deadline = KubernetesPodTrigger(
-            pod_name=POD_NAME,
-            pod_namespace=NAMESPACE,
-            base_container_name=BASE_CONTAINER_NAME,
-            kubernetes_conn_id=CONN_ID,
-            poll_interval=POLL_INTERVAL,
-            cluster_context=CLUSTER_CONTEXT,
-            config_dict=CONFIG_DICT,
-            in_cluster=IN_CLUSTER,
-            get_logs=GET_LOGS,
-            startup_timeout=STARTUP_TIMEOUT_SECS,
-            startup_check_interval=STARTUP_CHECK_INTERVAL_SECS,
-            schedule_timeout=STARTUP_TIMEOUT_SECS,
-            trigger_start_time=TRIGGER_START_TIME,
-            on_finish_action=ON_FINISH_ACTION,
-            # Deadline crosses 1 second from now; ``_wait_for_pod_start`` is mocked
-            # to never return so only the deadline can break the wait.
-            trigger_kwargs={"_execution_deadline": int(time.time()) + 1},
-        )
-
-        async def _hang_forever():
-            await asyncio.sleep(60)
-            return ContainerState.RUNNING
-
-        with mock.patch.object(trigger_with_deadline, "_wait_for_pod_start", _hang_forever):
-            actual_event = await trigger_with_deadline.run().asend(None)
-
-        assert actual_event.payload["status"] == "timeout"
-        assert "execution_timeout" in actual_event.payload["message"]
-
-    @pytest.mark.asyncio
-    @mock.patch(f"{TRIGGER_PATH}._wait_for_pod_start")
     @mock.patch(f"{TRIGGER_PATH}.hook")
     async def test_logging_in_trigger_when_exception_should_execute_successfully(
         self, mock_hook, mock_wait_pod, trigger, caplog
@@ -403,7 +302,7 @@ class TestKubernetesPodTrigger:
 
         generator = trigger.run()
         await generator.asend(None)
-        assert "Waiting up to 120s to get the POD scheduled..." in caplog.text
+        assert "Waiting until 120s to get the POD scheduled..." in caplog.text
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -441,7 +340,7 @@ class TestKubernetesPodTrigger:
         """
         If log interval given, check that the trigger fetches logs at the right times.
         """
-        fixed_now = datetime.datetime(2022, 1, 1, tzinfo=datetime.UTC)
+        fixed_now = datetime.datetime(2022, 1, 1, tzinfo=datetime.timezone.utc)
         mock_datetime.datetime.now.side_effect = [
             fixed_now,
             fixed_now + datetime.timedelta(seconds=1),
@@ -593,44 +492,6 @@ class TestKubernetesPodTrigger:
                 "last_log_time": None,
             }
         )
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("log_events_on_startup", "expected_calls"),
-        [(True, 1), (False, 0)],
-    )
-    @mock.patch(f"{TRIGGER_PATH}.define_pod_container_state", autospec=True)
-    @mock.patch(
-        "airflow.providers.cncf.kubernetes.triggers.pod.AsyncPodManager.await_pod_start", autospec=True
-    )
-    @mock.patch(
-        "airflow.providers.cncf.kubernetes.triggers.pod.AsyncPodManager.watch_pod_events", autospec=True
-    )
-    @mock.patch(f"{TRIGGER_PATH}._get_pod", autospec=True)
-    async def test_wait_for_pod_start_watches_events_only_when_enabled(
-        self,
-        mock_get_pod,
-        mock_watch_events,
-        mock_await_start,
-        mock_state,
-        trigger,
-        log_events_on_startup,
-        expected_calls,
-    ):
-        mock_get_pod.return_value = k8s.V1Pod(metadata=k8s.V1ObjectMeta(name=POD_NAME, namespace=NAMESPACE))
-        mock_state.return_value = ContainerState.RUNNING
-
-        async def _await_pod_start(*_, **__):
-            # An autospecced coroutine records its call only once it runs, so let the watcher task start.
-            await asyncio.sleep(0)
-
-        mock_await_start.side_effect = _await_pod_start
-        trigger.log_events_on_startup = log_events_on_startup
-
-        await trigger._wait_for_pod_start()
-
-        assert mock_watch_events.call_count == expected_calls
-        mock_await_start.assert_awaited_once()
 
     @pytest.mark.asyncio
     @mock.patch(f"{TRIGGER_PATH}.define_pod_container_state")
@@ -891,7 +752,6 @@ class TestKubernetesPodTrigger:
             on_kill_action="delete_pod",
             on_finish_action="delete_pod",
         )
-        mock_hook.close = mock.AsyncMock(spec=AsyncKubernetesHook.close)
         with mock.patch(f"{TRIGGER_PATH}.safe_to_cancel", new_callable=mock.AsyncMock, return_value=False):
             await trigger.cleanup()
         mock_hook.delete_pod.assert_not_called()
@@ -913,7 +773,6 @@ class TestKubernetesPodTrigger:
             on_finish_action="delete_pod",
         )
         mock_hook.delete_pod = mock.AsyncMock()
-        mock_hook.close = mock.AsyncMock(spec=AsyncKubernetesHook.close)
         with mock.patch(f"{TRIGGER_PATH}.safe_to_cancel", new_callable=mock.AsyncMock, return_value=True):
             await trigger.cleanup()
         mock_hook.delete_pod.assert_called_once_with(
@@ -929,8 +788,7 @@ class TestKubernetesPodTrigger:
     @pytest.mark.asyncio
     @mock.patch(f"{TRIGGER_PATH}.hook")
     async def test_cleanup_noop_on_airflow_3_3_plus(self, mock_hook):
-        """On Airflow 3.3.0+, cleanup releases the client and on_kill handles pod deletion."""
-        mock_hook.close = mock.AsyncMock(spec=AsyncKubernetesHook.close)
+        """On Airflow 3.3.0+, cleanup does not delete pods (on_kill handles user kill)."""
         trigger = KubernetesPodTrigger(
             pod_name=POD_NAME,
             pod_namespace=NAMESPACE,
@@ -942,7 +800,6 @@ class TestKubernetesPodTrigger:
         )
         await trigger.cleanup()
         mock_hook.delete_pod.assert_not_called()
-        mock_hook.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     @mock.patch(f"{TRIGGER_PATH}.get_task_state", new_callable=mock.AsyncMock)
@@ -971,121 +828,6 @@ class TestKubernetesPodTrigger:
         assert await trigger.safe_to_cancel() is False
 
     @pytest.mark.skipif(
-        not AIRFLOW_V_3_0_PLUS,
-        reason="get_task_state uses RuntimeTaskInstance.get_task_states on Airflow 3.0+",
-    )
-    @pytest.mark.asyncio
-    @mock.patch("airflow.sdk.execution_time.task_runner.RuntimeTaskInstance.get_task_states")
-    async def test_get_task_state_uses_task_id_for_non_mapped_ti(self, mock_get_task_states):
-        # Non-mapped TIs (``map_index < 0``) are keyed by plain ``task_id`` in the
-        # response, matching the dict-key construction in the execution API's
-        # ``get_task_instance_states`` handler.
-        run_id = "manual__2026-05-21T00:00:00+00:00"
-        mock_get_task_states.return_value = {run_id: {"my_task": TaskInstanceState.SUCCESS}}
-
-        trigger = KubernetesPodTrigger(
-            pod_name=POD_NAME,
-            pod_namespace=NAMESPACE,
-            base_container_name=BASE_CONTAINER_NAME,
-            trigger_start_time=TRIGGER_START_TIME,
-            schedule_timeout=STARTUP_TIMEOUT_SECS,
-        )
-        trigger.task_instance = MagicMock(dag_id="my_dag", task_id="my_task", run_id=run_id, map_index=-1)
-
-        assert await trigger.get_task_state() == TaskInstanceState.SUCCESS
-
-    @pytest.mark.skipif(
-        not AIRFLOW_V_3_0_PLUS,
-        reason="get_task_state uses RuntimeTaskInstance.get_task_states on Airflow 3.0+",
-    )
-    @pytest.mark.asyncio
-    @mock.patch("airflow.sdk.execution_time.task_runner.RuntimeTaskInstance.get_task_states")
-    async def test_get_task_state_uses_composite_key_for_mapped_ti(self, mock_get_task_states):
-        # Regression guard for #67296: mapped TIs (``map_index >= 0``) are
-        # keyed by ``f"{task_id}_{map_index}"`` in the response. Without the
-        # suffix this lookup would KeyError, which ``cleanup()`` would
-        # defensively swallow and skip ``hook.delete_pod()`` -- leaking the
-        # pod until ``active_deadline_seconds`` expires on user mark-failed.
-        run_id = "manual__2026-05-21T00:00:00+00:00"
-        mock_get_task_states.return_value = {run_id: {"map_group.task_a_2": TaskInstanceState.FAILED}}
-
-        trigger = KubernetesPodTrigger(
-            pod_name=POD_NAME,
-            pod_namespace=NAMESPACE,
-            base_container_name=BASE_CONTAINER_NAME,
-            trigger_start_time=TRIGGER_START_TIME,
-            schedule_timeout=STARTUP_TIMEOUT_SECS,
-        )
-        trigger.task_instance = MagicMock(
-            dag_id="my_dag", task_id="map_group.task_a", run_id=run_id, map_index=2
-        )
-
-        assert await trigger.get_task_state() == TaskInstanceState.FAILED
-
-    @pytest.mark.skipif(
-        not AIRFLOW_V_3_0_PLUS,
-        reason="get_task_state uses RuntimeTaskInstance.get_task_states on Airflow 3.0+",
-    )
-    @pytest.mark.asyncio
-    @mock.patch("airflow.sdk.execution_time.task_runner.RuntimeTaskInstance.get_task_states")
-    async def test_get_task_state_raises_when_mapped_key_missing(self, mock_get_task_states):
-        # The wrapped ``AirflowException`` shape is preserved when the
-        # response is missing the expected (composite) key, so callers
-        # like ``safe_to_cancel`` keep the same behaviour they had before
-        # the lookup was fixed.
-        run_id = "manual__2026-05-21T00:00:00+00:00"
-        # Response has the run_id but not the (``map_group.task_a``, ``2``)
-        # entry -- e.g. supervisor has not observed the TI yet.
-        mock_get_task_states.return_value = {run_id: {"map_group.task_a_5": "running"}}
-
-        trigger = KubernetesPodTrigger(
-            pod_name=POD_NAME,
-            pod_namespace=NAMESPACE,
-            base_container_name=BASE_CONTAINER_NAME,
-            trigger_start_time=TRIGGER_START_TIME,
-            schedule_timeout=STARTUP_TIMEOUT_SECS,
-        )
-        trigger.task_instance = MagicMock(
-            dag_id="my_dag", task_id="map_group.task_a", run_id=run_id, map_index=2
-        )
-
-        with pytest.raises(AirflowException) as exc_info:
-            await trigger.get_task_state()
-
-        assert str(exc_info.value) == (
-            "TaskInstance with dag_id: my_dag, task_id: map_group.task_a, "
-            f"run_id: {run_id} and map_index: 2 is not found"
-        )
-
-    @pytest.mark.skipif(
-        AIRFLOW_V_3_0_PLUS,
-        reason="get_task_instance reads the metadata DB on Airflow 2.x only",
-    )
-    def test_get_task_instance_reports_identifiers_when_row_missing(self):
-        run_id = "manual__2026-05-21T00:00:00+00:00"
-        session = mock.MagicMock(spec=Session)
-        session.scalar.return_value = None
-
-        trigger = KubernetesPodTrigger(
-            pod_name=POD_NAME,
-            pod_namespace=NAMESPACE,
-            base_container_name=BASE_CONTAINER_NAME,
-            trigger_start_time=TRIGGER_START_TIME,
-            schedule_timeout=STARTUP_TIMEOUT_SECS,
-        )
-        trigger.task_instance = SimpleNamespace(
-            dag_id="my_dag", task_id="my_task", run_id=run_id, map_index=-1
-        )
-
-        with pytest.raises(AirflowException) as exc_info:
-            trigger.get_task_instance(session=session)
-
-        assert str(exc_info.value) == (
-            "TaskInstance with dag_id: my_dag, task_id: my_task, "
-            f"run_id: {run_id} and map_index: -1 is not found"
-        )
-
-    @pytest.mark.skipif(
         AIRFLOW_V_3_3_PLUS,
         reason="Legacy cleanup path runs only on Airflow < 3.3",
     )
@@ -1101,7 +843,6 @@ class TestKubernetesPodTrigger:
             on_kill_action="delete_pod",
             on_finish_action="delete_pod",
         )
-        mock_hook.close = mock.AsyncMock(spec=AsyncKubernetesHook.close)
         with mock.patch(
             f"{TRIGGER_PATH}.safe_to_cancel",
             new_callable=mock.AsyncMock,
@@ -1109,38 +850,3 @@ class TestKubernetesPodTrigger:
         ):
             await trigger.cleanup()
         mock_hook.delete_pod.assert_not_called()
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("fired_event", "on_kill_action", "safe_result", "delete_error"),
-        [
-            pytest.param(True, "delete_pod", True, None, id="event-fired"),
-            pytest.param(False, "keep_pod", True, None, id="keep-pod"),
-            pytest.param(False, "delete_pod", False, None, id="restart"),
-            pytest.param(False, "delete_pod", RuntimeError("API down"), None, id="state-error"),
-            pytest.param(False, "delete_pod", True, RuntimeError("API down"), id="delete-error"),
-            pytest.param(False, "delete_pod", True, None, id="pod-deleted"),
-        ],
-    )
-    @mock.patch("airflow.providers.cncf.kubernetes.triggers.pod.AIRFLOW_V_3_3_PLUS", False)
-    @mock.patch(f"{TRIGGER_PATH}.safe_to_cancel", autospec=True)
-    @mock.patch("airflow.providers.cncf.kubernetes.triggers.pod.AsyncKubernetesHook", autospec=True)
-    async def test_legacy_cleanup_always_closes_hook(
-        self, mock_hook_class, mock_safe_to_cancel, fired_event, on_kill_action, safe_result, delete_error
-    ):
-        trigger = KubernetesPodTrigger(
-            pod_name=POD_NAME,
-            pod_namespace=NAMESPACE,
-            base_container_name=BASE_CONTAINER_NAME,
-            trigger_start_time=TRIGGER_START_TIME,
-            schedule_timeout=STARTUP_TIMEOUT_SECS,
-            on_kill_action=on_kill_action,
-        )
-        trigger._fired_event = fired_event
-        mock_safe_to_cancel.side_effect = [safe_result]
-        mock_hook = mock_hook_class.return_value
-        mock_hook.delete_pod.side_effect = delete_error
-
-        await trigger.cleanup()
-
-        mock_hook.close.assert_awaited_once()

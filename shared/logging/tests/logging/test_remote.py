@@ -166,7 +166,3 @@ class TestRemoteLogIOProtocol:
     def test_non_stream_handler_not_stream_io(self):
         handler = DummyRemoteLogIO()
         assert not isinstance(handler, RemoteLogStreamIO)
-
-    def test_upload_accepts_none_ti(self):
-        handler = DummyRemoteLogIO()
-        handler.upload("/some/path", ti=None)

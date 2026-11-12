@@ -1,9 +1,9 @@
 {
-  "allRuns": "Все запуски",
+  "allRuns": "Все Запуски",
   "blockingDeps": {
     "dependency": "Зависимость",
     "reason": "Причина",
-    "title": "Зависимости, блокирующие планирование задачи"
+    "title": "Зависимости, которые блокируют Запуск задачи"
   },
   "calendar": {
     "daily": "Ежедневно",
@@ -40,43 +40,9 @@
     "parseDuration": "Длительность парсинга:",
     "parsedAt": "Распарсен в:"
   },
-  "deadlineAlerts": {
-    "completionRule": "Должен завершиться в течение {{interval}} от {{reference}}",
-    "count_few": "{{count, number}} крайних срока",
-    "count_many": "{{count, number}} крайних сроков",
-    "count_one": "{{count, number}} крайний срок",
-    "count_other": "{{count, number}} крайних сроков",
-    "referenceType": {
-      "AverageRuntimeDeadline": "среднее время выполнения",
-      "DagRunLogicalDateDeadline": "логическая дата",
-      "DagRunQueuedAtDeadline": "время постановки в очередь"
-    }
-  },
-  "deadlineStatus": {
-    "actual": "Фактическое",
-    "expected": "Ожидаемое",
-    "finishedEarly": "Завершено за {{duration}} до крайнего срока",
-    "finishedLate": "Завершено через {{duration}} после крайнего срока",
-    "label": "Крайний срок",
-    "met": "Соблюдён",
-    "missed": "Пропущен",
-    "missedCount_few": "{{count, number}} пропущенных крайних срока",
-    "missedCount_many": "{{count, number}} пропущенных крайних сроков",
-    "missedCount_one": "{{count, number}} пропущенный крайний срок",
-    "missedCount_other": "{{count, number}} пропущенных крайних сроков",
-    "mixedCount": "{{missedCount, number}} пропущено, {{upcomingCount, number}} предстоит",
-    "stillRunning": "Ещё выполняется",
-    "upcoming": "Предстоящий",
-    "upcomingCount_few": "{{count, number}} предстоящих крайних срока",
-    "upcomingCount_many": "{{count, number}} предстоящих крайних сроков",
-    "upcomingCount_one": "{{count, number}} предстоящий крайний срок",
-    "upcomingCount_other": "{{count, number}} предстоящих крайних сроков"
-  },
   "extraLinks": "Дополнительные ссылки",
   "grid": {
     "buttons": {
-      "newerRuns": "Более новые запуски",
-      "olderRuns": "Более старые запуски",
       "resetToLatest": "Сбросить до последнего",
       "toggleGroup": "Переключить группу"
     },
@@ -86,9 +52,6 @@
     "buttons": {
       "advanced": "Расширенные настройки",
       "dagDocs": "Документация Dag-а"
-    },
-    "status": {
-      "deactivated": "Деактивирован"
     }
   },
   "logs": {
@@ -97,19 +60,19 @@
     "critical": "КРИТИЧЕСКИЙ",
     "debug": "ОТЛАДКА",
     "error": "ОШИБКА",
+    "fullscreen": {
+      "button": "На весь экран",
+      "tooltip": "Нажмите {{hotkey}} для полного экрана"
+    },
     "info": "ИНФОРМАЦИЯ",
     "noTryNumber": "Нет номера попытки",
-    "search": {
-      "matchCount": "{{current, number}} из {{total, number}}",
-      "noMatches": "Совпадений нет",
-      "placeholder": "Поиск по логам..."
-    },
     "settings": "Настройки логов",
     "viewInExternal": "Просмотреть логи в {{name}} (попытка {{attempt}})",
     "warning": "ПРЕДУПРЕЖДЕНИЕ"
   },
   "navigation": {
-    "openGraphFilters": "Фильтры задач: Ctrl+Shift+F"
+    "navigation": "Навигация: Shift+{{arrow}}",
+    "toggleGroup": "Переключить группу: Пробел"
   },
   "notFound": {
     "back": "Назад",
@@ -119,28 +82,16 @@
   },
   "overview": {
     "buttons": {
-      "failedRun_few": "Неудачных запуска",
-      "failedRun_many": "Неудачных запусков",
       "failedRun_one": "Неудачный запуск",
-      "failedRun_other": "Неудачных запусков",
-      "failedTask_few": "Неудачных задачи",
-      "failedTask_many": "Неудачных задач",
+      "failedRun_other": "Неудачные запуски",
       "failedTask_one": "Неудачная задача",
-      "failedTask_other": "Неудачных задач",
-      "failedTaskInstance_few": "Неудачных экземпляра задачи",
-      "failedTaskInstance_many": "Неудачных экземпляров задач",
+      "failedTask_other": "Неудачные задачи",
       "failedTaskInstance_one": "Неудачный экземпляр задачи",
-      "failedTaskInstance_other": "Неудачных экземпляров задач"
+      "failedTaskInstance_other": "Неудачные экземпляры задач"
     },
     "charts": {
-      "assetEvent_few": "События актива",
-      "assetEvent_many": "Событий актива",
-      "assetEvent_one": "Событие актива",
-      "assetEvent_other": "Событий актива"
-    },
-    "deadlines": {
-      "showAll": "Показать все",
-      "title": "Крайние сроки"
+      "assetEvent_one": "Созданное событие актива",
+      "assetEvent_other": "Созданные события актива"
     },
     "failedLogs": {
       "hideLogs": "Скрыть логи",
@@ -170,16 +121,6 @@
     },
     "graphDirection": {
       "label": "Направление графа"
-    },
-    "graphFilters": {
-      "clearFilters": "Очистить фильтры",
-      "durationGte": "Мин. длительность (с)",
-      "durationGteHint": "Для задач с маппингом измеряет суммарный интервал по всем экземплярам",
-      "mapIndex": "Мин. индекс маппинга",
-      "mapIndexHint": "Показывает задачи с маппингом, развёрнутые как минимум до этого индекса",
-      "selectStatus": "Выбрать статус",
-      "selectTaskGroup": "Выбрать группу задач",
-      "title": "Фильтры задач"
     },
     "showVersionIndicator": {
       "label": "Показать индикатор версии",
@@ -226,47 +167,25 @@
   },
   "tabs": {
     "assetEvents": "События активов",
-    "auditLog": "Журнал аудита",
-    "backfills": "Backfills",
+    "auditLog": "Аудиторский журнал",
+    "backfills": "Заполнение",
     "calendar": "Календарь",
     "code": "Код",
     "details": "Детали",
     "logs": "Логи",
-    "mappedTaskInstances_few": "Экземпляра задачи [{{count, number}}]",
-    "mappedTaskInstances_many": "Экземпляров задач [{{count, number}}]",
-    "mappedTaskInstances_one": "Экземпляр задачи [{{count, number}}]",
-    "mappedTaskInstances_other": "Экземпляров задач [{{count, number}}]",
+    "mappedTaskInstances_few": "Экземпляры задач [{{count}}]",
+    "mappedTaskInstances_one": "Экземпляр задачи [{{count}}]",
+    "mappedTaskInstances_other": "Экземпляры задач [{{count}}]",
     "overview": "Обзор",
     "renderedTemplates": "Отрендеренные шаблоны",
     "requiredActions": "Необходимые действия",
     "runs": "Запуски",
     "taskInstances": "Экземпляры задач",
-    "taskStateStore": "Хранилище состояния задач",
     "tasks": "Задачи",
     "xcom": "XCom"
   },
   "taskGroups": {
     "collapseAll": "Свернуть все группы задач",
     "expandAll": "Развернуть все группы задач"
-  },
-  "taskStateStore": {
-    "add": "Добавить хранилище состояния задач",
-    "clearAll": {
-      "resource": "всё хранилище состояния задач",
-      "title": "Очистить всё хранилище состояния задач",
-      "warning": "Всё хранилище состояния задач будет очищено. Задачи, использующие это хранилище для отслеживания внешней работы, не смогут возобновиться без повторного запуска с нуля."
-    },
-    "delete": "Удалить хранилище состояния задач",
-    "deleteWarning": "Задача потеряет эту сохранённую память. Если задача использует этот ключ для отслеживания внешней работы (например, ID внешнего задания), она не сможет её возобновить.",
-    "edit": "Редактировать хранилище состояния задач",
-    "emptyStore": "Хранилище состояния задач хранит значения, сохраняющиеся между повторными попытками. Воркеры могут записывать в хранилище состояния задач через Task SDK.",
-    "expiresAt": {
-      "column": "Истекает",
-      "custom": "Пользовательский",
-      "default": "По умолчанию ({{interval}})",
-      "label": "Срок действия",
-      "never": "Никогда"
-    },
-    "title": "Хранилище состояния задач"
   }
 }

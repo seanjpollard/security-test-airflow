@@ -19,20 +19,14 @@ from __future__ import annotations
 
 import base64
 import os
-import time
 from io import StringIO
 from pathlib import Path
-from types import ModuleType
-from unittest.mock import MagicMock, call, mock_open, patch
+from unittest.mock import call, mock_open, patch
 
-import kubernetes
 import pytest
-import requests
-from kubernetes.client import V1Pod, V1PodStatus
 
 from airflow.models import Connection
 from airflow.providers.apache.spark.hooks.spark_submit import SparkSubmitHook
-from airflow.providers.cncf.kubernetes import kube_client
 from airflow.providers.common.compat.sdk import AirflowException
 
 
@@ -106,14 +100,6 @@ class TestSparkSubmitHook:
             )
         )
         create_connection_without_db(
-            Connection(
-                conn_id="spark_k8s_cluster_no_namespace",
-                conn_type="spark",
-                host="k8s://https://k8s-master",
-                extra='{"deploy-mode": "cluster"}',
-            )
-        )
-        create_connection_without_db(
             Connection(conn_id="spark_default_mesos", conn_type="spark", host="mesos://host", port=5050)
         )
 
@@ -155,38 +141,6 @@ class TestSparkSubmitHook:
                 conn_type="spark",
                 host="spark://spark-standalone-master:6066",
                 extra='{"deploy-mode": "cluster"}',
-            )
-        )
-        create_connection_without_db(
-            Connection(
-                conn_id="spark_standalone_cluster_rpc_endpoint",
-                conn_type="spark",
-                host="spark://spark-standalone-master-rpc-endpoint:7077",
-                extra='{"deploy-mode": "cluster"}',
-            )
-        )
-        create_connection_without_db(
-            Connection(
-                conn_id="spark_standalone_cluster_ha",
-                conn_type="spark",
-                host="spark://m1:6066,m2:6066",
-                extra={"deploy-mode": "cluster"},
-            )
-        )
-        create_connection_without_db(
-            Connection(
-                conn_id="spark_standalone_cluster_ipv6",
-                conn_type="spark",
-                host="spark://[2001:db8::1]:6066",
-                extra={"deploy-mode": "cluster"},
-            )
-        )
-        create_connection_without_db(
-            Connection(
-                conn_id="spark_standalone_cluster_ipv6_ha",
-                conn_type="spark",
-                host="spark://[2001:db8::1]:6066,[1993:db8::1]:6066",
-                extra={"deploy-mode": "cluster"},
             )
         )
         create_connection_without_db(
@@ -242,29 +196,6 @@ class TestSparkSubmitHook:
             Connection(
                 conn_id="local_uri",
                 uri="spark://local",
-            )
-        )
-        create_connection_without_db(
-            Connection(
-                conn_id="spark_yarn_rm",
-                conn_type="spark",
-                host="yarn",
-                extra=(
-                    '{"deploy-mode": "cluster", "yarn_resourcemanager_webapp_address": "http://rm.test:8088"}'
-                ),
-            )
-        )
-        create_connection_without_db(
-            Connection(
-                conn_id="spark_yarn_rm_kerberos",
-                conn_type="spark",
-                host="yarn",
-                extra=(
-                    '{"deploy-mode": "cluster", '
-                    '"yarn_resourcemanager_webapp_address": "http://rm.test:8088", '
-                    '"principal": "airflow@EXAMPLE.COM", '
-                    '"keytab": "cHJpdmlsZWdlZF91c2VyLmtleXRhYg=="}'
-                ),
             )
         )
 
@@ -353,81 +284,41 @@ class TestSparkSubmitHook:
         ):
             hook._build_spark_submit_command(self._spark_job_file)
 
-    @pytest.mark.parametrize(
-        ("conn_id", "expected_command"),
-        [
-            (
-                "spark_standalone_cluster",
-                [
-                    "/usr/bin/curl",
-                    "--max-time",
-                    "30",
-                    "http://spark-standalone-master:6066/v1/submissions/status/driver-1",
-                ],
-            ),
-            (
-                "spark_yarn_cluster",
-                [
-                    "spark-submit",
-                    "--master",
-                    "yarn://yarn-master",
-                    "--status",
-                    "driver-1",
-                ],
-            ),
-            (
-                "spark_standalone_cluster_rpc_endpoint",
-                [
-                    "/usr/bin/curl",
-                    "--max-time",
-                    "30",
-                    "http://spark-standalone-master-rpc-endpoint:6066/v1/submissions/status/driver-1",
-                ],
-            ),
-            (
-                "spark_standalone_cluster_ha",
-                [
-                    "spark-submit",
-                    "--master",
-                    "spark://m1:6066,m2:6066",
-                    "--status",
-                    "driver-1",
-                ],
-            ),
-            (
-                "spark_standalone_cluster_ipv6",
-                [
-                    "/usr/bin/curl",
-                    "--max-time",
-                    "30",
-                    "http://[2001:db8::1]:6066/v1/submissions/status/driver-1",
-                ],
-            ),
-            (
-                "spark_standalone_cluster_ipv6_ha",
-                [
-                    "spark-submit",
-                    "--master",
-                    "spark://[2001:db8::1]:6066,[1993:db8::1]:6066",
-                    "--status",
-                    "driver-1",
-                ],
-            ),
-        ],
-    )
-    def test_build_track_driver_status_command(self, conn_id, expected_command):
+    def test_build_track_driver_status_command(self):
         # note this function is only relevant for spark setup matching below condition
         # 'spark://' in self._connection['master'] and self._connection['deploy_mode'] == 'cluster'
 
         # Given
-        hook = SparkSubmitHook(conn_id=conn_id)
-        hook._driver_id = "driver-1"
+        hook_spark_standalone_cluster = SparkSubmitHook(conn_id="spark_standalone_cluster")
+        hook_spark_standalone_cluster._driver_id = "driver-20171128111416-0001"
+        hook_spark_yarn_cluster = SparkSubmitHook(conn_id="spark_yarn_cluster")
+        hook_spark_yarn_cluster._driver_id = "driver-20171128111417-0001"
 
         # When
-        build_track_driver_status = hook._build_track_driver_status_command()
+        build_track_driver_status_spark_standalone_cluster = (
+            hook_spark_standalone_cluster._build_track_driver_status_command()
+        )
+        build_track_driver_status_spark_yarn_cluster = (
+            hook_spark_yarn_cluster._build_track_driver_status_command()
+        )
 
         # Then
-        assert build_track_driver_status == expected_command
+        expected_spark_standalone_cluster = [
+            "/usr/bin/curl",
+            "--max-time",
+            "30",
+            "http://spark-standalone-master:6066/v1/submissions/status/driver-20171128111416-0001",
+        ]
+        expected_spark_yarn_cluster = [
+            "spark-submit",
+            "--master",
+            "yarn://yarn-master",
+            "--status",
+            "driver-20171128111417-0001",
+        ]
+
+        assert expected_spark_standalone_cluster == build_track_driver_status_spark_standalone_cluster
+        assert expected_spark_yarn_cluster == build_track_driver_status_spark_yarn_cluster
 
     @pytest.mark.db_test
     @patch("airflow.providers.apache.spark.hooks.spark_submit.subprocess.Popen")
@@ -450,33 +341,6 @@ class TestSparkSubmitHook:
             universal_newlines=True,
             bufsize=-1,
         )
-
-    @pytest.mark.db_test
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.subprocess.Popen")
-    def test_submit_failure_includes_captured_log_tail(self, mock_popen, sdk_connection_not_found):
-        mock_popen.return_value.stdout = StringIO(
-            'Exception in thread "main" org.apache.spark.SparkException: bad jar\nsome other line'
-        )
-        mock_popen.return_value.stderr = StringIO("")
-        mock_popen.return_value.wait.return_value = 1
-
-        hook = SparkSubmitHook(conn_id="")
-
-        with pytest.raises(AirflowException, match="Last spark-submit output:") as exc_info:
-            hook.submit()
-        assert 'Exception in thread "main" org.apache.spark.SparkException: bad jar' in str(exc_info.value)
-
-    @pytest.mark.db_test
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.subprocess.Popen")
-    def test_submit_no_driver_id_includes_captured_log_tail(self, mock_popen, sdk_connection_not_found):
-        mock_popen.return_value.stdout = StringIO("some unrelated spark-submit output")
-        mock_popen.return_value.stderr = StringIO("")
-        mock_popen.return_value.wait.return_value = 0
-
-        hook = SparkSubmitHook(conn_id="spark_standalone_cluster")
-        with pytest.raises(AirflowException, match="No driver id is known") as exc_info:
-            hook.submit()
-        assert "Last spark-submit output:\nsome unrelated spark-submit output" in str(exc_info.value)
 
     @pytest.mark.db_test
     def test_resolve_should_track_driver_status(self, sdk_connection_not_found):
@@ -514,24 +378,6 @@ class TestSparkSubmitHook:
         assert should_track_driver_status_spark_binary_set is False
         assert should_track_driver_status_spark_standalone_cluster is True
 
-    @staticmethod
-    def expected_resolved_connection(**overrides):
-        # default connection attributes; override values as needed per test.
-        connection = {
-            "master": "yarn",
-            "spark_binary": None,
-            "deploy_mode": None,
-            "queue": None,
-            "namespace": None,
-            "principal": None,
-            "keytab": None,
-            "rest_scheme": "http",
-            "rest_port": 6066,
-            "rest_endpoint": None,
-        }
-        connection.update(overrides)
-        return connection
-
     @pytest.mark.db_test
     def test_resolve_connection_yarn_default(self, sdk_connection_not_found):
         # Given
@@ -543,7 +389,15 @@ class TestSparkSubmitHook:
 
         # Then
         dict_cmd = self.cmd_args_to_dict(cmd)
-        expected_spark_connection = self.expected_resolved_connection(spark_binary="spark-submit")
+        expected_spark_connection = {
+            "master": "yarn",
+            "spark_binary": "spark-submit",
+            "deploy_mode": None,
+            "queue": None,
+            "namespace": None,
+            "principal": None,
+            "keytab": None,
+        }
         assert connection == expected_spark_connection
         assert dict_cmd["--master"] == "yarn"
 
@@ -558,10 +412,15 @@ class TestSparkSubmitHook:
 
         # Then
         dict_cmd = self.cmd_args_to_dict(cmd)
-        expected_spark_connection = self.expected_resolved_connection(
-            spark_binary="spark-submit",
-            queue="root.default",
-        )
+        expected_spark_connection = {
+            "master": "yarn",
+            "spark_binary": "spark-submit",
+            "deploy_mode": None,
+            "queue": "root.default",
+            "namespace": None,
+            "principal": None,
+            "keytab": None,
+        }
         assert connection == expected_spark_connection
         assert dict_cmd["--master"] == "yarn"
         assert dict_cmd["--queue"] == "root.default"
@@ -576,10 +435,15 @@ class TestSparkSubmitHook:
 
         # Then
         dict_cmd = self.cmd_args_to_dict(cmd)
-        expected_spark_connection = self.expected_resolved_connection(
-            master="mesos://host:5050",
-            spark_binary="spark-submit",
-        )
+        expected_spark_connection = {
+            "master": "mesos://host:5050",
+            "spark_binary": "spark-submit",
+            "deploy_mode": None,
+            "queue": None,
+            "namespace": None,
+            "principal": None,
+            "keytab": None,
+        }
         assert connection == expected_spark_connection
         assert dict_cmd["--master"] == "mesos://host:5050"
 
@@ -593,12 +457,15 @@ class TestSparkSubmitHook:
 
         # Then
         dict_cmd = self.cmd_args_to_dict(cmd)
-        expected_spark_connection = self.expected_resolved_connection(
-            master="yarn://yarn-master",
-            spark_binary="spark-submit",
-            deploy_mode="cluster",
-            queue="root.etl",
-        )
+        expected_spark_connection = {
+            "master": "yarn://yarn-master",
+            "spark_binary": "spark-submit",
+            "deploy_mode": "cluster",
+            "queue": "root.etl",
+            "namespace": None,
+            "principal": None,
+            "keytab": None,
+        }
         assert connection == expected_spark_connection
         assert dict_cmd["--master"] == "yarn://yarn-master"
         assert dict_cmd["--queue"] == "root.etl"
@@ -614,12 +481,15 @@ class TestSparkSubmitHook:
 
         # Then
         dict_cmd = self.cmd_args_to_dict(cmd)
-        expected_spark_connection = self.expected_resolved_connection(
-            master="k8s://https://k8s-master",
-            spark_binary="spark-submit",
-            deploy_mode="cluster",
-            namespace="mynamespace",
-        )
+        expected_spark_connection = {
+            "queue": None,
+            "spark_binary": "spark-submit",
+            "master": "k8s://https://k8s-master",
+            "deploy_mode": "cluster",
+            "namespace": "mynamespace",
+            "principal": None,
+            "keytab": None,
+        }
         assert connection == expected_spark_connection
         assert dict_cmd["--master"] == "k8s://https://k8s-master"
         assert dict_cmd["--deploy-mode"] == "cluster"
@@ -637,12 +507,15 @@ class TestSparkSubmitHook:
 
         # Then
         dict_cmd = self.cmd_args_to_dict(cmd)
-        expected_spark_connection = self.expected_resolved_connection(
-            master="k8s://https://k8s-master",
-            spark_binary="spark-submit",
-            deploy_mode="cluster",
-            namespace="airflow",
-        )
+        expected_spark_connection = {
+            "queue": None,
+            "spark_binary": "spark-submit",
+            "master": "k8s://https://k8s-master",
+            "deploy_mode": "cluster",
+            "namespace": "airflow",
+            "principal": None,
+            "keytab": None,
+        }
         assert connection == expected_spark_connection
         assert dict_cmd["--master"] == "k8s://https://k8s-master"
         assert dict_cmd["--deploy-mode"] == "cluster"
@@ -657,9 +530,15 @@ class TestSparkSubmitHook:
         cmd = hook._build_spark_submit_command(self._spark_job_file)
 
         # Then
-        expected_spark_connection = self.expected_resolved_connection(
-            spark_binary="spark2-submit",
-        )
+        expected_spark_connection = {
+            "master": "yarn",
+            "spark_binary": "spark2-submit",
+            "deploy_mode": None,
+            "queue": None,
+            "namespace": None,
+            "principal": None,
+            "keytab": None,
+        }
         assert connection == expected_spark_connection
         assert cmd[0] == "spark2-submit"
 
@@ -672,9 +551,15 @@ class TestSparkSubmitHook:
         cmd = hook._build_spark_submit_command(self._spark_job_file)
 
         # Then
-        expected_spark_connection = self.expected_resolved_connection(
-            spark_binary="spark3-submit",
-        )
+        expected_spark_connection = {
+            "master": "yarn",
+            "spark_binary": "spark3-submit",
+            "deploy_mode": None,
+            "queue": None,
+            "namespace": None,
+            "principal": None,
+            "keytab": None,
+        }
         assert connection == expected_spark_connection
         assert cmd[0] == "spark3-submit"
 
@@ -726,9 +611,15 @@ class TestSparkSubmitHook:
         cmd = hook._build_spark_submit_command(self._spark_job_file)
 
         # Then
-        expected_spark_connection = self.expected_resolved_connection(
-            spark_binary="spark3-submit",
-        )
+        expected_spark_connection = {
+            "master": "yarn",
+            "spark_binary": "spark3-submit",
+            "deploy_mode": None,
+            "queue": None,
+            "namespace": None,
+            "principal": None,
+            "keytab": None,
+        }
         assert connection == expected_spark_connection
         assert cmd[0] == "spark3-submit"
 
@@ -742,10 +633,15 @@ class TestSparkSubmitHook:
         cmd = hook._build_spark_submit_command(self._spark_job_file)
 
         # Then
-        expected_spark_connection = self.expected_resolved_connection(
-            spark_binary="spark-submit",
-            queue="root.default",
-        )
+        expected_spark_connection = {
+            "master": "yarn",
+            "spark_binary": "spark-submit",
+            "deploy_mode": None,
+            "queue": "root.default",
+            "namespace": None,
+            "principal": None,
+            "keytab": None,
+        }
         assert connection == expected_spark_connection
         assert cmd[0] == "spark-submit"
 
@@ -758,65 +654,16 @@ class TestSparkSubmitHook:
         cmd = hook._build_spark_submit_command(self._spark_job_file)
 
         # Then
-        expected_spark_connection = self.expected_resolved_connection(
-            master="spark://spark-standalone-master:6066",
-            spark_binary="spark-submit",
-            deploy_mode="cluster",
-            rest_endpoint="http://spark-standalone-master:6066",
-        )
+        expected_spark_connection = {
+            "master": "spark://spark-standalone-master:6066",
+            "spark_binary": "spark-submit",
+            "deploy_mode": "cluster",
+            "queue": None,
+            "namespace": None,
+            "principal": None,
+            "keytab": None,
+        }
         assert connection == expected_spark_connection
-        assert cmd[0] == "spark-submit"
-
-    @pytest.mark.parametrize(
-        ("master", "rest_scheme", "rest_port", "expected"),
-        [
-            (
-                "spark://spark-standalone-master-rpc-endpoint:7078",
-                "http",
-                6067,
-                "http://spark-standalone-master-rpc-endpoint:6067",
-            ),
-            (
-                "spark://spark-standalone-master-rpc-endpoint:7077",
-                "https",
-                7443,
-                "https://spark-standalone-master-rpc-endpoint:7443",
-            ),
-        ],
-    )
-    def test_resolve_connection_spark_standalone_cluster_connection_rpc_endpoint(
-        self,
-        create_connection_without_db,
-        master,
-        rest_scheme,
-        rest_port,
-        expected,
-    ):
-        create_connection_without_db(
-            Connection(
-                conn_id="spark_standalone_cluster_rpc_endpoint_parametrized",
-                conn_type="spark",
-                host=master,
-                extra={
-                    "deploy-mode": "cluster",
-                    "rest-scheme": rest_scheme,
-                    "rest-port": rest_port,
-                },
-            )
-        )
-        # Given
-        hook = SparkSubmitHook(conn_id="spark_standalone_cluster_rpc_endpoint_parametrized")
-
-        # When
-        connection = hook._resolve_connection()
-        cmd = hook._build_spark_submit_command(self._spark_job_file)
-
-        # Then
-
-        assert connection["rest_endpoint"] == expected
-        assert connection["master"] == master
-        assert connection["rest_scheme"] == rest_scheme
-        assert connection["rest_port"] == rest_port
         assert cmd[0] == "spark-submit"
 
     def test_resolve_connection_principal_set_connection(self):
@@ -829,10 +676,15 @@ class TestSparkSubmitHook:
 
         # Then
         dict_cmd = self.cmd_args_to_dict(cmd)
-        expected_spark_connection = self.expected_resolved_connection(
-            spark_binary="spark-submit",
-            principal="user/spark@airflow.org",
-        )
+        expected_spark_connection = {
+            "master": "yarn",
+            "spark_binary": "spark-submit",
+            "deploy_mode": None,
+            "queue": None,
+            "namespace": None,
+            "principal": "user/spark@airflow.org",
+            "keytab": None,
+        }
         assert connection == expected_spark_connection
         assert dict_cmd["--principal"] == "user/spark@airflow.org"
 
@@ -846,10 +698,15 @@ class TestSparkSubmitHook:
 
         # Then
         dict_cmd = self.cmd_args_to_dict(cmd)
-        expected_spark_connection = self.expected_resolved_connection(
-            spark_binary="spark-submit",
-            principal="will-override",
-        )
+        expected_spark_connection = {
+            "master": "yarn",
+            "spark_binary": "spark-submit",
+            "deploy_mode": None,
+            "queue": None,
+            "namespace": None,
+            "principal": "will-override",
+            "keytab": None,
+        }
         assert connection == expected_spark_connection
         assert dict_cmd["--principal"] == "will-override"
 
@@ -867,10 +724,15 @@ class TestSparkSubmitHook:
 
         # Then
         dict_cmd = self.cmd_args_to_dict(cmd)
-        expected_spark_connection = self.expected_resolved_connection(
-            spark_binary="spark-submit",
-            keytab="privileged_user.keytab",
-        )
+        expected_spark_connection = {
+            "master": "yarn",
+            "spark_binary": "spark-submit",
+            "deploy_mode": None,
+            "queue": None,
+            "namespace": None,
+            "principal": None,
+            "keytab": "privileged_user.keytab",
+        }
         assert connection == expected_spark_connection
         assert dict_cmd["--keytab"] == "privileged_user.keytab"
 
@@ -887,10 +749,15 @@ class TestSparkSubmitHook:
 
         # Then
         dict_cmd = self.cmd_args_to_dict(cmd)
-        expected_spark_connection = self.expected_resolved_connection(
-            spark_binary="spark-submit",
-            keytab="will-override",
-        )
+        expected_spark_connection = {
+            "master": "yarn",
+            "spark_binary": "spark-submit",
+            "deploy_mode": None,
+            "queue": None,
+            "namespace": None,
+            "principal": None,
+            "keytab": "will-override",
+        }
         assert connection == expected_spark_connection
         assert dict_cmd["--keytab"] == "will-override"
         assert not mock_create_keytab_path_from_base64_keytab.called, (
@@ -1008,18 +875,6 @@ class TestSparkSubmitHook:
         # Then
         assert hook._spark_exit_code == 999
 
-    def test_process_spark_submit_log_k8s_submission_id_format(self):
-        hook = SparkSubmitHook(conn_id="spark_k8s_cluster")
-        log_lines = [
-            "INFO Client: Deployed Spark application arrow-spark with application ID "
-            "spark-1e22d65826b74ac2927249b0e607ed54 and submission ID "
-            "spark:arrow-spark-c8e2e29e73db9c93-driver into Kubernetes",
-        ]
-
-        hook._process_spark_submit_log(log_lines)
-
-        assert hook._kubernetes_driver_pod == "arrow-spark-c8e2e29e73db9c93-driver"
-
     def test_process_spark_client_mode_submit_log_k8s(self):
         # Given
         hook = SparkSubmitHook(conn_id="spark_k8s_client")
@@ -1052,54 +907,6 @@ class TestSparkSubmitHook:
         # Then
 
         assert hook._driver_id == "driver-20171128111415-0001"
-
-    def test_process_spark_submit_log_captures_from_exception_marker_onward(self):
-        """Lines before the uncaught-exception marker are noise and get discarded."""
-        hook = SparkSubmitHook(conn_id="spark_standalone_cluster")
-        log_lines = [
-            "WARNING: Using incubator modules: jdk.incubator.vector",
-            "26/07/27 09:43:44 INFO SparkKubernetesClientFactory: Auto-configuring K8S client",
-            'Exception in thread "main" io.fabric8.kubernetes.client.KubernetesClientException: boom',
-            "\tat io.fabric8.kubernetes.client.dsl.internal.OperationSupport.handleCreate(OS.java:340)",
-        ]
-
-        hook._process_spark_submit_log(log_lines)
-
-        assert list(hook._last_submit_log_lines) == [line.strip() for line in log_lines[2:]]
-
-    def test_process_spark_submit_log_without_exception_marker_uses_rolling_tail(self):
-        """No 'Exception in thread' anywhere -> falls back to the plain last-20 tail."""
-        hook = SparkSubmitHook(conn_id="spark_standalone_cluster")
-        log_lines = [f"plain output line {i}" for i in range(25)]
-
-        hook._process_spark_submit_log(log_lines)
-
-        assert list(hook._last_submit_log_lines) == log_lines[-20:]
-
-    def test_process_spark_submit_log_exception_message_survives_long_stack_trace(self):
-        """A message preceding 30+ stack frames must not roll off the buffer."""
-        hook = SparkSubmitHook(conn_id="spark_standalone_cluster")
-        message_line = (
-            'Exception in thread "main" io.fabric8.kubernetes.client.KubernetesClientException: '
-            'pods "arrow-spark-driver" is forbidden: exceeded quota: spark-demo-quota'
-        )
-        log_lines = [message_line] + [f"\tat some.deep.Frame.method{i}(Frame.java:{i})" for i in range(30)]
-
-        hook._process_spark_submit_log(log_lines)
-
-        assert next(iter(hook._last_submit_log_lines)) == message_line
-        assert "exceeded quota" in hook._submit_log_tail
-
-    def test_process_spark_submit_log_anchor_buffer_truncates_at_500(self):
-        """The widened post-anchor buffer still enforces its own maxlen."""
-        hook = SparkSubmitHook(conn_id="spark_standalone_cluster")
-        marker_line = 'Exception in thread "main" java.lang.RuntimeException: boom'
-        log_lines = [marker_line] + [f"line {i}" for i in range(505)]
-
-        hook._process_spark_submit_log(log_lines)
-
-        assert len(hook._last_submit_log_lines) == 500
-        assert list(hook._last_submit_log_lines) == [f"line {i}" for i in range(5, 505)]
 
     def test_process_spark_driver_status_log(self):
         # Given
@@ -1199,85 +1006,7 @@ class TestSparkSubmitHook:
             in mock_popen.mock_calls
         )
 
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.subprocess.Popen")
-    def test_legacy_on_kill_skips_yarn_cli_when_submit_sp_already_exited(self, mock_popen):
-        """Regression guard when `yarn_track_via_rm_api=False` (legacy
-        path), the YARN CLI kill must stay gated on a live `_submit_sp`. If the
-        spark-submit subprocess has already exited, `on_kill` must not spawn
-        `yarn application -kill` — preserving pre-PR behavior for users who have
-        not opted in to the REST kill path.
-        """
-        submit_process = MagicMock(spec=["kill", "poll"])
-        submit_process.poll.return_value = 0  # already exited
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_cluster")  # yarn_track_via_rm_api=False
-        hook._submit_sp = submit_process
-        hook._yarn_application_id = "application_1486558679801_1820"
-
-        hook.on_kill()
-
-        submit_process.kill.assert_not_called()
-        mock_popen.assert_not_called()
-
-    @pytest.mark.parametrize(
-        ("conn_id", "expected_command"),
-        [
-            (
-                "spark_standalone_cluster",
-                [
-                    "/usr/bin/curl",
-                    "--max-time",
-                    "30",
-                    "-X",
-                    "POST",
-                    "http://spark-standalone-master:6066/v1/submissions/kill/driver-20171128111415-0001",
-                ],
-            ),
-            (
-                "spark_standalone_cluster_rpc_endpoint",
-                [
-                    "/usr/bin/curl",
-                    "--max-time",
-                    "30",
-                    "-X",
-                    "POST",
-                    "http://spark-standalone-master-rpc-endpoint:6066/v1/submissions/kill/driver-20171128111415-0001",
-                ],
-            ),
-            (
-                "spark_standalone_cluster_ha",
-                [
-                    "spark-submit",
-                    "--master",
-                    "spark://m1:6066,m2:6066",
-                    "--kill",
-                    "driver-20171128111415-0001",
-                ],
-            ),
-            (
-                "spark_standalone_cluster_ipv6",
-                [
-                    "/usr/bin/curl",
-                    "--max-time",
-                    "30",
-                    "-X",
-                    "POST",
-                    "http://[2001:db8::1]:6066/v1/submissions/kill/driver-20171128111415-0001",
-                ],
-            ),
-            (
-                "spark_standalone_cluster_ipv6_ha",
-                [
-                    "spark-submit",
-                    "--master",
-                    "spark://[2001:db8::1]:6066,[1993:db8::1]:6066",
-                    "--kill",
-                    "driver-20171128111415-0001",
-                ],
-            ),
-        ],
-    )
-    def test_standalone_cluster_process_on_kill(self, conn_id, expected_command):
+    def test_standalone_cluster_process_on_kill(self):
         # Given
         log_lines = [
             "Running Spark using the REST application submission protocol.",
@@ -1286,14 +1015,18 @@ class TestSparkSubmitHook:
             "17/11/28 11:14:15 INFO RestSubmissionClient: Submission successfully "
             "created as driver-20171128111415-0001. Polling submission state...",
         ]
-        hook = SparkSubmitHook(conn_id=conn_id)
+        hook = SparkSubmitHook(conn_id="spark_standalone_cluster")
         hook._process_spark_submit_log(log_lines)
 
         # When
         kill_cmd = hook._build_spark_driver_kill_command()
 
         # Then
-        assert kill_cmd == expected_command
+        assert kill_cmd[0] == "spark-submit"
+        assert kill_cmd[1] == "--master"
+        assert kill_cmd[2] == "spark://spark-standalone-master:6066"
+        assert kill_cmd[3] == "--kill"
+        assert kill_cmd[4] == "driver-20171128111415-0001"
 
     @patch("airflow.providers.cncf.kubernetes.kube_client.get_kube_client")
     @patch("airflow.providers.apache.spark.hooks.spark_submit.subprocess.Popen")
@@ -1338,29 +1071,6 @@ class TestSparkSubmitHook:
             "spark-pi-edf2ace37be7353a958b38733a12f8e6-driver", "mynamespace", **kwargs
         )
 
-    @patch("airflow.providers.cncf.kubernetes.kube_client.get_kube_client")
-    def test_on_kill_deletes_pod_when_k8s_api_tracking_and_submit_sp_already_exited(self, mock_get_client):
-        """on_kill must delete the driver pod when K8s-API tracking is active even if spark-submit
-        has already exited.
-        """
-        hook = SparkSubmitHook(conn_id="spark_k8s_cluster", track_driver_via_k8s_api=True)
-        hook._kubernetes_driver_pod = "spark-app-abc-driver"
-        hook._kubernetes_application_id = "spark-abc"
-        hook._submit_sp = MagicMock()
-        # spark-submit already exited
-        hook._submit_sp.poll.return_value = 0
-
-        mock_client = mock_get_client.return_value
-
-        hook.on_kill()
-
-        mock_client.delete_namespaced_pod.assert_called_once_with(
-            "spark-app-abc-driver",
-            "mynamespace",
-            body=kubernetes.client.V1DeleteOptions(),
-            pretty=True,
-        )
-
     @pytest.mark.parametrize(
         ("command", "expected"),
         [
@@ -1396,75 +1106,6 @@ class TestSparkSubmitHook:
                 ("spark-submit",),
                 "spark-submit",
             ),
-            (
-                ("spark-submit", "foo", "--secret", "topsecret", "--bar"),
-                "spark-submit foo --secret ****** --bar",
-            ),
-            (
-                ("spark-submit", "--conf", "spark.mySecret=abc"),
-                "spark-submit --conf spark.mySecret=******",
-            ),
-            (
-                ("spark-submit", "--PASSWORD=abc"),
-                "spark-submit --PASSWORD=******",
-            ),
-            (
-                ("spark-submit", "--conf", "HivePassword='multi word pass'", "--after"),
-                "spark-submit --conf HivePassword='******' --after",
-            ),
-            (
-                ("spark-submit", "--password", "'multi word pass'", "--bar", "baz"),
-                "spark-submit --password '******' --bar baz",
-            ),
-            (
-                ("spark-submit", "--password"),
-                "spark-submit --password",
-            ),
-            (
-                ("spark-submit", "--password", "", "hunter2"),
-                "spark-submit --password  ******",
-            ),
-            (
-                ("Using  password  hunter2",),
-                "Using  password  ******",
-            ),
-            (
-                ("spark-submit --password\thunter2",),
-                "spark-submit --password\t******",
-            ),
-            (
-                ("spark-submit\t--conf\tHivePassword='abc'",),
-                "spark-submit\t--conf\tHivePassword='******'",
-            ),
-            # Multiple sensitive keys inside a single token (reviewer-identified blind spot):
-            # the old anchored regex missed the second key after a closed quote.
-            (
-                ['Config(secret="x",password=hunter2)'],
-                'Config(secret="******",password=******',
-            ),
-            (
-                ["--conf", "spark.a.secret='x',spark.b.password=hunter2"],
-                "--conf spark.a.secret='******',spark.b.password=******",
-            ),
-            # Quoted multi-word values whose closing quote is followed by punctuation,
-            # as in Python-repr or dict-shaped log output.
-            (
-                ['Config(password="my pass word", user=x)'],
-                'Config(password="******", user=x)',
-            ),
-            (
-                ["{'password': 'a b'}"],
-                "{'password': '******'}",
-            ),
-            # A quote followed by punctuation inside the value must not close it early.
-            (
-                ["spark-submit", "--password='Pa'$$w0rd'", "--next"],
-                "spark-submit --password='******' --next",
-            ),
-            (
-                "spark-submit --password=hunter2",
-                "spark-submit --password=******",
-            ),
         ],
     )
     @pytest.mark.db_test
@@ -1477,74 +1118,6 @@ class TestSparkSubmitHook:
 
         # Then
         assert command_masked == expected
-
-    @pytest.mark.db_test
-    def test_masks_passwords_stays_fast_on_large_input(self) -> None:
-        # The previous pattern retried at every offset on long inputs, taking tens of
-        # seconds for this payload and blocking the worker slot. The trailing space is
-        # deliberate: it makes 25,000 separate tokens, which is what exercises the
-        # per-offset retry rather than a single very long token.
-        hook = SparkSubmitHook()
-        payload = ["spark-submit", "--arg", "x " * 25_000]
-
-        start = time.monotonic()
-        command_masked = hook._mask_cmd(payload)
-        elapsed = time.monotonic() - start
-
-        assert command_masked == " ".join(payload)
-        assert elapsed < 5
-
-    @pytest.mark.db_test
-    def test_masks_passwords_does_not_swallow_following_lines(self) -> None:
-        # An unterminated quote must not consume the log lines after it: the value
-        # ends at the newline, so the rest of the captured output survives masking.
-        hook = SparkSubmitHook()
-        command = 'spark-submit --conf password="abc\nERROR: job failed\n--other=1 "tail'
-
-        command_masked = hook._mask_cmd([command])
-
-        assert command_masked == 'spark-submit --conf password=******\nERROR: job failed\n--other=1 "tail'
-
-    @pytest.mark.db_test
-    @pytest.mark.parametrize(
-        "token",
-        [
-            pytest.param("secret" * 20_000, id="repeated-keywords"),
-            pytest.param("a=" + "secret" * 20_000, id="equals-before-repeated-keywords"),
-            pytest.param("password='x'," * 20_000, id="repeated-closed-quoted-values"),
-        ],
-    )
-    def test_masks_passwords_stays_fast_on_repeated_keywords(self, token: str) -> None:
-        # A token packing many sensitive keywords made the previous pattern backtrack
-        # quadratically or worse; the scan must stay linear on these shapes.
-        hook = SparkSubmitHook()
-        payload = ["spark-submit", "--arg", token]
-
-        start = time.monotonic()
-        hook._mask_cmd(payload)
-        elapsed = time.monotonic() - start
-
-        assert elapsed < 5
-
-    @pytest.mark.db_test
-    def test_submit_log_tail_empty_when_no_lines_captured(self) -> None:
-        hook = SparkSubmitHook()
-
-        assert hook._submit_log_tail == ""
-
-    @pytest.mark.db_test
-    def test_submit_log_tail_formats_and_masks_captured_lines(self) -> None:
-        hook = SparkSubmitHook()
-        hook._last_submit_log_lines.append("Exception in thread main: SparkException: bad jar")
-        hook._last_submit_log_lines.append("--password='secret'")
-
-        tail = hook._submit_log_tail
-
-        assert tail == (
-            "\nLast spark-submit output:\n"
-            "Exception in thread main: SparkException: bad jar\n"
-            "--password='******'"
-        )
 
     @pytest.mark.db_test
     def test_create_keytab_path_from_base64_keytab_with_decode_exception(self):
@@ -1699,6 +1272,7 @@ class TestSparkSubmitHook:
     def test_run_post_submit_commands_success(self, mock_run):
         """Test that post_submit_commands are run with shell=False and shlex.split."""
         import subprocess
+        from unittest.mock import MagicMock
 
         mock_result = MagicMock(spec=subprocess.CompletedProcess)
         mock_result.returncode = 0
@@ -1726,6 +1300,7 @@ class TestSparkSubmitHook:
     def test_run_post_submit_commands_nonzero_exit_warns(self, mock_run):
         """Test that a non-zero exit code logs a warning but does not raise."""
         import subprocess
+        from unittest.mock import MagicMock
 
         mock_result = MagicMock(spec=subprocess.CompletedProcess)
         mock_result.returncode = 1
@@ -1761,667 +1336,3 @@ class TestSparkSubmitHook:
         """Test that None post_submit_commands results in an empty list."""
         hook = SparkSubmitHook(conn_id="")
         assert hook._post_submit_commands == []
-
-    @pytest.mark.parametrize(
-        ("state", "final_status", "expected"),
-        [
-            ("NEW", "UNDEFINED", "NEW"),
-            ("NEW_SAVING", "UNDEFINED", "NEW_SAVING"),
-            ("SUBMITTED", "UNDEFINED", "SUBMITTED"),
-            ("ACCEPTED", "UNDEFINED", "ACCEPTED"),
-            ("RUNNING", "UNDEFINED", "RUNNING"),
-            ("FINISHED", "SUCCEEDED", "SUCCEEDED"),
-            ("FINISHED", "FAILED", "FAILED"),
-            ("FINISHED", "KILLED", "FAILED"),
-            ("FINISHED", "UNDEFINED", "FAILED"),
-            ("FAILED", "FAILED", "FAILED"),
-            ("FAILED", "KILLED", "FAILED"),
-            ("KILLED", "KILLED", "FAILED"),
-        ],
-    )
-    def test_query_yarn_application_status_state_mapping(self, state, final_status, expected):
-        hook = SparkSubmitHook(conn_id="")
-        mock_response = MagicMock(spec=requests.Response)
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"app": {"state": state, "finalStatus": final_status}}
-
-        with patch(
-            "airflow.providers.apache.spark.hooks.spark_submit.requests.get", return_value=mock_response
-        ):
-            with patch.object(hook, "_get_yarn_rm_base_url", return_value="http://rm.example.com:8088"):
-                assert hook.query_yarn_application_status("application_1234_0001") == expected
-
-    @pytest.mark.parametrize(
-        ("conn_id", "flag", "expected"),
-        [
-            ("spark_k8s_cluster", False, False),
-            ("spark_k8s_cluster", True, True),
-            ("spark_k8s_client", True, False),
-        ],
-    )
-    def test_should_track_driver_via_k8s_api(self, conn_id, flag, expected):
-        hook = SparkSubmitHook(conn_id=conn_id, track_driver_via_k8s_api=flag)
-        assert hook._should_track_driver_via_k8s_api() is expected
-
-    @pytest.mark.parametrize(
-        ("conn_id", "match"),
-        [
-            ("spark_yarn_cluster", "requires Spark master to be Kubernetes"),
-            ("spark_k8s_client", "requires `deploy_mode='cluster'`"),
-            ("spark_k8s_cluster_no_namespace", "requires a namespace"),
-        ],
-    )
-    def test_validate_track_driver_via_k8s_api_raises(self, conn_id, match):
-        hook = SparkSubmitHook(conn_id=conn_id, track_driver_via_k8s_api=True)
-        with pytest.raises(ValueError, match=match):
-            hook._validate_track_driver_via_k8s_api_config()
-
-    def test_validate_track_driver_via_k8s_api_raises_on_conflicting_user_conf(self):
-        hook = SparkSubmitHook(
-            conn_id="spark_k8s_cluster",
-            track_driver_via_k8s_api=True,
-            conf={"spark.kubernetes.submission.waitAppCompletion": "true"},
-        )
-        with pytest.raises(ValueError, match="incompatible with.*waitAppCompletion=true"):
-            hook._validate_track_driver_via_k8s_api_config()
-
-    def test_conf_injection_adds_wait_app_completion(self):
-        hook = SparkSubmitHook(conn_id="spark_k8s_cluster", track_driver_via_k8s_api=True)
-        cmd = hook._build_spark_submit_command("app.jar")
-        conf_pairs = [cmd[i + 1] for i, v in enumerate(cmd) if v == "--conf"]
-        assert "spark.kubernetes.submission.waitAppCompletion=false" in conf_pairs
-
-    @patch("airflow.providers.cncf.kubernetes.kube_client.get_kube_client")
-    def test_poll_k8s_driver_succeeds(self, mock_get_client):
-        hook = SparkSubmitHook(conn_id="spark_k8s_cluster", track_driver_via_k8s_api=True)
-        hook._kubernetes_driver_pod = "spark-app-abc-driver"
-        hook._kubernetes_application_id = "spark-abc"
-
-        mock_client = mock_get_client.return_value
-        running_pod = V1Pod(status=V1PodStatus(phase="Running"))
-        succeeded_pod = V1Pod(status=V1PodStatus(phase="Succeeded"))
-        mock_client.read_namespaced_pod.side_effect = [running_pod, succeeded_pod]
-
-        with patch.object(hook, "_run_post_submit_commands"), patch("time.sleep"):
-            hook._poll_k8s_driver_via_api()
-
-        assert mock_client.delete_namespaced_pod.call_args.args[:2] == ("spark-app-abc-driver", "mynamespace")
-
-    @patch("airflow.providers.cncf.kubernetes.kube_client.get_kube_client")
-    def test_poll_k8s_driver_raises_on_failed(self, mock_get_client):
-        hook = SparkSubmitHook(conn_id="spark_k8s_cluster", track_driver_via_k8s_api=True)
-        hook._kubernetes_driver_pod = "spark-app-abc-driver"
-        hook._kubernetes_application_id = "spark-abc"
-
-        mock_client = mock_get_client.return_value
-        failed_pod = V1Pod(status=V1PodStatus(phase="Failed"))
-        mock_client.read_namespaced_pod.return_value = failed_pod
-
-        with pytest.raises(RuntimeError, match="phase=Failed"):
-            hook._poll_k8s_driver_via_api()
-
-    @patch("airflow.providers.cncf.kubernetes.kube_client.get_kube_client")
-    def test_poll_k8s_driver_raises_after_consecutive_unknown(self, mock_get_client):
-        hook = SparkSubmitHook(conn_id="spark_k8s_cluster", track_driver_via_k8s_api=True)
-        hook._kubernetes_driver_pod = "spark-app-abc-driver"
-        hook._kubernetes_application_id = "spark-abc"
-
-        mock_client = mock_get_client.return_value
-        mock_client.read_namespaced_pod.return_value = V1Pod(status=V1PodStatus(phase="Unknown"))
-
-        with patch("time.sleep"), pytest.raises(RuntimeError, match="Unknown phase"):
-            hook._poll_k8s_driver_via_api()
-
-        # assert that it was polled minimum 3 times to confirm the Unknown status before raising
-        assert mock_client.read_namespaced_pod.call_count == 3
-
-    @patch("time.sleep")
-    @patch("airflow.providers.cncf.kubernetes.kube_client.get_kube_client")
-    def test_poll_k8s_driver_tolerates_transient_api_errors(self, mock_get_client, _):
-        hook = SparkSubmitHook(conn_id="spark_k8s_cluster", track_driver_via_k8s_api=True)
-        hook._kubernetes_driver_pod = "spark-app-abc-driver"
-        hook._kubernetes_application_id = "spark-abc"
-
-        mock_client = mock_get_client.return_value
-        api_error = kube_client.ApiException(status=500, reason="Internal Server Error")
-        succeeded_pod = V1Pod(status=V1PodStatus(phase="Succeeded"))
-        mock_client.read_namespaced_pod.side_effect = [api_error, api_error, succeeded_pod]
-
-        with patch.object(hook, "_run_post_submit_commands"):
-            hook._poll_k8s_driver_via_api()
-
-        assert mock_client.read_namespaced_pod.call_count == 3
-
-    @patch("airflow.providers.cncf.kubernetes.kube_client.get_kube_client")
-    def test_post_submit_commands_run_exactly_once_on_k8s_path(self, mock_get_client):
-        """_run_post_submit_commands must fire exactly once: in _poll_k8s_driver_via_api finally."""
-        hook = SparkSubmitHook(conn_id="spark_k8s_cluster", track_driver_via_k8s_api=True)
-        hook._kubernetes_driver_pod = "spark-app-abc-driver"
-        hook._kubernetes_application_id = "spark-abc"
-
-        mock_client = mock_get_client.return_value
-        mock_client.read_namespaced_pod.return_value = V1Pod(status=V1PodStatus(phase="Succeeded"))
-
-        with patch.object(hook, "_run_post_submit_commands") as mock_cmd:
-            hook._poll_k8s_driver_via_api()
-
-        mock_cmd.assert_called_once()
-
-    @patch("time.sleep")
-    @patch("airflow.providers.cncf.kubernetes.kube_client.get_kube_client")
-    def test_poll_k8s_driver_raises_after_consecutive_api_errors(self, mock_get_client, _):
-        hook = SparkSubmitHook(conn_id="spark_k8s_cluster", track_driver_via_k8s_api=True)
-        hook._kubernetes_driver_pod = "spark-app-abc-driver"
-        hook._kubernetes_application_id = "spark-abc"
-
-        mock_client = mock_get_client.return_value
-        api_error = kube_client.ApiException(status=500, reason="Internal Server Error")
-        mock_client.read_namespaced_pod.side_effect = api_error
-
-        with pytest.raises(RuntimeError, match="K8s API unreachable"):
-            hook._poll_k8s_driver_via_api()
-
-        assert mock_client.read_namespaced_pod.call_count == 3
-
-    @patch("airflow.providers.cncf.kubernetes.kube_client.get_kube_client")
-    def test_poll_k8s_driver_exits_cleanly_on_404(self, mock_get_client):
-        """404 from read_namespaced_pod means pod was deleted by on_kill — should return cleanly, not raise."""
-        hook = SparkSubmitHook(conn_id="spark_k8s_cluster", track_driver_via_k8s_api=True)
-        hook._kubernetes_driver_pod = "spark-app-abc-driver"
-        hook._kubernetes_application_id = "spark-abc"
-
-        mock_client = mock_get_client.return_value
-        mock_client.read_namespaced_pod.side_effect = kube_client.ApiException(status=404, reason="Not Found")
-
-        hook._poll_k8s_driver_via_api()
-
-        mock_client.delete_namespaced_pod.assert_not_called()
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.subprocess.run")
-    def test_run_post_submit_commands_runs_only_once(self, mock_run):
-        """Calling _run_post_submit_commands twice must execute commands exactly once."""
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
-        hook = SparkSubmitHook(conn_id="spark_k8s_cluster", post_submit_commands=["echo done"])
-
-        hook._run_post_submit_commands()
-        hook._run_post_submit_commands()
-
-        mock_run.assert_called_once()
-
-    _YARN_LOG_LINES = [
-        "INFO Client: Requesting a new application from cluster with 1 NodeManagers",
-        "INFO Client: Uploading resource file:/tmp/lib.zip -> "
-        "hdfs://namenode:8020/user/root/.sparkStaging/application_1700000000000_0001/lib.zip",
-        "INFO Client: Submitting application application_1700000000000_0001 to ResourceManager",
-        "INFO YarnClientImpl: Submitted application application_1700000000000_0001",
-        "INFO Client: Application report for application_1700000000000_0001 (state: ACCEPTED)",
-        "INFO Client: Application report for application_1700000000000_0001 (state: RUNNING)",
-        "INFO Client: Application report for application_1700000000000_0001 (state: FINISHED)",
-        "INFO Client: final status: SUCCEEDED",
-    ]
-
-    _RM_BASE_URL = "http://rm.test:8088"
-    _RM_APP_ID = "application_1700000000000_0001"
-
-    @classmethod
-    def _rm_status_url(cls, app_id: str | None = None) -> str:
-        return f"{cls._RM_BASE_URL}/ws/v1/cluster/apps/{app_id or cls._RM_APP_ID}"
-
-    @classmethod
-    def _rm_kill_url(cls, app_id: str | None = None) -> str:
-        return f"{cls._RM_BASE_URL}/ws/v1/cluster/apps/{app_id or cls._RM_APP_ID}/state"
-
-    @classmethod
-    def _rm_status_resp(
-        cls, final_status: str, state: str = "FINISHED", diagnostics: str | None = None
-    ) -> MagicMock:
-        resp = MagicMock(spec=requests.Response)
-        resp.status_code = 200
-        app = {"id": cls._RM_APP_ID, "state": state, "finalStatus": final_status}
-        if diagnostics is not None:
-            app["diagnostics"] = diagnostics
-        resp.json.return_value = {"app": app}
-        return resp
-
-    @staticmethod
-    def _rm_failure_resp(status_code: int = 500, text: str = "Internal Server Error") -> MagicMock:
-        resp = MagicMock(spec=requests.Response)
-        resp.status_code = status_code
-        resp.text = text
-        return resp
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.put")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.subprocess.Popen")
-    def test_default_keeps_existing_behavior_in_yarn_cluster(self, mock_popen, mock_get, mock_put):
-        """Flag default False -> no HTTP calls; behavior identical to today."""
-        proc = MagicMock(spec=["stdout", "terminate", "wait"])
-        proc.stdout = iter(self._YARN_LOG_LINES)
-        proc.wait.return_value = 0
-        mock_popen.return_value = proc
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_cluster")
-        hook.submit()
-
-        proc.terminate.assert_not_called()
-        mock_get.assert_not_called()
-        mock_put.assert_not_called()
-        assert hook._yarn_application_id == "application_1700000000000_0001"
-
-    def test_yarn_status_tracking_requires_yarn_master(self):
-        """yarn_track_via_rm_api=True should fail fast outside YARN."""
-        hook = SparkSubmitHook(conn_id="spark_k8s_cluster", yarn_track_via_rm_api=True)
-
-        with pytest.raises(ValueError, match="requires Spark master to be YARN"):
-            hook.submit()
-
-    def test_yarn_status_tracking_requires_cluster_deploy_mode(self):
-        """yarn_track_via_rm_api=True should fail fast outside cluster deploy mode."""
-        hook = SparkSubmitHook(
-            conn_id="spark_yarn_rm",
-            deploy_mode="client",
-            yarn_track_via_rm_api=True,
-        )
-
-        with pytest.raises(ValueError, match="requires `deploy_mode='cluster'`"):
-            hook.submit()
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.subprocess.Popen")
-    def test_yarn_submit_does_not_poll_rm_api(self, mock_popen, mock_get):
-        """hook.submit() with yarn_track_via_rm_api=True must NOT poll RM REST API."""
-        proc = MagicMock(spec=["stdout", "terminate", "wait"])
-        proc.stdout = iter(self._YARN_LOG_LINES)
-        proc.wait.return_value = 0
-        mock_popen.return_value = proc
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        hook.submit()
-
-        spark_submit_cmd = mock_popen.call_args.args[0]
-        assert "spark.yarn.submit.waitAppCompletion=false" in spark_submit_cmd
-        mock_get.assert_not_called()
-        assert hook._yarn_application_id == self._RM_APP_ID
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.time.sleep")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_tracking_succeeds(self, mock_get, mock_sleep):
-        """RM returns UNDEFINED then SUCCEEDED -> _start_yarn_application_status_tracking returns normally."""
-        mock_get.side_effect = [
-            self._rm_status_resp("UNDEFINED", state="RUNNING"),
-            self._rm_status_resp("SUCCEEDED"),
-        ]
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        hook._start_yarn_application_status_tracking(self._RM_APP_ID)
-
-        assert mock_get.call_count == 2
-        mock_sleep.assert_called_once_with(10)
-        for call_obj in mock_get.call_args_list:
-            assert call_obj.args[0] == self._rm_status_url()
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.time.sleep")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_tracking_fails_on_killed(self, mock_get, mock_sleep):
-        """RM returns KILLED -> raise with message containing app id and KILLED."""
-        mock_get.return_value = self._rm_status_resp("KILLED")
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        with pytest.raises(RuntimeError, match=f"{self._RM_APP_ID}.*KILLED"):
-            hook._start_yarn_application_status_tracking(self._RM_APP_ID)
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.time.sleep")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_tracking_fails_on_failed_state_with_undefined_final_status(
-        self, mock_get, mock_sleep
-    ):
-        """RM state FAILED with finalStatus UNDEFINED should not poll forever."""
-        mock_get.return_value = self._rm_status_resp("UNDEFINED", state="FAILED")
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        with pytest.raises(RuntimeError, match=f"{self._RM_APP_ID}.*state: FAILED"):
-            hook._start_yarn_application_status_tracking(self._RM_APP_ID)
-
-        mock_sleep.assert_not_called()
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.time.sleep")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_tracking_includes_diagnostics_on_state_failure(self, mock_get, mock_sleep):
-        """RM state FAILED/KILLED -> raised message includes the RM's diagnostics field."""
-        mock_get.return_value = self._rm_status_resp(
-            "KILLED",
-            state="KILLED",
-            diagnostics="Application application_1700000000000_0001 was killed by user root",
-        )
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        with pytest.raises(RuntimeError, match="Diagnostics: Application .* was killed by user root"):
-            hook._start_yarn_application_status_tracking(self._RM_APP_ID)
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.time.sleep")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_tracking_includes_diagnostics_on_final_status_failure(self, mock_get, mock_sleep):
-        """RM finalStatus FAILED (state FINISHED) -> raised message includes diagnostics."""
-        mock_get.return_value = self._rm_status_resp(
-            "FAILED", diagnostics="AM Container exited with exitCode: 1"
-        )
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        with pytest.raises(RuntimeError, match="Diagnostics: AM Container exited with exitCode: 1"):
-            hook._start_yarn_application_status_tracking(self._RM_APP_ID)
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.time.sleep")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_tracking_omits_diagnostics_suffix_when_absent(self, mock_get, mock_sleep):
-        """RM response with no diagnostics field -> message has no 'Diagnostics:' suffix."""
-        mock_get.return_value = self._rm_status_resp("KILLED")
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        with pytest.raises(RuntimeError) as exc_info:
-            hook._start_yarn_application_status_tracking(self._RM_APP_ID)
-
-        assert "Diagnostics:" not in str(exc_info.value)
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.time.sleep")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_tracking_fails_on_unexpected_final_status(self, mock_get, mock_sleep):
-        """RM returns a non-standard finalStatus ('BOGUS') -> raise without sleeping."""
-        mock_get.return_value = self._rm_status_resp("BOGUS")
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        with pytest.raises(RuntimeError, match="unexpected final status: BOGUS"):
-            hook._start_yarn_application_status_tracking(self._RM_APP_ID)
-
-        mock_sleep.assert_not_called()
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.time.sleep")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_tracking_includes_diagnostics_on_unexpected_final_status(self, mock_get, mock_sleep):
-        """RM returns a non-standard finalStatus -> raised message also includes diagnostics."""
-        mock_get.return_value = self._rm_status_resp("ENDED", diagnostics="Application state is ENDED")
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        with pytest.raises(RuntimeError, match="unexpected final status: ENDED\nDiagnostics: .*ENDED"):
-            hook._start_yarn_application_status_tracking(self._RM_APP_ID)
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.subprocess.Popen")
-    def test_yarn_submit_captures_app_id_without_submitted_application_log(self, mock_popen):
-        """App ID parsed from log lines other than 'Submitted application ...' is captured by hook.submit()."""
-        yarn_log_lines = [
-            "INFO Client: Uploading resource file:/tmp/lib.zip -> "
-            "hdfs://namenode:8020/user/root/.sparkStaging/application_1700000000000_0001/lib.zip",
-            "INFO Client: Submitting application application_1700000000000_0001 to ResourceManager",
-        ]
-        proc = MagicMock(spec=["stdout", "terminate", "wait"])
-        proc.stdout = iter(yarn_log_lines)
-        proc.wait.return_value = 0
-        mock_popen.return_value = proc
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        hook.submit()
-
-        assert hook._yarn_application_id == self._RM_APP_ID
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.subprocess.Popen")
-    def test_yarn_status_tracking_checks_spark_submit_exit_code_before_polling(self, mock_popen, mock_get):
-        """spark-submit exits non-zero -> raise BEFORE issuing any HTTP request."""
-        proc = MagicMock(spec=["stdout", "terminate", "wait"])
-        proc.stdout = iter(self._YARN_LOG_LINES)
-        proc.wait.return_value = 1
-        mock_popen.return_value = proc
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        with pytest.raises(AirflowException, match="Error code is: 1"):
-            hook.submit()
-
-        proc.terminate.assert_not_called()
-        mock_get.assert_not_called()
-
-    def test_yarn_status_tracking_rejects_conflicting_wait_app_completion_conf(self):
-        """User-set spark.yarn.submit.waitAppCompletion=true conflicts with flag -> ValueError."""
-        hook = SparkSubmitHook(
-            conn_id="spark_yarn_rm",
-            conf={"spark.yarn.submit.waitAppCompletion": "true"},
-            yarn_track_via_rm_api=True,
-        )
-
-        with pytest.raises(ValueError, match="spark.yarn.submit.waitAppCompletion=false"):
-            hook._build_spark_submit_command("")
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.time.sleep")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_tracking_tolerates_transient_failures(self, mock_get, mock_sleep):
-        """3 consecutive 5xx responses then SUCCEEDED -> normal completion."""
-        # 3 transient failures (within the 10-failure budget), then SUCCEEDED.
-        mock_get.side_effect = [
-            self._rm_failure_resp(503, "Service Unavailable"),
-            self._rm_failure_resp(502, "Bad Gateway"),
-            self._rm_failure_resp(500, "Internal Server Error"),
-            self._rm_status_resp("SUCCEEDED"),
-        ]
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        hook._start_yarn_application_status_tracking(self._RM_APP_ID)
-
-        assert mock_get.call_count == 4
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.time.sleep")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_tracking_tolerates_status_timeouts(self, mock_get, mock_sleep):
-        """First requests.exceptions.Timeout, second call succeeds -> normal completion."""
-        mock_get.side_effect = [
-            requests.exceptions.Timeout("read timed out"),
-            self._rm_status_resp("SUCCEEDED"),
-        ]
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        hook._start_yarn_application_status_tracking(self._RM_APP_ID)
-
-        assert mock_get.call_count == 2
-        # All calls must include the (connect, read) timeout tuple.
-        for call_obj in mock_get.call_args_list:
-            assert call_obj.kwargs["timeout"] == (5, 30)
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.time.sleep")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_tracking_raises_after_too_many_failures(self, mock_get, mock_sleep):
-        """11 consecutive 5xx responses -> raise 'Giving up tracking YARN application'."""
-        # 11 failures: 10 tolerated; the 11th trips the budget.
-        mock_get.side_effect = [self._rm_failure_resp() for _ in range(11)]
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        with pytest.raises(RuntimeError, match="Giving up tracking YARN application"):
-            hook._start_yarn_application_status_tracking(self._RM_APP_ID)
-
-        assert mock_get.call_count == 11
-
-    @pytest.mark.parametrize("use_auth", [False, True])
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_query_passes_auth_to_requests(self, mock_get, use_auth):
-        """Explicit yarn_rm_auth is passed to requests.get, including the default None."""
-
-        class _SentinelAuth(requests.auth.AuthBase):
-            def __call__(self, r):
-                return r
-
-        auth = _SentinelAuth() if use_auth else None
-        mock_get.return_value = self._rm_status_resp("SUCCEEDED")
-
-        hook = SparkSubmitHook(
-            conn_id="spark_yarn_rm",
-            yarn_track_via_rm_api=True,
-            yarn_rm_auth=auth,
-        )
-        hook._query_yarn_application_status(self._RM_APP_ID)
-
-        assert mock_get.call_args.kwargs["auth"] is auth
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_query_uses_kerberos_auth_from_connection(self, mock_get):
-        """Connection keytab + principal auto-enable HTTPKerberosAuth for RM requests."""
-
-        class _SentinelKerberosAuth(requests.auth.AuthBase):
-            def __call__(self, r):
-                return r
-
-        requests_kerberos = ModuleType("requests_kerberos")
-        requests_kerberos.HTTPKerberosAuth = _SentinelKerberosAuth
-        mock_get.return_value = self._rm_status_resp("SUCCEEDED")
-
-        with (
-            patch.object(
-                SparkSubmitHook,
-                "_create_keytab_path_from_base64_keytab",
-                return_value="privileged_user.keytab",
-            ),
-            patch.dict("sys.modules", {"requests_kerberos": requests_kerberos}),
-        ):
-            hook = SparkSubmitHook(conn_id="spark_yarn_rm_kerberos", yarn_track_via_rm_api=True)
-            hook._query_yarn_application_status(self._RM_APP_ID)
-
-        assert isinstance(mock_get.call_args.kwargs["auth"], _SentinelKerberosAuth)
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_status_query_prefers_provided_auth_over_kerberos_connection(self, mock_get):
-        """Explicit yarn_rm_auth stays an escape hatch even when Kerberos is configured."""
-
-        class _SentinelAuth(requests.auth.AuthBase):
-            def __call__(self, r):
-                return r
-
-        auth = _SentinelAuth()
-        mock_get.return_value = self._rm_status_resp("SUCCEEDED")
-
-        with (
-            patch.object(
-                SparkSubmitHook,
-                "_create_keytab_path_from_base64_keytab",
-                return_value="privileged_user.keytab",
-            ),
-            patch.dict("sys.modules", {"requests_kerberos": None}),
-        ):
-            hook = SparkSubmitHook(
-                conn_id="spark_yarn_rm_kerberos",
-                yarn_track_via_rm_api=True,
-                yarn_rm_auth=auth,
-            )
-            hook._query_yarn_application_status(self._RM_APP_ID)
-
-        assert mock_get.call_args.kwargs["auth"] is auth
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.subprocess.Popen")
-    def test_yarn_status_tracking_fails_before_submit_when_kerberos_auth_dependency_missing(self, mock_popen):
-        """Kerberos RM tracking requires requests-kerberos before spark-submit starts."""
-        with patch.object(
-            SparkSubmitHook,
-            "_create_keytab_path_from_base64_keytab",
-            return_value="privileged_user.keytab",
-        ):
-            hook = SparkSubmitHook(conn_id="spark_yarn_rm_kerberos", yarn_track_via_rm_api=True)
-
-        with (
-            patch.dict("sys.modules", {"requests_kerberos": None}),
-            pytest.raises(RuntimeError, match="requests-kerberos"),
-        ):
-            hook.submit()
-
-        mock_popen.assert_not_called()
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.subprocess.Popen")
-    def test_yarn_status_tracking_fails_before_submit_when_rm_url_missing(self, mock_popen):
-        """Missing yarn_resourcemanager_webapp_address extra -> fail before spark-submit starts."""
-        hook = SparkSubmitHook(conn_id="spark_yarn_cluster", yarn_track_via_rm_api=True)
-
-        with pytest.raises(ValueError, match="yarn_resourcemanager_webapp_address"):
-            hook.submit()
-
-        mock_popen.assert_not_called()
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.time.sleep")
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.get")
-    def test_yarn_rm_base_url_is_resolved_once_across_polling_loop(self, mock_get, mock_sleep):
-        """Connection lookup must run once even if the polling loop runs many iterations.
-
-        Regression guard: a job polling every few seconds for hours must not re-fetch
-        the Spark connection (and potentially re-hit a Secrets Backend) on every iteration.
-        """
-        # 4 UNDEFINED iterations then SUCCEEDED -> 5 polling iterations total.
-        mock_get.side_effect = [
-            self._rm_status_resp("UNDEFINED", state="RUNNING"),
-            self._rm_status_resp("UNDEFINED", state="RUNNING"),
-            self._rm_status_resp("UNDEFINED", state="RUNNING"),
-            self._rm_status_resp("UNDEFINED", state="RUNNING"),
-            self._rm_status_resp("SUCCEEDED"),
-        ]
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        with patch.object(hook, "get_connection", wraps=hook.get_connection) as spy_get_conn:
-            hook._start_yarn_application_status_tracking(self._RM_APP_ID)
-
-        assert mock_get.call_count == 5
-        assert spy_get_conn.call_count == 1
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.put")
-    def test_on_kill_sends_put_to_rm_when_app_id_known(self, mock_put):
-        """_yarn_application_id known -> PUT {state: KILLED} to RM with configured auth."""
-
-        class _SentinelAuth(requests.auth.AuthBase):
-            def __call__(self, r):
-                return r
-
-        sentinel = _SentinelAuth()
-        mock_put.return_value = MagicMock(spec=requests.Response, status_code=202)
-
-        hook = SparkSubmitHook(
-            conn_id="spark_yarn_rm",
-            yarn_track_via_rm_api=True,
-            yarn_rm_auth=sentinel,
-        )
-        hook._yarn_application_id = self._RM_APP_ID
-        hook.on_kill()
-
-        mock_put.assert_called_once()
-        call_obj = mock_put.call_args
-        assert call_obj.args[0] == self._rm_kill_url()
-        assert call_obj.kwargs["json"] == {"state": "KILLED"}
-        assert call_obj.kwargs["auth"] is sentinel
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.put")
-    def test_on_kill_uses_kerberos_auth_from_connection(self, mock_put):
-        """Connection keytab + principal auto-enable HTTPKerberosAuth for RM kill requests."""
-
-        class _SentinelKerberosAuth(requests.auth.AuthBase):
-            def __call__(self, r):
-                return r
-
-        requests_kerberos = ModuleType("requests_kerberos")
-        requests_kerberos.HTTPKerberosAuth = _SentinelKerberosAuth
-        mock_put.return_value = MagicMock(spec=requests.Response, status_code=202)
-
-        with (
-            patch.object(
-                SparkSubmitHook,
-                "_create_keytab_path_from_base64_keytab",
-                return_value="privileged_user.keytab",
-            ),
-            patch.dict("sys.modules", {"requests_kerberos": requests_kerberos}),
-        ):
-            hook = SparkSubmitHook(conn_id="spark_yarn_rm_kerberos", yarn_track_via_rm_api=True)
-            hook._yarn_application_id = self._RM_APP_ID
-            hook.on_kill()
-
-        assert isinstance(mock_put.call_args.kwargs["auth"], _SentinelKerberosAuth)
-
-    @patch("airflow.providers.apache.spark.hooks.spark_submit.requests.put")
-    def test_on_kill_tolerates_rm_failure(self, mock_put):
-        """RM PUT raises -> on_kill does not raise (best-effort, mirrors today)."""
-        mock_put.side_effect = requests.exceptions.ConnectionError("RM unreachable")
-
-        hook = SparkSubmitHook(conn_id="spark_yarn_rm", yarn_track_via_rm_api=True)
-        hook._yarn_application_id = self._RM_APP_ID
-
-        # Must not raise.
-        hook.on_kill()
-
-        mock_put.assert_called_once()

@@ -200,16 +200,7 @@ def compare_dag_defaults() -> list[str]:
             if (
                 server_value is not None
                 and server_value not in [[], {}, (), set()]
-                and field_name
-                not in [
-                    "dag_id",
-                    "dag_display_name",
-                    "max_active_runs",
-                    "max_active_tasks",
-                    "max_consecutive_failed_dag_runs",
-                    "catchup",
-                    "disable_bundle_versioning",
-                ]
+                and field_name not in ["dag_id", "dag_display_name"]
             ):
                 errors.append(
                     f"DAG server field '{field_name}' has default {server_value!r} but no schema default"

@@ -24,13 +24,10 @@ import { MdOutlineEventNote, MdOutlineTask } from "react-icons/md";
 import { useParams } from "react-router-dom";
 
 import { useTaskServiceGetTask } from "openapi/queries";
-
-import { DetailsLayout } from "src/layouts/Details/DetailsLayout";
-
 import { usePluginTabs } from "src/hooks/usePluginTabs";
 import { useRequiredActionTabs } from "src/hooks/useRequiredActionTabs";
+import { DetailsLayout } from "src/layouts/Details/DetailsLayout";
 import { useGridStructure } from "src/queries/useGridStructure.ts";
-import { useDocumentTitle } from "src/utils";
 import { getGroupTask } from "src/utils/groupTask";
 
 import { GroupTaskHeader } from "./GroupTaskHeader";
@@ -39,8 +36,6 @@ import { Header } from "./Header";
 export const Task = () => {
   const { t: translate } = useTranslation(["dag", "hitl"]);
   const { dagId = "", groupId, runId, taskId } = useParams();
-
-  useDocumentTitle(groupId ?? taskId);
 
   // Get external views with task destination
   const externalTabs = usePluginTabs("task");
@@ -84,7 +79,7 @@ export const Task = () => {
     <ReactFlowProvider>
       <DetailsLayout error={error} isLoading={isLoading} tabs={displayTabs}>
         {task === undefined ? undefined : <Header task={task} />}
-        {groupTask ? <GroupTaskHeader docMd={groupTask.doc_md} title={groupTask.label} /> : undefined}
+        {groupTask ? <GroupTaskHeader title={groupTask.label} /> : undefined}
       </DetailsLayout>
     </ReactFlowProvider>
   );

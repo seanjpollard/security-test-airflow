@@ -25,7 +25,7 @@ import { NodeWrapper } from "./NodeWrapper";
 import type { CustomNodeProps } from "./reactflowUtils";
 
 export const AssetConditionNode = ({ data }: NodeProps<NodeType<CustomNodeProps, "asset-condition">>) => {
-  const { t: translate } = useTranslation();
+  const { t: translate } = useTranslation("common");
 
   return (
     <NodeWrapper>

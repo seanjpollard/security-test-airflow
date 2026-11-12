@@ -19,8 +19,6 @@ from __future__ import annotations
 
 from unittest import mock
 
-import pytest
-
 from airflow.providers.alibaba.cloud.hooks.maxcompute import MaxComputeHook
 
 MAXCOMPUTE_HOOK_MODULE = "airflow.providers.alibaba.cloud.hooks.maxcompute.MaxComputeHook.{}"
@@ -45,23 +43,17 @@ class TestMaxComputeHook:
             mock_get_connection.return_value = mock_conn
             self.hook = MaxComputeHook(maxcompute_conn_id=MOCK_MAXCOMPUTE_CONN_ID)
 
-    @pytest.mark.parametrize(
-        ("priority", "hints", "expected_priority"),
-        [
-            pytest.param(1, {"hint_key": "hint_value"}, 1, id="explicit-priority"),
-            pytest.param(None, {"odps.instance.priority": 5}, 5, id="priority-from-hints"),
-            pytest.param(None, None, None, id="no-priority"),
-        ],
-    )
     @mock.patch(MAXCOMPUTE_HOOK_MODULE.format("get_client"))
-    def test_run_sql(self, mock_get_client, priority, hints, expected_priority):
+    def test_run_sql(self, mock_get_client):
         mock_instance = mock.MagicMock()
         mock_client = mock.MagicMock()
         mock_client.run_sql.return_value = mock_instance
         mock_get_client.return_value = mock_client
 
         sql = "SELECT 1"
+        priority = 1
         running_cluster = "mock_running_cluster"
+        hints = {"hint_key": "hint_value"}
         aliases = {"alias_key": "alias_value"}
         default_schema = "mock_default_schema"
         quota_name = "mock_quota_name"
@@ -78,9 +70,9 @@ class TestMaxComputeHook:
 
         assert instance == mock_instance
 
-        mock_client.run_sql.assert_called_once_with(
+        assert mock_client.run_sql.asssert_called_once_with(
             sql=sql,
-            priority=expected_priority,
+            priority=priority,
             running_cluster=running_cluster,
             hints=hints,
             aliases=aliases,

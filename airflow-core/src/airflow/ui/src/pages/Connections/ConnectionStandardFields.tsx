@@ -16,12 +16,10 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { Field, Stack, Textarea, Input } from "@chakra-ui/react";
 import { useState } from "react";
-
-import { Field, Stack, Textarea, Input, InputGroup } from "@chakra-ui/react";
 import { type Control, Controller } from "react-hook-form";
-
-import { PasswordToggle } from "src/components/PasswordToggle";
+import { FiEye, FiEyeOff } from "react-icons/fi";
 
 import type { StandardFieldSpec } from "src/queries/useConnectionTypeMeta";
 
@@ -36,7 +34,7 @@ const StandardFields = ({ control, standardFields }: StandardFieldsProps) => {
   const [showPassword, setShowPassword] = useState(false);
 
   return (
-    <Stack>
+    <Stack pb={3} pl={3} pr={3}>
       {Object.entries(standardFields).map(([key, fields]) => {
         if (Boolean(fields.hidden)) {
           return undefined;
@@ -58,19 +56,9 @@ const StandardFields = ({ control, standardFields }: StandardFieldsProps) => {
                   {key === "description" ? (
                     <Textarea {...field} placeholder={fields.placeholder ?? ""} />
                   ) : (
-                    <InputGroup
-                      endElement={
-                        key === "password" ? (
-                          <PasswordToggle
-                            isVisible={showPassword}
-                            onToggle={() => setShowPassword(!showPassword)}
-                          />
-                        ) : undefined
-                      }
-                    >
+                    <div style={{ position: "relative", width: "100%" }}>
                       <Input
                         {...field}
-                        autoComplete={key === "password" ? "new-password" : undefined}
                         placeholder={fields.placeholder ?? ""}
                         type={
                           key === "password" && !showPassword
@@ -80,7 +68,22 @@ const StandardFields = ({ control, standardFields }: StandardFieldsProps) => {
                               : "text"
                         }
                       />
-                    </InputGroup>
+                      {key === "password" && (
+                        <button
+                          onClick={() => setShowPassword(!showPassword)}
+                          style={{
+                            cursor: "pointer",
+                            position: "absolute",
+                            right: "10px",
+                            top: "50%",
+                            transform: "translateY(-50%)",
+                          }}
+                          type="button"
+                        >
+                          {showPassword ? <FiEye size={15} /> : <FiEyeOff size={15} />}
+                        </button>
+                      )}
+                    </div>
                   )}
                 </Stack>
               </Field.Root>

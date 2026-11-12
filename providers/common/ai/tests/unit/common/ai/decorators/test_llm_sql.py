@@ -16,35 +16,34 @@
 # under the License.
 from __future__ import annotations
 
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-from pydantic_ai.messages import ImageUrl
 
 from airflow.providers.common.ai.decorators.llm_sql import _LLMSQLDecoratedOperator
-from airflow.providers.common.compat.sdk import DAG, task
+
+
+def _make_mock_run_result(output):
+    """Create a mock AgentRunResult compatible with log_run_summary."""
+    mock_result = MagicMock()
+    mock_result.output = output
+    mock_result.usage.return_value = MagicMock(
+        requests=1, tool_calls=0, input_tokens=0, output_tokens=0, total_tokens=0
+    )
+    mock_result.response = MagicMock(model_name="test-model")
+    mock_result.all_messages.return_value = []
+    return mock_result
 
 
 class TestLLMSQLDecoratedOperator:
     def test_custom_operator_name(self):
         assert _LLMSQLDecoratedOperator.custom_operator_name == "@task.llm_sql"
 
-    def test_output_type_rejected(self):
-        @task.llm_sql(llm_conn_id="my_llm", output_type=int)
-        def my_prompt_fn():
-            return "Get all users"
-
-        with (
-            DAG(dag_id="dag"),
-            pytest.raises(TypeError, match="LLMSQLQueryOperator does not accept 'output_type'"),
-        ):
-            my_prompt_fn()
-
     @patch("airflow.providers.common.ai.operators.llm.PydanticAIHook", autospec=True)
-    def test_execute_calls_callable_and_uses_result_as_prompt(self, mock_hook_cls, make_mock_run_result):
+    def test_execute_calls_callable_and_uses_result_as_prompt(self, mock_hook_cls):
         """The user's callable return value becomes the LLM prompt."""
-        mock_agent = MagicMock(spec=["run_sync", "instrument"])
-        mock_agent.run_sync.return_value = make_mock_run_result("SELECT 1")
+        mock_agent = MagicMock(spec=["run_sync"])
+        mock_agent.run_sync.return_value = _make_mock_run_result("SELECT 1")
         mock_hook_cls.get_hook.return_value.create_agent.return_value = mock_agent
 
         def my_prompt_fn():
@@ -55,51 +54,28 @@ class TestLLMSQLDecoratedOperator:
 
         assert result == "SELECT 1"
         assert op.prompt == "Get all users"
-        mock_agent.run_sync.assert_called_once_with(
-            "Get all users", usage=ANY, usage_limits=None, cancellation_token=ANY
-        )
+        mock_agent.run_sync.assert_called_once_with("Get all users", usage_limits=None)
 
     @pytest.mark.parametrize(
         "return_value",
-        [42, "", "   ", None, b"bytes", bytearray(b"x"), [], ()],
-        ids=["non-string", "empty", "whitespace", "none", "bytes", "bytearray", "empty-list", "empty-tuple"],
+        [42, "", "   ", None],
+        ids=["non-string", "empty", "whitespace", "none"],
     )
     def test_execute_raises_on_invalid_prompt(self, return_value):
-        """TypeError when the callable returns an unsupported prompt shape."""
+        """TypeError when the callable returns a non-string or blank string."""
         op = _LLMSQLDecoratedOperator(
             task_id="test",
             python_callable=lambda: return_value,
             llm_conn_id="my_llm",
         )
-        with pytest.raises(TypeError, match="must be"):
+        with pytest.raises(TypeError, match="non-empty string"):
             op.execute(context={})
 
     @patch("airflow.providers.common.ai.operators.llm.PydanticAIHook", autospec=True)
-    def test_execute_accepts_sequence_prompt(self, mock_hook_cls, make_mock_run_result):
-        """A non-empty Sequence[UserContent] return value is forwarded to run_sync as-is."""
-        mock_agent = MagicMock(spec=["run_sync", "instrument"])
-        mock_agent.run_sync.return_value = make_mock_run_result("SELECT 1")
-        mock_hook_cls.get_hook.return_value.create_agent.return_value = mock_agent
-
-        image = ImageUrl(url="https://example.com/x.png")
-        prompt = ["Write SQL for this diagram:", image]
-
-        def my_prompt_fn():
-            return prompt
-
-        op = _LLMSQLDecoratedOperator(task_id="test", python_callable=my_prompt_fn, llm_conn_id="my_llm")
-        op.execute(context={})
-
-        assert op.prompt == prompt
-        mock_agent.run_sync.assert_called_once_with(
-            prompt, usage=ANY, usage_limits=None, cancellation_token=ANY
-        )
-
-    @patch("airflow.providers.common.ai.operators.llm.PydanticAIHook", autospec=True)
-    def test_execute_merges_op_kwargs_into_callable(self, mock_hook_cls, make_mock_run_result):
+    def test_execute_merges_op_kwargs_into_callable(self, mock_hook_cls):
         """op_kwargs are resolved by the callable to build the prompt."""
-        mock_agent = MagicMock(spec=["run_sync", "instrument"])
-        mock_agent.run_sync.return_value = make_mock_run_result("SELECT 1")
+        mock_agent = MagicMock(spec=["run_sync"])
+        mock_agent.run_sync.return_value = _make_mock_run_result("SELECT 1")
         mock_hook_cls.get_hook.return_value.create_agent.return_value = mock_agent
 
         def my_prompt_fn(table_name):
@@ -114,20 +90,3 @@ class TestLLMSQLDecoratedOperator:
         op.execute(context={"task_instance": MagicMock()})
 
         assert op.prompt == "Get all rows from users"
-
-    @patch("airflow.providers.common.ai.operators.llm_sql.LLMSQLQueryOperator.execute", autospec=True)
-    def test_execute_renders_only_the_returned_prompt(self, mock_execute):
-        """Fields rendered before execute() are not rendered again; only the returned value is."""
-        op = _LLMSQLDecoratedOperator(
-            task_id="test",
-            python_callable=lambda: "Summarize {{ topic }}",
-            llm_conn_id="my_llm",
-            system_prompt="{{ note }}",
-        )
-        context = {"topic": "logs", "note": "{{ other }}", "other": "rendered twice"}
-
-        op.render_template_fields(context)
-        op.execute(context=context)
-
-        assert op.prompt == "Summarize logs"
-        assert op.system_prompt == "{{ other }}"

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import http.client
 import json
-import sys
 import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -33,14 +32,11 @@ from extract_metadata import (
     fetch_pypi_data_parallel,
     fetch_pypi_dates,
     fetch_pypi_downloads,
-    fetch_pypi_downloads_clickhouse,
     find_latest_released_version,
     find_related_providers,
     load_release_tags,
-    main,
     module_path_to_file_path,
     parse_pyproject_toml,
-    preserve_nonzero_downloads,
     read_connection_urls,
     read_inventory,
     resolve_connection_docs_url,
@@ -171,7 +167,7 @@ class TestParsePyprojectToml:
         toml_file.write_text(
             textwrap.dedent("""\
                 [project]
-                requires-python = ">=3.11"
+                requires-python = ">=3.10"
                 dependencies = [
                     "apache-airflow>=3.0.0",
                     "boto3>=1.28.0",
@@ -179,7 +175,7 @@ class TestParsePyprojectToml:
             """)
         )
         result = parse_pyproject_toml(toml_file)
-        assert result["requires_python"] == ">=3.11"
+        assert result["requires_python"] == ">=3.10"
         assert result["dependencies"] == ["apache-airflow>=3.0.0", "boto3>=1.28.0"]
 
     def test_optional_dependencies(self, tmp_path):
@@ -187,7 +183,7 @@ class TestParsePyprojectToml:
         toml_file.write_text(
             textwrap.dedent("""\
                 [project]
-                requires-python = ">=3.11"
+                requires-python = ">=3.10"
                 dependencies = []
 
                 [project.optional-dependencies]
@@ -266,58 +262,18 @@ class TestFetchPypiDates:
 
 
 # ---------------------------------------------------------------------------
-# fetch_pypi_downloads_clickhouse (mocked network)
-# ---------------------------------------------------------------------------
-class TestFetchPypiDownloadsClickhouse:
-    @patch("extract_metadata.urllib.request.urlopen")
-    def test_parses_tsv(self, mock_urlopen):
-        body = (
-            b"apache-airflow-providers-amazon\t766462\t8218125\n"
-            b"apache-airflow-providers-common-ai\t30881\t171721\n"
-        )
-        mock_response = MagicMock(spec=http.client.HTTPResponse)
-        mock_response.read.return_value = body
-        mock_response.__enter__ = MagicMock(return_value=mock_response)
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_response
-
-        result = fetch_pypi_downloads_clickhouse(
-            ["apache-airflow-providers-amazon", "apache-airflow-providers-common-ai"]
-        )
-        assert result["apache-airflow-providers-amazon"] == {"weekly": 766462, "monthly": 8218125, "total": 0}
-        assert result["apache-airflow-providers-common-ai"] == {
-            "weekly": 30881,
-            "monthly": 171721,
-            "total": 0,
-        }
-
-    def test_empty_input_skips_query(self):
-        with patch("extract_metadata.urllib.request.urlopen") as mock_urlopen:
-            assert fetch_pypi_downloads_clickhouse([]) == {}
-            mock_urlopen.assert_not_called()
-
-    @patch("extract_metadata.urllib.request.urlopen", side_effect=OSError("clickhouse down"))
-    def test_failure_returns_empty(self, _mock):
-        # On any failure, return {} so callers fall back to pypistats.
-        assert fetch_pypi_downloads_clickhouse(["apache-airflow-providers-amazon"]) == {}
-
-
-# ---------------------------------------------------------------------------
 # fetch_pypi_data_parallel
 # ---------------------------------------------------------------------------
 class TestFetchPypiDataParallel:
-    def test_uses_clickhouse_without_pypistats(self):
-        # When ClickHouse returns real numbers, pypistats is never called (no burst).
-        pkgs = ["pkg-a", "pkg-b"]
-        clickhouse = {p: {"weekly": 1, "monthly": 10, "total": 0} for p in pkgs}
+    def test_returns_one_entry_per_package(self):
+        pkgs = ["pkg-a", "pkg-b", "pkg-c"]
         with (
-            patch("extract_metadata.fetch_pypi_downloads_clickhouse", return_value=clickhouse),
             patch("extract_metadata.fetch_pypi_downloads") as dl,
-            patch(
-                "extract_metadata.fetch_pypi_dates",
-                return_value={"first_released": "2024-01-01", "last_updated": "2024-06-01"},
-            ),
+            patch("extract_metadata.fetch_pypi_dates") as dt,
         ):
+            dl.side_effect = lambda p: {"weekly": 1, "monthly": 10, "total": 0}
+            dt.side_effect = lambda p: {"first_released": "2024-01-01", "last_updated": "2024-06-01"}
+
             result = fetch_pypi_data_parallel(pkgs, max_workers=4)
 
         assert set(result) == set(pkgs)
@@ -325,21 +281,27 @@ class TestFetchPypiDataParallel:
             downloads, dates = result[pkg]
             assert downloads == {"weekly": 1, "monthly": 10, "total": 0}
             assert dates == {"first_released": "2024-01-01", "last_updated": "2024-06-01"}
-        dl.assert_not_called()
+        assert dl.call_count == 3
+        assert dt.call_count == 3
 
-    def test_falls_back_to_pypistats_when_clickhouse_missing_or_zero(self):
-        # ClickHouse is missing 'b' and returns zero for 'c' -- both fall back to pypistats.
-        pkgs = ["a", "b", "c"]
-        clickhouse = {
-            "a": {"weekly": 1, "monthly": 10, "total": 0},
-            "c": {"weekly": 0, "monthly": 0, "total": 0},
-        }
+    def test_empty_input(self):
+        assert fetch_pypi_data_parallel([]) == {}
+
+    def test_per_package_failure_does_not_abort_others(self):
+        # Simulate `fetch_pypi_downloads` raising for one package; the worker
+        # already returns zero-value defaults on error, but verify the orchestrator
+        # propagates per-package isolation by accepting the worker's existing
+        # error handling -- a single bad package must not poison the dict.
+        pkgs = ["good", "bad"]
+
+        def downloads_side_effect(pkg):
+            if pkg == "bad":
+                # mimic the existing fetch_pypi_downloads error path
+                return {"weekly": 0, "monthly": 0, "total": 0}
+            return {"weekly": 5, "monthly": 50, "total": 0}
+
         with (
-            patch("extract_metadata.fetch_pypi_downloads_clickhouse", return_value=clickhouse),
-            patch(
-                "extract_metadata.fetch_pypi_downloads",
-                return_value={"weekly": 9, "monthly": 99, "total": 0},
-            ) as dl,
+            patch("extract_metadata.fetch_pypi_downloads", side_effect=downloads_side_effect),
             patch(
                 "extract_metadata.fetch_pypi_dates",
                 return_value={"first_released": "", "last_updated": ""},
@@ -347,35 +309,8 @@ class TestFetchPypiDataParallel:
         ):
             result = fetch_pypi_data_parallel(pkgs)
 
-        assert result["a"][0] == {"weekly": 1, "monthly": 10, "total": 0}  # from ClickHouse
-        assert result["b"][0] == {"weekly": 9, "monthly": 99, "total": 0}  # fallback (missing)
-        assert result["c"][0] == {"weekly": 9, "monthly": 99, "total": 0}  # fallback (zero)
-        assert {call.args[0] for call in dl.call_args_list} == {"b", "c"}
-
-    def test_empty_input(self):
-        assert fetch_pypi_data_parallel([]) == {}
-
-
-# ---------------------------------------------------------------------------
-# preserve_nonzero_downloads
-# ---------------------------------------------------------------------------
-class TestPreserveNonzeroDownloads:
-    def test_preserves_when_new_is_zero_and_previous_nonzero(self):
-        new = [{"id": "amazon", "pypi_downloads": {"weekly": 0, "monthly": 0, "total": 0}}]
-        existing = [{"id": "amazon", "pypi_downloads": {"weekly": 766462, "monthly": 8218125, "total": 0}}]
-        assert preserve_nonzero_downloads(new, existing) == 1
-        assert new[0]["pypi_downloads"]["monthly"] == 8218125
-
-    def test_keeps_new_when_it_has_a_number(self):
-        new = [{"id": "amazon", "pypi_downloads": {"weekly": 5, "monthly": 50, "total": 0}}]
-        existing = [{"id": "amazon", "pypi_downloads": {"weekly": 9, "monthly": 99, "total": 0}}]
-        assert preserve_nonzero_downloads(new, existing) == 0
-        assert new[0]["pypi_downloads"]["monthly"] == 50
-
-    def test_no_previous_entry_leaves_zero(self):
-        new = [{"id": "brand-new", "pypi_downloads": {"weekly": 0, "monthly": 0, "total": 0}}]
-        assert preserve_nonzero_downloads(new, []) == 0
-        assert new[0]["pypi_downloads"]["monthly"] == 0
+        assert result["good"][0] == {"weekly": 5, "monthly": 50, "total": 0}
+        assert result["bad"][0] == {"weekly": 0, "monthly": 0, "total": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -830,163 +765,3 @@ class TestVersionsListFiltering:
         filtered = [v for v in raw_versions if f"providers-{provider_id}/{v}" in release_tags]
         # Order from raw_versions is preserved; only the phantom is dropped
         assert filtered == ["9.26.0", "9.25.0", "9.24.0"]
-
-
-# ---------------------------------------------------------------------------
-# main() -- provider.yaml fields reaching providers.json
-# ---------------------------------------------------------------------------
-@patch("extract_metadata.fetch_provider_inventory", autospec=True, return_value=None)
-@patch("extract_metadata.fetch_pypi_data_parallel", autospec=True, return_value={})
-def _run_main(
-    _fetch_pypi_data_parallel,
-    _fetch_provider_inventory,
-    tmp_path,
-    provider_yaml,
-    src_files,
-    release_tags=frozenset({"providers-testprov/1.0.0"}),
-    extra_argv=(),
-):
-    """Run main() on one provider under tmp_path and return the written providers.json entries.
-
-    Network and filesystem dependencies are mocked or redirected, so the
-    written entries have also passed main()'s ProviderContract (extra="forbid")
-    validation, catching key-name drift between provider.yaml, main() and
-    registry_contract_models.py.
-    """
-    providers_dir = tmp_path / "providers"
-    provider_dir = providers_dir / "testprov"
-    provider_dir.mkdir(parents=True)
-    (provider_dir / "provider.yaml").write_text(provider_yaml)
-    for rel_path, content in src_files.items():
-        src_file = provider_dir / "src" / rel_path
-        src_file.parent.mkdir(parents=True, exist_ok=True)
-        src_file.write_text(content)
-    output_dir = tmp_path / "output"
-    script_dir = tmp_path / "script"
-    output_dir.mkdir()
-    script_dir.mkdir()
-
-    with (
-        patch("extract_metadata.PROVIDERS_DIR", providers_dir),
-        patch("extract_metadata.OUTPUT_DIR", output_dir),
-        patch("extract_metadata.SCRIPT_DIR", script_dir),
-        patch("extract_metadata.load_release_tags", autospec=True, return_value=set(release_tags)),
-        patch.object(sys, "argv", ["extract_metadata.py", *extra_argv]),
-    ):
-        main()
-
-    return json.loads((output_dir / "providers.json").read_text())["providers"]
-
-
-def _run_main_for_provider(tmp_path, provider_yaml, src_files):
-    """Run main() on one provider under tmp_path and return its providers.json entry."""
-    providers = _run_main(tmp_path=tmp_path, provider_yaml=provider_yaml, src_files=src_files)
-    return next(p for p in providers if p["id"] == "testprov")
-
-
-class TestMainConnectionTypesExternalServices:
-    """The connection-types extraction loop lives inline in main() rather than
-    a standalone function, so this drives main() end-to-end to prove
-    `external-services` from provider.yaml reaches the written providers.json.
-    """
-
-    def test_external_services_propagates_to_providers_json(self, tmp_path):
-        provider = _run_main_for_provider(
-            tmp_path=tmp_path,
-            provider_yaml=textwrap.dedent("""\
-                name: Test Provider
-                description: A test provider.
-                versions:
-                  - 1.0.0
-                connection-types:
-                  - connection-type: testconn
-                    hook-class-name: airflow.providers.test.hooks.TestHook
-                    external-services:
-                      - openai
-                      - anthropic
-                """),
-            src_files={},
-        )
-
-        assert provider["connection_types"][0]["external_services"] == ["openai", "anthropic"]
-
-
-class TestMainUriSchemes:
-    """main() must read filesystem schemes from the provider's src/ tree, skip a
-    listed module whose file is missing, and write the entries to providers.json."""
-
-    def test_uri_schemes_propagate_to_providers_json(self, tmp_path):
-        provider = _run_main_for_provider(
-            tmp_path=tmp_path,
-            provider_yaml=textwrap.dedent("""\
-                name: Test Provider
-                description: A test provider.
-                versions:
-                  - 1.0.0
-                filesystems:
-                  - airflow.providers.testprov.fs.testfs
-                  - airflow.providers.testprov.fs.missing
-                asset-uris:
-                  - schemes: [testfs]
-                    handler: null
-                """),
-            src_files={"airflow/providers/testprov/fs/testfs.py": 'schemes = ["testfs"]\n'},
-        )
-
-        assert provider["uri_schemes"] == [
-            {
-                "scheme": "testfs",
-                "filesystem": "airflow.providers.testprov.fs.testfs",
-                "asset": {"handler": None, "factory": None, "to_openlineage_converter": None},
-            }
-        ]
-
-
-class TestMainUnreleasedFiltering:
-    """main() drops providers and versions that were never released, unless told not to."""
-
-    @staticmethod
-    def _provider_yaml(state="ready", versions=("1.0.0",)):
-        return f"name: Test Provider\ndescription: A test provider.\nstate: {state}\nversions: {list(versions)}\n"
-
-    def test_keeps_untagged_versions_when_no_release_tags_found(self, tmp_path, capsys):
-        providers = _run_main(
-            tmp_path=tmp_path,
-            provider_yaml=self._provider_yaml(),
-            src_files={},
-            release_tags=set(),
-        )
-
-        assert [(p["id"], p["version"]) for p in providers] == [("testprov", "1.0.0")]
-        assert "phantom version filter is disabled" in capsys.readouterr().out
-
-    def test_drops_untagged_versions(self, tmp_path):
-        providers = _run_main(
-            tmp_path=tmp_path,
-            provider_yaml=self._provider_yaml(versions=("1.1.0", "1.0.0")),
-            src_files={},
-            release_tags={"providers-testprov/1.0.0", "providers-testprov/1.1.0rc1"},
-        )
-
-        assert [(p["version"], p["versions"]) for p in providers] == [("1.0.0", ["1.0.0"])]
-
-    def test_skips_not_ready_provider_even_with_release_tag(self, tmp_path):
-        providers = _run_main(
-            tmp_path=tmp_path,
-            provider_yaml=self._provider_yaml(state="not-ready"),
-            src_files={},
-        )
-
-        assert [p["id"] for p in providers] == []
-
-    @pytest.mark.parametrize("state", ["ready", "not-ready"])
-    def test_allow_unreleased_includes_untagged_provider(self, tmp_path, state):
-        providers = _run_main(
-            tmp_path=tmp_path,
-            provider_yaml=self._provider_yaml(state=state),
-            src_files={},
-            release_tags=set(),
-            extra_argv=("--allow-unreleased",),
-        )
-
-        assert [(p["id"], p["version"]) for p in providers] == [("testprov", "1.0.0")]

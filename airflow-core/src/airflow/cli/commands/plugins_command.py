@@ -28,10 +28,7 @@ def dump_plugins(args):
     """Dump plugins information."""
     plugins_info: list[dict[str, str]] = get_plugin_info()
     if not plugins_info:
-        if args.output in ("table", "plain"):
-            print("No plugins loaded")
-        else:
-            AirflowConsole().print_as(plugins_info, output=args.output)
+        print("No plugins loaded")
         return
 
     # Remove empty info

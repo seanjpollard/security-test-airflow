@@ -37,28 +37,9 @@ KUBERNETES_INSPECTION_COMMANDS: dict[str, str | list[str]] = {
 
 KUBERNETES_TESTING_COMMANDS: dict[str, str | list[str]] = {
     "name": "K8S testing commands",
-    "commands": [
-        "tests",
-        "smoke-test-overlay",
-        "run-complete-tests",
-        "setup-lang-sdk-test",
-        "shell",
-        "k9s",
-        "logs",
-    ],
+    "commands": ["tests", "run-complete-tests", "shell", "k9s", "logs"],
 }
 KUBERNETES_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
-    "breeze k8s setup-lang-sdk-test": [
-        {
-            "name": "K8S lang-SDK test flags",
-            "options": [
-                "--python",
-                "--kubernetes-version",
-                "--runtime-image",
-                "--github-repository",
-            ],
-        }
-    ],
     "breeze k8s setup-env": [
         {
             "name": "K8S setup flags",
@@ -95,7 +76,6 @@ KUBERNETES_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
                 "--rebuild-base-image",
                 "--copy-local-sources",
                 "--use-uv",
-                "--github-repository",
             ],
         },
         {
@@ -137,7 +117,6 @@ KUBERNETES_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
             "options": [
                 "--python",
                 "--kubernetes-version",
-                "--github-repository",
             ],
         },
         {
@@ -164,7 +143,6 @@ KUBERNETES_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
                 "--wait-time-in-seconds",
                 "--use-standard-naming",
                 "--multi-namespace-mode",
-                "--github-repository",
             ],
         },
         {
@@ -193,7 +171,6 @@ KUBERNETES_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
                 "--dags-path",
                 "--dags-dest",
                 "--deploy",
-                "--github-repository",
             ],
         },
     ],
@@ -254,18 +231,11 @@ KUBERNETES_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
                 "--rebuild-base-image",
                 "--copy-local-sources",
                 "--use-uv",
-                "--github-repository",
             ],
         },
         {
             "name": "K8S tests flags",
-            "options": [
-                "--python",
-                "--kubernetes-version",
-                "--executor",
-                "--lang-sdk-test",
-                "--force-venv-setup",
-            ],
+            "options": ["--python", "--kubernetes-version", "--executor", "--force-venv-setup"],
         },
         {
             "name": "Parallel options",
@@ -296,21 +266,6 @@ KUBERNETES_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
             "options": ["--python", "--kubernetes-version", "--executor", "--force-venv-setup"],
         }
     ],
-    "breeze k8s smoke-test-overlay": [
-        {
-            "name": "Overlay smoke-test flags",
-            "options": [
-                "--python",
-                "--kubernetes-version",
-                "--executor",
-                "--release-name",
-                "--namespace",
-                "--skip-cleanup",
-                "--no-pytest",
-                "--promote-status",
-            ],
-        }
-    ],
     "breeze k8s deploy-cluster": [
         {
             "name": "K8S cluster creation flags",
@@ -321,10 +276,7 @@ KUBERNETES_PARAMETERS: dict[str, list[dict[str, str | list[str]]]] = {
                 "--force-venv-setup",
             ],
         },
-        {
-            "name": "Build image flags",
-            "options": ["--rebuild-base-image", "--use-uv", "--skip-image-build", "--github-repository"],
-        },
+        {"name": "Build image flags", "options": ["--rebuild-base-image", "--use-uv", "--skip-image-build"]},
         {"name": "UI flags", "options": ["--skip-compile-ui-assets"]},
     ],
 }

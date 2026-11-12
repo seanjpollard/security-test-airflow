@@ -17,7 +17,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # /// script
-# requires-python = ">=3.11,<3.12"
+# requires-python = ">=3.10,<3.11"
 # dependencies = [
 #   "rich>=13.6.0",
 # ]
@@ -28,46 +28,13 @@ import os
 import subprocess
 import sys
 
-from common_prek_utils import (
-    AIRFLOW_ROOT_PATH,
-    SETUP_BREEZE_PATH,
-    console,
-    describe_breeze_not_running_from_lock,
-    initialize_breeze_prek,
-)
+from common_prek_utils import AIRFLOW_ROOT_PATH, console, initialize_breeze_prek
 
 BREEZE_INSTALL_DIR = AIRFLOW_ROOT_PATH / "dev" / "breeze"
 BREEZE_DOC_DIR = BREEZE_INSTALL_DIR / "doc"
 BREEZE_IMAGES_DIR = BREEZE_DOC_DIR / "images"
 BREEZE_SOURCES_DIR = BREEZE_INSTALL_DIR / "src"
 FORCE = os.environ.get("FORCE", "false")[0].lower() == "t"
-
-
-def breeze_env_with_local_sources() -> dict[str, str]:
-    """Return an environment that forces breeze to import the local worktree sources.
-
-    The ``breeze`` command on PATH is not guaranteed to import this worktree's sources: a
-    legacy global install (``uv tool`` / ``pipx``) stays bound to whichever checkout it was
-    installed from. Computing the command hashes / option groups from that other checkout's
-    code either misses a needed regeneration or *reverts* a correctly regenerated image.
-
-    Prepending the local breeze sources to ``PYTHONPATH`` makes the in-process
-    computation (and the help rendering it spawns) always reflect the current source,
-    while third-party dependencies (rich-click, click, ...) still resolve from the
-    breeze environment. CI, which installs breeze fresh from the same checkout, is
-    unaffected.
-    """
-    env = os.environ.copy()
-    existing_pythonpath = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = (
-        f"{BREEZE_SOURCES_DIR}{os.pathsep}{existing_pythonpath}"
-        if existing_pythonpath
-        else str(BREEZE_SOURCES_DIR)
-    )
-    return env
-
-
-BREEZE_ENV = breeze_env_with_local_sources()
 
 
 def verify_all_commands_described_in_docs():
@@ -99,67 +66,36 @@ def is_regeneration_needed() -> bool:
     result = subprocess.run(
         ["breeze", "setup", "regenerate-command-images", "--check-only"],
         check=False,
-        env=BREEZE_ENV,
     )
     return result.returncode != 0
 
 
-def fail_if_breeze_does_not_run_from_lock() -> None:
-    """Stop before regenerating anything from a breeze whose dependencies are not the locked ones.
+initialize_breeze_prek(__name__, __file__)
 
-    The stored hashes cover the command definitions *as rendered by the locked click*, so
-    regenerating from an unlocked install rewrites every one of them and the drift comes back on
-    the next run from a locked install.
-    """
-    reason = describe_breeze_not_running_from_lock()
-    if reason is None:
-        return
+return_code = 0
+verify_all_commands_described_in_docs()
+if is_regeneration_needed():
     console.print(
-        f"\n[red]Cannot regenerate breeze command output: {reason}.[/]\n\n"
-        "[yellow]Install or upgrade the breeze shim, which runs breeze from "
-        "`dev/breeze/uv.lock` (ADR 0017):[/]\n\n"
-        f"    {SETUP_BREEZE_PATH}\n\n"
-        "[yellow]A legacy global install has to go first — it owns the same path:[/]\n\n"
-        "    uv tool uninstall apache-airflow-breeze   # or: pipx uninstall apache-airflow-breeze\n"
+        "\n[bright_blue]Some of the commands changed since last time images were generated. Regenerating.\n"
     )
-    sys.exit(1)
-
-
-def main() -> int:
-    initialize_breeze_prek(__name__, __file__)
-
-    return_code = 0
-    verify_all_commands_described_in_docs()
-    if is_regeneration_needed():
-        fail_if_breeze_does_not_run_from_lock()
-        console.print(
-            "\n[bright_blue]Some of the commands changed since last time images were generated. "
-            "Regenerating.\n"
-        )
-        return_code = 1
-        res = subprocess.run(
-            ["breeze", "setup", "regenerate-command-images"],
-            check=False,
-            env=BREEZE_ENV,
-        )
-        if res.returncode != 0:
-            console.print("\n[red]Breeze command configuration has changed.\n")
-            console.print("\n[bright_blue]Images have been regenerated.\n")
-            console.print("\n[bright_blue]You might want to run it manually:\n")
-            console.print("\n[magenta]breeze setup regenerate-command-images\n")
+    return_code = 1
     res = subprocess.run(
-        ["breeze", "setup", "check-all-params-in-groups"],
+        ["breeze", "setup", "regenerate-command-images"],
         check=False,
-        env=BREEZE_ENV,
     )
     if res.returncode != 0:
-        return_code = 1
         console.print("\n[red]Breeze command configuration has changed.\n")
-        console.print("\n[yellow]Please fix it in the appropriate command_*_config.py file\n")
-        console.print("\n[bright_blue]You can run consistency check manually by running:\n")
-        console.print("\nbreeze setup check-all-params-in-groups\n")
-    return return_code
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+        console.print("\n[bright_blue]Images have been regenerated.\n")
+        console.print("\n[bright_blue]You might want to run it manually:\n")
+        console.print("\n[magenta]breeze setup regenerate-command-images\n")
+res = subprocess.run(
+    ["breeze", "setup", "check-all-params-in-groups"],
+    check=False,
+)
+if res.returncode != 0:
+    return_code = 1
+    console.print("\n[red]Breeze command configuration has changed.\n")
+    console.print("\n[yellow]Please fix it in the appropriate command_*_config.py file\n")
+    console.print("\n[bright_blue]You can run consistency check manually by running:\n")
+    console.print("\nbreeze setup check-all-params-in-groups\n")
+sys.exit(return_code)

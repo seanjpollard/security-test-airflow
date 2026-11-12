@@ -310,7 +310,7 @@ with DAG(
         composer_external_dag_id="airflow_monitoring",
         composer_external_task_id="echo",
         allowed_states=["success"],
-        execution_range=timedelta(days=1),
+        execution_range=[datetime.now() - timedelta(1), datetime.now()],
     )
     # [END howto_sensor_external_task]
 
@@ -323,7 +323,7 @@ with DAG(
         composer_external_dag_id="airflow_monitoring",
         composer_external_task_id="echo",
         allowed_states=["success"],
-        execution_range=timedelta(days=1),
+        execution_range=[datetime.now() - timedelta(1), datetime.now()],
         deferrable=True,
     )
     # [END howto_sensor_external_task_deferrable_mode]

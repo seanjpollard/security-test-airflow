@@ -24,16 +24,16 @@ readonly DOCKERHUB_REPO
 
 # Sometimes the pgbouncer tag does not reliably correspond with the version name
 # For example, it may have a `-fixed` suffix
-PGBOUNCER_TAG="pgbouncer_1_25_2"
+PGBOUNCER_TAG="pgbouncer_1_23_1-fixed"
 readonly PGBOUNCER_TAG
 
-PGBOUNCER_VERSION="1.25.2"
+PGBOUNCER_VERSION="1.23.1"
 readonly PGBOUNCER_VERSION
 
-PGBOUNCER_SHA256="924ad35113fd0a71c8e2dbe85b5d03445532e2b7b37a9f8a48983beea238b332"
+PGBOUNCER_SHA256="1963b497231d9a560a62d266e4a2eae6881ab401853d93e5d292c3740eec5084"
 readonly PGBOUNCER_SHA256
 
-AIRFLOW_PGBOUNCER_VERSION="2026.10.13"
+AIRFLOW_PGBOUNCER_VERSION="2026.04.17"
 readonly AIRFLOW_PGBOUNCER_VERSION
 
 COMMIT_SHA=$(git rev-parse HEAD)

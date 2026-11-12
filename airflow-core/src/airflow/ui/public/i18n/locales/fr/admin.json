@@ -3,16 +3,13 @@
     "description": "Description",
     "key": "Clé",
     "name": "Nom",
-    "team": "Équipe",
     "value": "Valeur"
   },
   "config": {
     "columns": {
       "section": "Section"
     },
-    "config_many": "Configurations",
-    "config_one": "Configuration",
-    "config_other": "Configurations"
+    "title": "Configuration d'Airflow"
   },
   "connections": {
     "add": "Ajouter une connexion",
@@ -26,24 +23,22 @@
     "connection_one": "Connexion",
     "connection_other": "Connexions",
     "delete": {
-      "deleteConnection_many": "Supprimer {{count, number}} connexions",
+      "deleteConnection_many": "Supprimer {{count}} connexions",
       "deleteConnection_one": "Supprimer 1 connexion",
-      "deleteConnection_other": "Supprimer {{count, number}} connexions",
+      "deleteConnection_other": "Supprimer {{count}} connexions",
       "firstConfirmMessage_many": "Vous êtes sur le point de supprimer les connexions suivantes :",
       "firstConfirmMessage_one": "Vous êtes sur le point de supprimer la connexion suivante :",
       "firstConfirmMessage_other": "Vous êtes sur le point de supprimer les connexions suivantes :",
       "title": "Supprimer la Connexion"
     },
-    "duplicate": "Dupliquer la $t(connections.connection_one)",
     "edit": "Modifier la connexion",
     "form": {
       "connectionIdRequired": "L'ID de la connexion est requis",
       "connectionIdRequirement": "L'ID de la connexion ne peut pas contenir uniquement des espaces",
-      "connectionTypeFields": "Champs {{connectionType}}",
       "connectionTypeRequired": "Le type de la connexion est requis",
+      "extraFields": "Champs Supplémentaires",
       "extraFieldsJson": "Champs Supplémentaires JSON",
       "helperText": "Le type de la connexion est manquant ? Assurez-vous d'avoir installé le package Airflow Providers correspondant.",
-      "helperTextForDuplicatedRedactedFields": "Les champs masqués ('***') ne sont pas copiés. Renseignez-les pour la nouvelle connexion.",
       "helperTextForRedactedFields": "Les champs masqués ('***') resteront inchangés s'ils ne sont pas modifiés.",
       "selectConnectionType": "Sélectionner le type de connexion",
       "standardFields": "Champs standards"
@@ -88,26 +83,6 @@
   "formActions": {
     "save": "Sauvegarder"
   },
-  "jobs": {
-    "columns": {
-      "executorClass": "Classe d'exécuteur",
-      "hostname": "Nom d'hôte",
-      "id": "ID",
-      "jobType": "Type de travail",
-      "latestHeartbeat": "Dernier battement",
-      "unixname": "Nom Unix"
-    },
-    "filters": {
-      "allStates": "Tous les états",
-      "allTypes": "Tous les types",
-      "dagProcessorJob": "DagProcessorJob",
-      "schedulerJob": "SchedulerJob",
-      "triggererJob": "TriggererJob"
-    },
-    "job_many": "Jobs",
-    "job_one": "Job",
-    "job_other": "Jobs"
-  },
   "plugins": {
     "columns": {
       "source": "Source"
@@ -115,9 +90,6 @@
     "importError_many": "Erreurs d'importation de plugin",
     "importError_one": "Erreur d'importation de plugin",
     "importError_other": "Erreurs d'importation de plugins",
-    "plugin_many": "Plugins",
-    "plugin_one": "Plugin",
-    "plugin_other": "Plugins",
     "searchPlaceholder": "Rechercher par fichier"
   },
   "pools": {
@@ -134,8 +106,7 @@
       "includeDeferred": "Inclure les Tâches Différées",
       "nameMaxLength": "Le nom peut contenir un maximum de 250 caractères",
       "nameRequired": "Le nom est requis",
-      "slots": "Slots",
-      "slotsHelperText": "Utilisez -1 pour des slots illimités."
+      "slots": "Slots"
     },
     "noPoolsFound": "Aucun pool trouvé",
     "pool_many": "Pools",
@@ -152,10 +123,7 @@
     "columns": {
       "packageName": "Nom du paquet",
       "version": "Version"
-    },
-    "provider_many": "Providers",
-    "provider_one": "Provider",
-    "provider_other": "Providers"
+    }
   },
   "variables": {
     "add": "Ajouter une variable",
@@ -163,9 +131,9 @@
       "isEncrypted": "Est chiffrée"
     },
     "delete": {
-      "deleteVariable_many": "Supprimer {{count, number}} Variables",
+      "deleteVariable_many": "Supprimer {{count}} Variables",
       "deleteVariable_one": "Supprimer 1 Variable",
-      "deleteVariable_other": "Supprimer {{count, number}} Variables",
+      "deleteVariable_other": "Supprimer {{count}} Variables",
       "firstConfirmMessage_many": "Vous êtes sur le point de supprimer les variables suivantes :",
       "firstConfirmMessage_one": "Vous êtes sur le point de supprimer la variable suivante :",
       "firstConfirmMessage_other": "Vous êtes sur le point de supprimer les variables suivantes :",
@@ -197,7 +165,6 @@
           "title": "Ignorer"
         }
       },
-      "parsingFile": "Analyse du fichier...",
       "title": "Importer des Variables",
       "upload": "Soumettre un Fichier JSON",
       "uploadPlaceholder": "Soumettre un fichier JSON contenant des variables (par exemple, {\"key\": \"value\", ...})"

@@ -28,6 +28,10 @@ declare module "eslint-plugin-local-patch" {
   export default plugin;
 }
 
+declare module "@stylistic/eslint-plugin" {
+  export { default } from "eslint-plugin-local-patch";
+}
+
 declare module "eslint-plugin-jsx-a11y" {
   export { default } from "eslint-plugin-local-patch";
 }

@@ -70,7 +70,7 @@ class SqlToSlackWebhookOperator(BaseSqlToSlackOperator):
     :param parameters: The parameters to pass to the SQL query
     """
 
-    template_fields: Sequence[str] = ("sql", "slack_message", "sql_conn_id")
+    template_fields: Sequence[str] = ("sql", "slack_message")
     template_ext: Sequence[str] = (".sql", ".jinja", ".j2")
     template_fields_renderers = {"sql": "sql", "slack_message": "jinja"}
     times_rendered = 0
@@ -97,21 +97,13 @@ class SqlToSlackWebhookOperator(BaseSqlToSlackOperator):
         self.slack_webhook_conn_id = slack_webhook_conn_id
         self.slack_channel = slack_channel
         self.slack_message = slack_message
-        # Rendered once, at send time, from this original text. A mapped task's first render also
-        # renders slack_message, and rendering that output again would evaluate any Jinja that arrived
-        # in a context value (``dag_run.conf``, a param).
-        self._slack_message_template = slack_message
         self.results_df_name = results_df_name
         self.kwargs = kwargs
 
     def _render_and_send_slack_message(self, context, df) -> None:
-        # Render only slack_message, without going through render_template_fields: a mapped task's
-        # first render never increments times_rendered, so relying on that counter would render the
-        # already-rendered fields a second time.
+        # Put the dataframe into the context and render the JINJA template fields
         context[self.results_df_name] = df
-        self.slack_message = self.render_template(
-            self._slack_message_template, context, self._get_jinja_env()
-        )
+        self.render_template_fields(context)
 
         slack_hook = self._get_slack_hook()
         self.log.info("Sending slack message: %s", self.slack_message)
@@ -131,22 +123,16 @@ class SqlToSlackWebhookOperator(BaseSqlToSlackOperator):
         if self.times_rendered == 0:
             fields_to_render: Iterable[str] = (x for x in self.template_fields if x != "slack_message")
         else:
-            # Only the deferred field. Re-rendering a field that the first pass already rendered
-            # feeds its own output back in as template source, so any Jinja syntax that arrived in
-            # a context value (``dag_run.conf``, a param) would be evaluated on this second pass.
-            fields_to_render = ("slack_message",)
+            fields_to_render = self.template_fields
 
-        self._do_render_template_fields(
-            self, fields_to_render, context, self._get_jinja_env(jinja_env), set()
-        )
-        self.times_rendered += 1
-
-    def _get_jinja_env(self, jinja_env=None):
         if not jinja_env:
             jinja_env = self.get_template_env()
+
         # Add the tabulate library into the JINJA environment
         jinja_env.filters["tabulate"] = tabulate
-        return jinja_env
+
+        self._do_render_template_fields(self, fields_to_render, context, jinja_env, set())
+        self.times_rendered += 1
 
     def execute(self, context: Context) -> None:
         if not isinstance(self.sql, str):

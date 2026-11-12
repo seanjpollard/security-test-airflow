@@ -28,16 +28,14 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from airflow.providers.common.ai.operators.llm_branch import LLMBranchOperator
-from airflow.providers.common.ai.utils.prompt import call_arguments
-from airflow.providers.common.ai.utils.validation import validate_prompt
 from airflow.providers.common.compat.sdk import (
-    SET_DURING_EXECUTION,
     DecoratedOperator,
     TaskDecorator,
     context_merge,
-    determine_kwargs,
     task_decorator_factory,
 )
+from airflow.sdk.definitions._internal.types import SET_DURING_EXECUTION
+from airflow.utils.operator_helpers import determine_kwargs
 
 if TYPE_CHECKING:
     from airflow.sdk import Context
@@ -89,13 +87,12 @@ class _LLMBranchDecoratedOperator(DecoratedOperator, LLMBranchOperator):
 
         self.prompt = self.python_callable(*self.op_args, **kwargs)
 
-        validate_prompt(self.prompt, decorator_name="@task.llm_branch")
+        if not isinstance(self.prompt, str) or not self.prompt.strip():
+            raise TypeError(
+                "The returned value from the @task.llm_branch callable must be a non-empty string."
+            )
 
-        # Render only the prompt the callable returned. The other template fields were already
-        # rendered before execute().
-        # The arguments of the call, positional ones too, can be referenced by name in the prompt.
-        context_merge(context, call_arguments(self.python_callable, self.op_args, self.op_kwargs))
-        self.prompt = self.render_template(self.prompt, context)
+        self.render_template_fields(context)
         return LLMBranchOperator.execute(self, context)
 
 
@@ -117,7 +114,7 @@ def llm_branch_task(
             system_prompt="Route support tickets to the right team.",
         )
         def route_ticket(message: str):
-            return "Route this ticket: {{ message }}"
+            return f"Route this ticket: {message}"
 
     With multiple branches::
 
@@ -127,7 +124,7 @@ def llm_branch_task(
             allow_multiple_branches=True,
         )
         def classify(text: str):
-            return "Classify this text: {{ text }}"
+            return f"Classify this text: {text}"
 
     :param python_callable: Function to decorate.
     """

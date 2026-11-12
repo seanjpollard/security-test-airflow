@@ -87,14 +87,8 @@ class GoogleBidManagerHook(GoogleBaseHook):
 
     def list_queries(self) -> list[dict]:
         """Retrieve stored queries."""
-        conn = self.get_conn()
-        request = conn.queries().list()
-        queries: list[dict] = []
-        while request is not None:
-            response = request.execute(num_retries=self.num_retries)
-            queries.extend(response.get("queries", []))
-            request = conn.queries().list_next(previous_request=request, previous_response=response)
-        return queries
+        response = self.get_conn().queries().list().execute(num_retries=self.num_retries)
+        return response.get("queries", [])
 
     def run_query(self, query_id: str, params: dict[str, Any] | None) -> dict:
         """
@@ -128,11 +122,6 @@ class GoogleBidManagerHook(GoogleBaseHook):
 
         :param query_id: Query ID for which report was generated.
         """
-        conn = self.get_conn()
-        request = conn.queries().reports().list(queryId=query_id)
-        reports: list[dict] = []
-        while request is not None:
-            response = request.execute(num_retries=self.num_retries)
-            reports.extend(response.get("reports", []))
-            request = conn.queries().reports().list_next(previous_request=request, previous_response=response)
-        return {"reports": reports}
+        return (
+            self.get_conn().queries().reports().list(queryId=query_id).execute(num_retries=self.num_retries)
+        )

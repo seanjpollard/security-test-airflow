@@ -18,6 +18,7 @@
  */
 
 import { ChakraProvider } from "@chakra-ui/react";
+import { FC } from "react";
 
 import { ColorModeProvider } from "src/context/colorMode";
 import { HomePage } from "src/pages/HomePage";
@@ -31,7 +32,7 @@ export interface PluginComponentProps {
 /**
  * Main plugin component
  */
-const PluginComponent = (props: PluginComponentProps) => {
+const PluginComponent: FC<PluginComponentProps> = (props) => {
 
   // Use the globalChakraUISystem provided by the Airflow Core UI,
   // so the plugin has a consistent theming with the host Airflow UI,

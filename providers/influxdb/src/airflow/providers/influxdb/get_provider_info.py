@@ -32,40 +32,15 @@ def get_provider_info():
                 "external-doc-url": "https://www.influxdata.com/",
                 "logo": "/docs/integration-logos/Influxdb.svg",
                 "tags": ["software"],
-            },
-            {
-                "integration-name": "InfluxDB 3",
-                "external-doc-url": "https://www.influxdata.com/",
-                "tags": ["software"],
-            },
+            }
         ],
         "hooks": [
-            {"integration-name": "Influxdb", "python-modules": ["airflow.providers.influxdb.hooks.influxdb"]},
-            {
-                "integration-name": "InfluxDB 3",
-                "python-modules": ["airflow.providers.influxdb.hooks.influxdb3"],
-            },
+            {"integration-name": "Influxdb", "python-modules": ["airflow.providers.influxdb.hooks.influxdb"]}
         ],
         "operators": [
             {
                 "integration-name": "Influxdb",
                 "python-modules": ["airflow.providers.influxdb.operators.influxdb"],
-            },
-            {
-                "integration-name": "InfluxDB 3",
-                "python-modules": ["airflow.providers.influxdb.operators.influxdb3"],
-            },
-        ],
-        "sensors": [
-            {
-                "integration-name": "InfluxDB 3",
-                "python-modules": ["airflow.providers.influxdb.sensors.influxdb3"],
-            }
-        ],
-        "triggers": [
-            {
-                "integration-name": "InfluxDB 3",
-                "python-modules": ["airflow.providers.influxdb.triggers.influxdb3"],
             }
         ],
         "connection-types": [
@@ -88,27 +63,6 @@ def get_provider_info():
                         "schema": {"type": ["string", "null"], "default": ""},
                     },
                 },
-            },
-            {
-                "hook-class-name": "airflow.providers.influxdb.hooks.influxdb3.InfluxDB3Hook",
-                "hook-name": "InfluxDB 3",
-                "connection-type": "influxdb3",
-                "ui-field-behaviour": {
-                    "hidden-fields": ["login", "password"],
-                    "relabeling": {},
-                    "placeholders": {},
-                },
-                "conn-fields": {
-                    "token": {
-                        "label": "Token",
-                        "schema": {"type": ["string", "null"], "format": "password", "default": ""},
-                    },
-                    "database": {"label": "Database", "schema": {"type": ["string", "null"], "default": ""}},
-                    "org": {
-                        "label": "Organization Name (optional)",
-                        "schema": {"type": ["string", "null"], "default": ""},
-                    },
-                },
-            },
+            }
         ],
     }

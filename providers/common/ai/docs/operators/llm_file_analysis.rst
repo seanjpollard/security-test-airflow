@@ -17,8 +17,8 @@
 
 .. _howto/operator:llm_file_analysis:
 
-Analyze files and images: ``LLMFileAnalysisOperator`` and ``@task.llm_file_analysis``
-=====================================================================================
+``LLMFileAnalysisOperator`` & ``@task.llm_file_analysis``
+=========================================================
 
 Use :class:`~airflow.providers.common.ai.operators.llm_file_analysis.LLMFileAnalysisOperator`
 or the ``@task.llm_file_analysis`` decorator to analyze files from object storage
@@ -76,24 +76,7 @@ Structured Output
 -----------------
 
 Set ``output_type`` to a Pydantic ``BaseModel`` when you want a typed response
-back from the LLM instead of a plain string. The model instance is pushed to
-XCom unchanged so downstream tasks can type-hint the class directly. The
-declared ``output_type`` (and any ``BaseModel`` reachable from
-``Union``/``Optional``/``list`` shapes) is registered for deserialization by the
-worker when it loads the Dag. Define the class at **module scope** and bind it to
-an attribute matching its ``__name__``: nested-in-function and dynamically-built
-classes cannot be re-imported, so they are skipped at worker startup and fail to
-deserialize at the consumer. Same-Dag downstream tasks need no configuration; the
-UI XCom viewer renders the value
-via the ``stringify`` path (no configuration needed). Cross-Dag ``xcom_pull``
-consumers still need the class ``qualname`` added to
-``[core] allowed_deserialization_classes`` (see the ``LLMOperator`` guide for
-details).
-
-.. exampleinclude:: /../../ai/src/airflow/providers/common/ai/example_dags/example_llm_file_analysis.py
-    :language: python
-    :start-after: [START howto_operator_llm_file_analysis_structured_output_class]
-    :end-before: [END howto_operator_llm_file_analysis_structured_output_class]
+back from the LLM instead of a plain string:
 
 .. exampleinclude:: /../../ai/src/airflow/providers/common/ai/example_dags/example_llm_file_analysis.py
     :language: python
@@ -110,18 +93,6 @@ returns the prompt string; file settings are passed to the decorator:
     :language: python
     :start-after: [START howto_decorator_llm_file_analysis]
     :end-before: [END howto_decorator_llm_file_analysis]
-
-Human-in-the-Loop Approval
----------------------------
-
-Set ``require_approval=True`` to pause the task after the analysis and wait
-for a human reviewer to approve the output before it is returned.
-When ``allow_modifications=True``, the reviewer can also edit the output:
-
-.. exampleinclude:: /../../ai/src/airflow/providers/common/ai/example_dags/example_llm_file_analysis.py
-    :language: python
-    :start-after: [START howto_operator_llm_file_analysis_approval]
-    :end-before: [END howto_operator_llm_file_analysis_approval]
 
 Parameters
 ----------
@@ -150,59 +121,21 @@ Parameters
   built-in read-only guidance.
 - ``output_type``: Expected output type (default: ``str``). Set to a Pydantic
   ``BaseModel`` for structured output.
-- ``model_settings``: Pydantic AI ``ModelSettings`` for the model call, such as
-  ``temperature`` or ``max_tokens``. Supports Jinja templating.
-- ``output_retries``: How many times the model is asked again when its output fails
-  validation. Default ``None`` (Pydantic AI's default).
-- ``usage_limits``: Optional pydantic-ai ``UsageLimits`` (or a templated ``dict`` of
-  the same fields) enforced on the run; the task fails when a budget is exceeded.
-  Default ``None``. See :ref:`Usage Limits <howto/operator:llm_usage_limits>`.
-- ``serialize_output``: If ``True`` and ``output_type`` is a Pydantic
-  ``BaseModel`` subclass, the model instance is dumped to a ``dict`` via
-  ``model_dump()`` before being pushed to XCom. Default ``False`` -- the
-  Pydantic instance flows through XCom unchanged. Set to ``True`` when a
-  downstream consumer needs the dict shape.
-
-``decision_policy`` is not supported here: the operator runs its own ``execute``
-without the confidence gate and rejects a policy with a bar at construction.
-
-This operator also inherits ``LLMOperator``'s HITL review parameters --
-``require_approval``, ``approval_timeout``, ``on_approval_timeout``,
-``allow_modifications``, ``approval_notifiers``, and ``approval_assigned_users`` --
-see :doc:`llm` for details.
+- ``agent_params``: Additional keyword arguments passed to the pydantic-ai
+  ``Agent`` constructor (e.g. ``retries``, ``model_settings``).
 
 Supported Formats
 -----------------
 
-- Text-like: ``.log``, ``.txt``, ``.md``, ``.json``, ``.csv``, ``.parquet``, ``.avro``
+- Text-like: ``.log``, ``.json``, ``.csv``, ``.parquet``, ``.avro``
 - Multimodal: ``.png``, ``.jpg``, ``.jpeg``, ``.pdf`` when ``multi_modal=True``
-- ``gzip``, ``bzip2``, and ``xz`` compressed text inputs are supported for
-  ``.log``, ``.json``, ``.csv``, ``.txt``, and ``.md`` (``.log.gz``, ``.csv.bz2``,
-  ``.json.xz``, ...).
-  ``bzip2`` and ``xz`` need a Python interpreter built with the ``bz2`` and
-  ``lzma`` modules; otherwise those inputs raise
-  ``AirflowOptionalProviderFeatureException``.
-- Compression is not supported for ``.parquet``, ``.avro``, image, or PDF
-  inputs.
-- For ``bzip2`` and ``xz``, concatenated streams are read in full, but any
-  data after a point that does not start a valid stream (for example ``xz``
-  Stream Padding between streams, or trailing garbage) is silently ignored,
-  so only the content up to that point is analyzed. ``gzip`` rejects such
-  files instead (``BadGzipFile``).
+- Gzip-compressed text inputs are supported for ``.log.gz``, ``.json.gz``, and
+  ``.csv.gz``.
+- Gzip is not supported for ``.parquet``, ``.avro``, image, or PDF inputs.
 
 Parquet and Avro readers require their corresponding optional extras:
 
 .. code-block:: bash
 
-    pip install "apache-airflow-providers-common-ai[parquet]"
-    pip install "apache-airflow-providers-common-ai[avro]"
-
-Logging
--------
-
-After each LLM call, the operator logs a summary with model name, token usage,
-and request count at INFO level. See :ref:`AgentOperator logging <howto/operator:agent>`
-for details on the log format.
-
-Like :doc:`llm`, the operator also pushes ``usage``, ``run_id`` and the model name to
-XCom, on a failed run too. See :doc:`../observability`.
+    pip install apache-airflow-providers-common-ai[parquet]
+    pip install apache-airflow-providers-common-ai[avro]

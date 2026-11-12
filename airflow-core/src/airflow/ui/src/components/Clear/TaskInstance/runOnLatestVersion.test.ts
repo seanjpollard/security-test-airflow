@@ -24,39 +24,30 @@ describe("getRunOnLatestVersionState", () => {
   it.each([
     {
       expectedDagVersionsDiffer: true,
-      expectedShouldShowRunOnLatestOption: false,
-      latestDagVersionNumber: 3,
-      name: "does not show when Dag versions differ but no bundle version is present (non-versioned bundle)",
-      selectedDagVersionNumber: 2,
-    },
-    {
-      expectedDagVersionsDiffer: true,
       expectedShouldShowRunOnLatestOption: true,
-      latestBundleVersion: "bundle-b",
       latestDagVersionNumber: 3,
-      name: "shows when Dag versions differ on a versioned bundle even if the run has no recorded bundle version",
-      selectedBundleVersion: null,
+      name: "shows and defaults on when DAG version numbers differ",
       selectedDagVersionNumber: 2,
     },
     {
       expectedDagVersionsDiffer: false,
       expectedShouldShowRunOnLatestOption: false,
       latestDagVersionNumber: 3,
-      name: "does not show when Dag version numbers match and there is no bundle difference",
+      name: "does not show when DAG version numbers match and there is no bundle difference",
       selectedDagVersionNumber: 3,
     },
     {
       expectedDagVersionsDiffer: false,
       expectedShouldShowRunOnLatestOption: false,
       latestDagVersionNumber: undefined,
-      name: "does not treat a missing latest Dag version number as different",
+      name: "does not treat a missing latest DAG version number as different",
       selectedDagVersionNumber: 3,
     },
     {
       expectedDagVersionsDiffer: false,
       expectedShouldShowRunOnLatestOption: false,
       latestDagVersionNumber: 3,
-      name: "does not treat a missing selected Dag version number as different",
+      name: "does not treat a missing selected DAG version number as different",
       selectedDagVersionNumber: undefined,
     },
     {
@@ -137,27 +128,15 @@ describe("getRunOnLatestVersionState", () => {
       name: "does not show for group fallback when latest bundle is missing",
       useLatestBundleVersionAsFallback: true,
     },
-    {
-      expectedDagVersionsDiffer: false,
-      expectedRunOnLatestVersionForced: true,
-      expectedShouldShowRunOnLatestOption: true,
-      // A null latest bundle version pins the case that matters: the option is forced even
-      // on a non-versioned bundle, where it would otherwise never be offered.
-      latestBundleVersion: null,
-      name: "forces and shows the option when the selection has no Dag version at all",
-      selectedVersionMissing: true,
-    },
   ])(
     "$name",
     ({
       expectedDagVersionsDiffer,
-      expectedRunOnLatestVersionForced = false,
       expectedShouldShowRunOnLatestOption,
       latestBundleVersion,
       latestDagVersionNumber,
       selectedBundleVersion,
       selectedDagVersionNumber,
-      selectedVersionMissing,
       useLatestBundleVersionAsFallback,
     }) => {
       expect(
@@ -166,12 +145,10 @@ describe("getRunOnLatestVersionState", () => {
           latestDagVersionNumber,
           selectedBundleVersion,
           selectedDagVersionNumber,
-          selectedVersionMissing,
           useLatestBundleVersionAsFallback,
         }),
       ).toEqual({
         dagVersionsDiffer: expectedDagVersionsDiffer,
-        runOnLatestVersionForced: expectedRunOnLatestVersionForced,
         shouldShowRunOnLatestOption: expectedShouldShowRunOnLatestOption,
       });
     },

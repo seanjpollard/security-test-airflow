@@ -18,7 +18,7 @@
  */
 import { ReactFlowProvider } from "@xyflow/react";
 
-import { Toaster } from "src/system-components";
+import { Toaster } from "src/components/ui";
 
 import { AssetLayout } from "./AssetLayout";
 

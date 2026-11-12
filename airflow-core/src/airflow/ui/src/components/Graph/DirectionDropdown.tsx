@@ -21,23 +21,21 @@ import { useTranslation } from "react-i18next";
 import { useLocalStorage } from "usehooks-ts";
 
 import { directionKey } from "src/constants/localStorage";
-import { useDefaultGraphDirection } from "src/hooks/useUserSettings";
 
 export type Direction = "DOWN" | "LEFT" | "RIGHT" | "UP";
 
 export const DirectionDropdown = ({ graphId }: { readonly graphId: string }) => {
   const { t: translate } = useTranslation(["components", "dag"]);
 
-  const [defaultDirection] = useDefaultGraphDirection();
-  const [direction, setDirection] = useLocalStorage<Direction>(directionKey(graphId), defaultDirection);
+  const [direction, setDirection] = useLocalStorage<Direction>(directionKey(graphId), "RIGHT");
 
   const directionOptions = () =>
     createListCollection({
       items: [
-        { label: translate("graph.directionRight"), value: "RIGHT" },
-        { label: translate("graph.directionLeft"), value: "LEFT" },
-        { label: translate("graph.directionUp"), value: "UP" },
-        { label: translate("graph.directionDown"), value: "DOWN" },
+        { label: translate("graph.directionRight"), value: "RIGHT" as Direction },
+        { label: translate("graph.directionLeft"), value: "LEFT" as Direction },
+        { label: translate("graph.directionUp"), value: "UP" as Direction },
+        { label: translate("graph.directionDown"), value: "DOWN" as Direction },
       ],
     });
 

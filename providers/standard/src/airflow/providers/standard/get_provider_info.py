@@ -43,7 +43,6 @@ def get_provider_info():
                     "/docs/apache-airflow-providers-standard/sensors/datetime.rst",
                     "/docs/apache-airflow-providers-standard/sensors/file.rst",
                     "/docs/apache-airflow-providers-standard/sensors/external_task_sensor.rst",
-                    "/docs/apache-airflow-providers-standard/sensors/asset.rst",
                 ],
             }
         ],
@@ -68,7 +67,6 @@ def get_provider_info():
             {
                 "integration-name": "Standard",
                 "python-modules": [
-                    "airflow.providers.standard.sensors.asset",
                     "airflow.providers.standard.sensors.date_time",
                     "airflow.providers.standard.sensors.time_delta",
                     "airflow.providers.standard.sensors.time",

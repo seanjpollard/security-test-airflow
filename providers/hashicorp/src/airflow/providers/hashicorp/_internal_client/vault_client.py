@@ -17,13 +17,11 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
 from functools import cached_property
-from typing import TypeVar
 
 import hvac
 from hvac.api.auth_methods import Kubernetes
-from hvac.exceptions import Forbidden, InvalidPath, VaultError
+from hvac.exceptions import InvalidPath, VaultError
 from requests import Response, Session
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
@@ -32,8 +30,6 @@ from airflow.utils.log.logging_mixin import LoggingMixin
 
 DEFAULT_KUBERNETES_JWT_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 DEFAULT_KV_ENGINE_VERSION = 2
-
-T = TypeVar("T")
 
 
 VALID_KV_VERSIONS: list[int] = [1, 2]
@@ -76,9 +72,9 @@ class _VaultClient(LoggingMixin):
         (for ``token`` and ``github`` auth_type).
     :param username: Username for Authentication (for ``ldap`` and ``userpass`` auth_types).
     :param password: Password for Authentication (for ``ldap`` and ``userpass`` auth_types).
-    :param key_id: Key ID for Authentication (for ``aws_iam`` and ``azure`` auth_type).
+    :param key_id: Key ID for Authentication (for ``aws_iam`` and ''azure`` auth_type).
     :param secret_id: Secret ID for Authentication (for ``approle``, ``aws_iam`` and ``azure`` auth_types).
-    :param role_id: Role ID for Authentication (for ``approle``, ``aws_iam`` and ``gcp`` auth_types).
+    :param role_id: Role ID for Authentication (for ``approle``, ``aws_iam`` auth_types).
     :param assume_role_kwargs: AWS assume role param.
         See AWS STS Docs:
         https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role.html
@@ -87,7 +83,7 @@ class _VaultClient(LoggingMixin):
     :param kubernetes_role: Role for Authentication (for ``kubernetes`` auth_type).
     :param kubernetes_jwt_path: Path for kubernetes jwt token (for ``kubernetes`` auth_type, default:
         ``/var/run/secrets/kubernetes.io/serviceaccount/token``).
-    :param gcp_key_path: Path to Google Cloud Service Account key file (JSON) (for ``gcp`` auth_type).
+    :param gcp_key_path: Path to Google Cloud Service Account key file (JSON)  (for ``gcp`` auth_type).
            Mutually exclusive with gcp_keyfile_dict
     :param gcp_keyfile_dict: Dictionary of keyfile parameters. (for ``gcp`` auth_type).
            Mutually exclusive with gcp_key_path
@@ -175,6 +171,10 @@ class _VaultClient(LoggingMixin):
                 raise VaultError("The 'gcp' authentication type requires 'gcp_scopes'")
             if not role_id:
                 raise VaultError("The 'gcp' authentication type requires 'role_id'")
+            if not gcp_key_path and not gcp_keyfile_dict:
+                raise VaultError(
+                    "The 'gcp' authentication type requires 'gcp_key_path' or 'gcp_keyfile_dict'"
+                )
 
         self.kv_engine_version = kv_engine_version or 2
         self.url = url
@@ -208,42 +208,15 @@ class _VaultClient(LoggingMixin):
     @property
     def client(self):
         """
-        Return the client, authenticating on first use.
-
-        The token is not validated here. Vault answers 403 for an expired token and for a path the
-        token may not read, so a probe before every request costs a round trip that cannot tell the
-        two apart. Callers go through :meth:`_run_with_reauth`, which authenticates again and retries
-        once when Vault rejects the token.
+        Checks that it is still authenticated to Vault and invalidates the cache if this is not the case.
 
         :return: Vault Client
         """
+        if not self._client.is_authenticated():
+            # Invalidate the cache:
+            # https://github.com/pydanny/cached-property#invalidating-the-cache
+            self.__dict__.pop("_client", None)
         return self._client
-
-    def _invalidate_client(self) -> None:
-        """Drop the cached client so that the next access authenticates again."""
-        self.__dict__.pop("_client", None)
-
-    def _run_with_reauth(self, operation: Callable[[hvac.Client], T]) -> T:
-        """
-        Run a Vault request, authenticating again and retrying it once if the token is rejected.
-
-        Only ``Forbidden`` is treated as a rejected token. ``InvalidPath`` means the secret is
-        absent and callers turn it into ``None``, and ``InvalidRequest`` covers request-level
-        failures conflicting on a write. Neither is fixed by authenticating again, so both are
-        left to propagate to the caller that knows what they mean.
-
-        :param operation: Callable issuing a single request against the client it is given.
-        :return: Whatever ``operation`` returns.
-        """
-        try:
-            return operation(self.client)
-        except Forbidden:
-            self.log.debug("Vault rejected the token. Authenticating again and retrying once.")
-            self._invalidate_client()
-            try:
-                return operation(self.client)
-            except Forbidden as retry_error:
-                raise VaultError("Vault Authentication Error!") from retry_error
 
     @cached_property
     def _client(self) -> hvac.Client:
@@ -299,12 +272,9 @@ class _VaultClient(LoggingMixin):
         else:
             raise VaultError(f"Authentication type '{self.auth_type}' not supported")
 
-        # The login response above already carries the token, so asking Vault to confirm it would be
-        # a wasted round trip. Only the free half of hvac's is_authenticated() is kept, catching an
-        # auth method that never produced a token before the first request goes out.
-        if not _client.token:
-            raise VaultError("Vault Authentication Error!")
-        return _client
+        if _client.is_authenticated():
+            return _client
+        raise VaultError("Vault Authentication Error!")
 
     def _auth_userpass(self, _client: hvac.Client) -> None:
         if self.auth_mount_point:
@@ -382,45 +352,25 @@ class _VaultClient(LoggingMixin):
         import json
         import time
 
-        # Determine service account email
-        service_account_email = getattr(credentials, "service_account_email", None)
-        if service_account_email in (None, "default"):
-            service_account_email = getattr(credentials, "client_email", None) or None
+        import googleapiclient
 
-        if service_account_email is None:
-            # Fallback for Compute Engine credentials if email is not yet populated
-            try:
-                from google.auth import compute_engine, exceptions
+        if self.gcp_keyfile_dict:
+            creds = self.gcp_keyfile_dict
+        elif self.gcp_key_path:
+            with open(self.gcp_key_path) as f:
+                creds = json.load(f)
 
-                if isinstance(credentials, compute_engine.Credentials):
-                    from google.auth import transport
+        service_account = creds["client_email"]
 
-                    credentials.refresh(transport.requests.Request())
-                    service_account_email = getattr(credentials, "service_account_email", None)
-            except exceptions.RefreshError:
-                self.log.error("Failed to refresh Compute Engine credentials.")
-            except ImportError:
-                self.log.error("google-auth not installed, skipping credential refresh.")
-
-        if not isinstance(service_account_email, str):
-            raise VaultError(
-                f"Could not determine service account email from credentials. "
-                f"Expected string, got {type(service_account_email).__name__}"
-            )
-        if service_account_email == "default":
-            raise VaultError("Could not determine service account email from Compute Engine credentials.")
-
-        # Generate a payload for subsequent "signJwt()" call.
-        # The 'sub' claim must be the service account email.
+        # Generate a payload for subsequent "signJwt()" call
+        # Reference: https://googleapis.dev/python/google-auth/latest/reference/google.auth.jwt.html#google.auth.jwt.Credentials
         now = int(time.time())
         expires = now + 900  # 15 mins in seconds, can't be longer.
-        payload = {"iat": now, "exp": expires, "sub": service_account_email, "aud": f"vault/{self.role_id}"}
+        payload = {"iat": now, "exp": expires, "sub": credentials, "aud": f"vault/{self.role_id}"}
         body = {"payload": json.dumps(payload)}
-        name = f"projects/{project_id}/serviceAccounts/{service_account_email}"
+        name = f"projects/{project_id}/serviceAccounts/{service_account}"
 
         # Perform the GCP API call
-        import googleapiclient.discovery
-
         iam = googleapiclient.discovery.build("iam", "v1", credentials=credentials)
         request = iam.projects().serviceAccounts().signJwt(name=name, body=body)
         resp = request.execute()
@@ -529,17 +479,13 @@ class _VaultClient(LoggingMixin):
             if self.kv_engine_version == 1:
                 if secret_version:
                     raise VaultError("Secret version can only be used with version 2 of the KV engine")
-                response = self._run_with_reauth(
-                    lambda client: client.secrets.kv.v1.read_secret(path=secret_path, mount_point=mount_point)
-                )
+                response = self.client.secrets.kv.v1.read_secret(path=secret_path, mount_point=mount_point)
             else:
-                response = self._run_with_reauth(
-                    lambda client: client.secrets.kv.v2.read_secret_version(
-                        path=secret_path,
-                        mount_point=mount_point,
-                        version=secret_version,
-                        raise_on_deleted_version=True,
-                    )
+                response = self.client.secrets.kv.v2.read_secret_version(
+                    path=secret_path,
+                    mount_point=mount_point,
+                    version=secret_version,
+                    raise_on_deleted_version=True,
                 )
         except InvalidPath:
             self.log.debug("Secret not found %s with mount point %s", secret_path, mount_point)
@@ -563,11 +509,7 @@ class _VaultClient(LoggingMixin):
         mount_point = None
         try:
             mount_point, secret_path = self._parse_secret_path(secret_path)
-            return self._run_with_reauth(
-                lambda client: client.secrets.kv.v2.read_secret_metadata(
-                    path=secret_path, mount_point=mount_point
-                )
-            )
+            return self.client.secrets.kv.v2.read_secret_metadata(path=secret_path, mount_point=mount_point)
         except InvalidPath:
             self.log.debug("Secret not found %s with mount point %s", secret_path, mount_point)
             return None
@@ -591,13 +533,11 @@ class _VaultClient(LoggingMixin):
         mount_point = None
         try:
             mount_point, secret_path = self._parse_secret_path(secret_path)
-            return self._run_with_reauth(
-                lambda client: client.secrets.kv.v2.read_secret_version(
-                    path=secret_path,
-                    mount_point=mount_point,
-                    version=secret_version,
-                    raise_on_deleted_version=True,
-                )
+            return self.client.secrets.kv.v2.read_secret_version(
+                path=secret_path,
+                mount_point=mount_point,
+                version=secret_version,
+                raise_on_deleted_version=True,
             )
         except InvalidPath:
             self.log.debug(
@@ -635,15 +575,11 @@ class _VaultClient(LoggingMixin):
             raise VaultError("The cas parameter is only valid for version 2")
         mount_point, secret_path = self._parse_secret_path(secret_path)
         if self.kv_engine_version == 1:
-            response = self._run_with_reauth(
-                lambda client: client.secrets.kv.v1.create_or_update_secret(
-                    path=secret_path, secret=secret, mount_point=mount_point, method=method
-                )
+            response = self.client.secrets.kv.v1.create_or_update_secret(
+                path=secret_path, secret=secret, mount_point=mount_point, method=method
             )
         else:
-            response = self._run_with_reauth(
-                lambda client: client.secrets.kv.v2.create_or_update_secret(
-                    path=secret_path, secret=secret, mount_point=mount_point, cas=cas
-                )
+            response = self.client.secrets.kv.v2.create_or_update_secret(
+                path=secret_path, secret=secret, mount_point=mount_point, cas=cas
             )
         return response

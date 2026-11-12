@@ -22,8 +22,6 @@ from collections.abc import Callable
 from functools import wraps
 from typing import TYPE_CHECKING, TypeVar, cast
 
-from statsd import StatsClient, UnixSocketStatsClient
-
 from .protocols import Timer
 from .validators import (
     PatternAllowListValidator,
@@ -33,6 +31,8 @@ from .validators import (
 )
 
 if TYPE_CHECKING:
+    from statsd import StatsClient
+
     from .protocols import DeltaType
     from .validators import ListValidator
 
@@ -52,9 +52,8 @@ def prepare_stat_with_tags(fn: T) -> T:
             if stat is not None and tags is not None:
                 for k, v in tags.items():
                     if self.metric_tags_validator.test(k):
-                        v_str = "true" if v == "" else v
-                        if all(c not in [",", "="] for c in f"{v_str}{k}"):
-                            stat += f",{k}={v_str}"
+                        if all(c not in [",", "="] for c in f"{v}{k}"):
+                            stat += f",{k}={v}"
                         else:
                             log.error("Dropping invalid tag: %s=%s.", k, v)
         return fn(self, stat, *args, tags=tags, **kwargs)
@@ -68,16 +67,16 @@ class SafeStatsdLogger:
     def __init__(
         self,
         statsd_client: StatsClient,
-        metrics_validator: ListValidator | None = None,
+        metrics_validator: ListValidator = PatternAllowListValidator(),
         influxdb_tags_enabled: bool = False,
-        metric_tags_validator: ListValidator | None = None,
+        metric_tags_validator: ListValidator = PatternAllowListValidator(),
         stat_name_handler: Callable[[str], str] | None = None,
         statsd_influxdb_enabled: bool = False,
     ) -> None:
         self.statsd = statsd_client
-        self.metrics_validator = metrics_validator or PatternAllowListValidator()
+        self.metrics_validator = metrics_validator
         self.influxdb_tags_enabled = influxdb_tags_enabled
-        self.metric_tags_validator = metric_tags_validator or PatternAllowListValidator()
+        self.metric_tags_validator = metric_tags_validator
         self.stat_name_handler = stat_name_handler
         self.statsd_influxdb_enabled = statsd_influxdb_enabled
 
@@ -156,32 +155,11 @@ class SafeStatsdLogger:
         return Timer()
 
 
-def _make_safe_statsd_logger(
-    statsd_client: StatsClient,
-    influxdb_tags_enabled: bool,
-    statsd_disabled_tags: str | None,
-    metrics_allow_list: str | None,
-    metrics_block_list: str | None,
-    stat_name_handler: Callable[[str], str] | None,
-    statsd_influxdb_enabled: bool,
-) -> SafeStatsdLogger:
-    metric_tags_validator = PatternBlockListValidator(statsd_disabled_tags)
-    validator = get_validator(metrics_allow_list, metrics_block_list)
-    return SafeStatsdLogger(
-        statsd_client,
-        validator,
-        influxdb_tags_enabled,
-        metric_tags_validator,
-        stat_name_handler,
-        statsd_influxdb_enabled,
-    )
-
-
-def get_udp_statsd_logger(
+def get_statsd_logger(
     *,
-    stats_class: type[StatsClient] | None = None,
-    host: str,
-    port: int,
+    stats_class: type[StatsClient],
+    host: str | None = None,
+    port: int | None = None,
     prefix: str | None = None,
     ipv6: bool = False,
     influxdb_tags_enabled: bool = False,
@@ -191,41 +169,16 @@ def get_udp_statsd_logger(
     stat_name_handler: Callable[[str], str] | None = None,
     statsd_influxdb_enabled: bool = False,
 ) -> SafeStatsdLogger:
-    """Return a UDP StatsD logger."""
-    resolved: type[StatsClient] = stats_class if stats_class is not None else StatsClient
-    statsd_client = resolved(host=host, port=port, prefix=prefix, ipv6=ipv6)
-    return _make_safe_statsd_logger(
-        statsd_client,
-        influxdb_tags_enabled,
-        statsd_disabled_tags,
-        metrics_allow_list,
-        metrics_block_list,
-        stat_name_handler,
-        statsd_influxdb_enabled,
-    )
+    """Return logger for StatsD."""
+    statsd = stats_class(host, port, prefix, ipv6)
 
-
-def get_socket_statsd_logger(
-    *,
-    stats_class: type[UnixSocketStatsClient] | None = None,
-    socket_path: str,
-    prefix: str | None = None,
-    influxdb_tags_enabled: bool = False,
-    statsd_disabled_tags: str | None = None,
-    metrics_allow_list: str | None = None,
-    metrics_block_list: str | None = None,
-    stat_name_handler: Callable[[str], str] | None = None,
-    statsd_influxdb_enabled: bool = False,
-) -> SafeStatsdLogger:
-    """Return a Unix Domain Socket StatsD logger. Note: statsd_ipv6 has no effect in socket mode."""
-    resolved: type[UnixSocketStatsClient] = stats_class if stats_class is not None else UnixSocketStatsClient
-    statsd_client = resolved(socket_path=socket_path, prefix=prefix)
-    return _make_safe_statsd_logger(
-        statsd_client,
+    metric_tags_validator = PatternBlockListValidator(statsd_disabled_tags)
+    validator = get_validator(metrics_allow_list, metrics_block_list)
+    return SafeStatsdLogger(
+        statsd,
+        validator,
         influxdb_tags_enabled,
-        statsd_disabled_tags,
-        metrics_allow_list,
-        metrics_block_list,
+        metric_tags_validator,
         stat_name_handler,
         statsd_influxdb_enabled,
     )

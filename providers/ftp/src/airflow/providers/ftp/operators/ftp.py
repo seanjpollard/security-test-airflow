@@ -72,7 +72,7 @@ class FTPFileTransmitOperator(BaseOperator):
             )
     """
 
-    template_fields: Sequence[str] = ("local_filepath", "remote_filepath", "ftp_conn_id")
+    template_fields: Sequence[str] = ("local_filepath", "remote_filepath")
 
     def __init__(
         self,

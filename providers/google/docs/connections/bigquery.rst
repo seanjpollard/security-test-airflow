@@ -38,9 +38,7 @@ Impersonation Scopes
 
 
 Use Legacy SQL
-  Whether or not the connection should utilize legacy SQL. GoogleSQL is the recommended dialect for
-  BigQuery. BigQuery legacy SQL availability is restricted after June 1, 2026, based on legacy SQL
-  usage during Google's evaluation period.
+  Whether or not the connection should utilize legacy SQL.
 
 Location
     One of `BigQuery locations <https://cloud.google.com/bigquery/docs/locations>`_ where the dataset resides.

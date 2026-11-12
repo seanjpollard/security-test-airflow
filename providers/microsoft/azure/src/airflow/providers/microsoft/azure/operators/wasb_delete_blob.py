@@ -41,7 +41,7 @@ class WasbDeleteBlobOperator(BaseOperator):
         blob does not exist.
     """
 
-    template_fields: Sequence[str] = ("container_name", "blob_name", "wasb_conn_id")
+    template_fields: Sequence[str] = ("container_name", "blob_name")
 
     def __init__(
         self,

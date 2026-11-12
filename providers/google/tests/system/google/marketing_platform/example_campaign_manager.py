@@ -29,6 +29,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
+import uuid
 from datetime import datetime
 from typing import Any, cast
 
@@ -120,7 +122,7 @@ CONVERSION = {
     "ordinal": "0",
     "quantity": 42,
     "value": 123.4,
-    "timestampMicros": "{{ (macros.datetime.now().timestamp() * 1000000) | int }}",
+    "timestampMicros": int(time.time()) * 1000000,
     "customVariables": [
         {
             "kind": "dfareporting#customFloodlightVariable",
@@ -229,7 +231,7 @@ with DAG(
     # [END howto_campaign_manager_wait_for_operation]
 
     # [START howto_campaign_manager_get_report_operator]
-    report_name = "reports/report_{{ macros.uuid.uuid1() }}"
+    report_name = f"reports/report_{str(uuid.uuid1())}"
     get_report = GoogleCampaignManagerDownloadReportOperator(
         task_id="get_report",
         profile_id=USER_PROFILE_ID,

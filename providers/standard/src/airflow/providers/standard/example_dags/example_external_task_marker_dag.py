@@ -36,16 +36,9 @@ with multiple downstream tasks
 ExternalTaskSensor times out. In this case, ExternalTaskSensor will raise AirflowSkipException
 or AirflowSensorTimeout exception
 
-Both Dags must share the same schedule (and must not use ``schedule=None``) so that a parent
-Dag run and its corresponding child Dag run share the same logical date. ExternalTaskSensor
-matches task instances by logical date by default, so unrelated logical dates (e.g. from two
-independently, manually triggered runs) will never be found.
-
 """
 
 from __future__ import annotations
-
-from datetime import timedelta
 
 import pendulum
 
@@ -59,8 +52,8 @@ with DAG(
     dag_id="example_external_task_marker_parent",
     start_date=start_date,
     catchup=False,
-    schedule=timedelta(minutes=30),
-    tags=["example", "example2"],
+    schedule=None,
+    tags=["example2"],
 ) as parent_dag:
     # [START howto_operator_external_task_marker]
     parent_task = ExternalTaskMarker(
@@ -73,9 +66,9 @@ with DAG(
 with DAG(
     dag_id="example_external_task_marker_child",
     start_date=start_date,
-    schedule=timedelta(minutes=30),
+    schedule=None,
     catchup=False,
-    tags=["example", "example2"],
+    tags=["example2"],
 ) as child_dag:
     # [START howto_operator_external_task_sensor]
     child_task1 = ExternalTaskSensor(

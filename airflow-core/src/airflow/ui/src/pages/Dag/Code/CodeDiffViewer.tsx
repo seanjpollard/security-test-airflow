@@ -17,8 +17,7 @@
  * under the License.
  */
 import { Box } from "@chakra-ui/react";
-
-import { DiffEditor, type DiffEditorProps } from "src/components/MonacoEditor";
+import { DiffEditor, type DiffEditorProps } from "@monaco-editor/react";
 
 import { useMonacoTheme } from "src/context/colorMode";
 

@@ -21,8 +21,7 @@ Customizing Labels and Annotations for Pods
 Customizing Pod Labels
 ----------------------
 
-The Helm Chart allows you to customize labels for your Airflow objects. You can set global labels that apply to all objects and pods defined in the chart,
-as well as component-specific labels for individual Airflow components.
+The Helm Chart allows you to customize labels for your Airflow objects. You can set global labels that apply to all objects and pods defined in the chart, as well as component-specific labels for individual Airflow components.
 
 Global Labels
 ~~~~~~~~~~~~~

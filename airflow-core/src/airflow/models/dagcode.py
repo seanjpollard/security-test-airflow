@@ -23,7 +23,7 @@ from uuid import UUID
 
 import sqlalchemy as sa
 import uuid6
-from sqlalchemy import ForeignKey, Index, String, Text, select
+from sqlalchemy import ForeignKey, String, Text, select
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql.expression import literal
@@ -42,7 +42,6 @@ if TYPE_CHECKING:
     from sqlalchemy.sql import Select
 
     from airflow.models.dag_version import DagVersion
-    from airflow.sdk.importers import DagSourceCode  # noqa: SDK001
 
 log = logging.getLogger(__name__)
 
@@ -67,56 +66,36 @@ class DagCode(Base):
     )
     source_code: Mapped[str] = mapped_column(Text().with_variant(MEDIUMTEXT(), "mysql"), nullable=False)
     source_code_hash: Mapped[str] = mapped_column(String(32), nullable=False)
-    language: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="python", server_default="python"
-    )
     dag_version_id: Mapped[UUID] = mapped_column(
         sa.Uuid(), ForeignKey("dag_version.id", ondelete="CASCADE"), nullable=False, unique=True
     )
     dag_version = relationship("DagVersion", back_populates="dag_code", uselist=False)
-    __table_args__ = (Index("idx_dag_code_dag_id_last_updated", dag_id, last_updated),)
 
-    def __init__(
-        self,
-        dag_version: DagVersion,
-        full_filepath: str,
-        source_code: str | None = None,
-        language: str = "python",
-    ):
+    def __init__(self, dag_version, full_filepath: str, source_code: str | None = None):
         self.dag_version = dag_version
         self.fileloc = full_filepath
-        self.source_code = source_code if source_code is not None else DagCode.code(self.dag_version.dag_id)
+        self.source_code = source_code or DagCode.code(self.dag_version.dag_id)
         self.source_code_hash = self.dag_source_hash(self.source_code)
         self.dag_id = dag_version.dag_id
-        self.language = language
 
     @classmethod
     @provide_session
-    def write_code(
-        cls,
-        dag_version: DagVersion,
-        fileloc: str,
-        *,
-        dag_source_code: DagSourceCode | None = None,
-        session: Session = NEW_SESSION,
-    ) -> DagCode:
+    def write_code(cls, dag_version: DagVersion, fileloc: str, session: Session = NEW_SESSION) -> DagCode:
         """
         Write code into database.
 
         :param fileloc: file path of DAG to sync
-        :param dag_source_code: Source code read by the Dag importer; read from ``fileloc`` when not given
         :param session: ORM Session
         """
         log.debug("Writing DAG file %s into DagCode table", fileloc)
-        source_code, language = cls._get_source_code_and_language(fileloc, dag_source_code)
-        dag_code = DagCode(dag_version, fileloc, source_code, language=language)
+        dag_code = DagCode(dag_version, fileloc, cls.get_code_from_file(fileloc))
         session.add(dag_code)
         log.debug("DAG file %s written into DagCode table", fileloc)
         return dag_code
 
     @classmethod
     @provide_session
-    def has_dag(cls, dag_id: str, *, session: Session = NEW_SESSION) -> bool:
+    def has_dag(cls, dag_id: str, session: Session = NEW_SESSION) -> bool:
         """
         Check a dag exists in dag code table.
 
@@ -130,13 +109,13 @@ class DagCode(Base):
 
     @classmethod
     @provide_session
-    def code(cls, dag_id, *, session: Session = NEW_SESSION) -> str:
+    def code(cls, dag_id, session: Session = NEW_SESSION) -> str:
         """
         Return source code for this DagCode object.
 
         :return: source code as string
         """
-        return cls._get_code_from_db(dag_id, session=session)
+        return cls._get_code_from_db(dag_id, session)
 
     @staticmethod
     def get_code_from_file(fileloc):
@@ -151,16 +130,8 @@ class DagCode(Base):
             raise
 
     @classmethod
-    def _get_source_code_and_language(
-        cls, fileloc: str, dag_source_code: DagSourceCode | None
-    ) -> tuple[str, str]:
-        if dag_source_code is None:
-            return cls.get_code_from_file(fileloc), "python"
-        return dag_source_code.source_code, dag_source_code.language
-
-    @classmethod
     @provide_session
-    def _get_code_from_db(cls, dag_id, *, session: Session = NEW_SESSION) -> str:
+    def _get_code_from_db(cls, dag_id, session: Session = NEW_SESSION) -> str:
         dag_code = session.scalar(
             select(cls).where(cls.dag_id == dag_id).order_by(cls.last_updated.desc()).limit(1)
         )
@@ -190,7 +161,7 @@ class DagCode(Base):
 
     @classmethod
     @provide_session
-    def get_latest_dagcode(cls, dag_id: str, *, session: Session = NEW_SESSION) -> DagCode | None:
+    def get_latest_dagcode(cls, dag_id: str, session: Session = NEW_SESSION) -> DagCode | None:
         """
         Get the latest dagcode.
 
@@ -202,33 +173,21 @@ class DagCode(Base):
 
     @classmethod
     @provide_session
-    def update_source_code(
-        cls,
-        dag_id: str,
-        fileloc: str,
-        *,
-        dag_source_code: DagSourceCode | None = None,
-        session: Session = NEW_SESSION,
-    ) -> None:
+    def update_source_code(cls, dag_id: str, fileloc: str, session: Session = NEW_SESSION) -> None:
         """
         Check if the source code of the DAG has changed and update it if needed.
 
         :param dag_id: Dag ID
         :param fileloc: The path of code file to read the code from
-        :param dag_source_code: Source code read by the Dag importer; read from ``fileloc`` when not given
         :param session: The database session.
         :return: None
         """
-        latest_dagcode = cls.get_latest_dagcode(dag_id, session=session)
+        latest_dagcode = cls.get_latest_dagcode(dag_id, session)
         if not latest_dagcode:
             return
-        new_source_code, new_language = cls._get_source_code_and_language(fileloc, dag_source_code)
+        new_source_code = cls.get_code_from_file(fileloc)
         new_source_code_hash = cls.dag_source_hash(new_source_code)
         if new_source_code_hash != latest_dagcode.source_code_hash:
             latest_dagcode.source_code = new_source_code
             latest_dagcode.source_code_hash = new_source_code_hash
-        if latest_dagcode.language != new_language:
-            latest_dagcode.language = new_language
-        # Keep fileloc aligned even when the contents are unchanged (e.g. the file was moved/renamed).
-        if fileloc != latest_dagcode.fileloc:
-            latest_dagcode.fileloc = fileloc
+            session.merge(latest_dagcode)

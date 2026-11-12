@@ -51,22 +51,22 @@ Here is an example of instance
 Configuration of bucket permissions for import / export
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-It is necessary to configure permissions for the bucket to import and export data. To find the service
+It is necessary to configure permissions for the bucket to import and export data. Too find the service
 account for your instance, run the :class:`~airflow.providers.google.cloud.operators.cloud_memorystore.CloudMemorystoreCreateInstanceOperator` or
 :class:`~airflow.providers.google.cloud.operators.cloud_memorystore.CloudMemorystoreGetInstanceOperator` and
 make a use of the service account listed under ``persistenceIamIdentity``.
 
-Grant the service account bucket-level IAM roles that provide access to the bucket metadata and objects.
-This works with uniform bucket-level access, where bucket and object ACLs are disabled.
+You can use :class:`~airflow.providers.google.cloud.operators.gcs.GCSBucketCreateAclEntryOperator`
+operator to set permissions.
 
 .. exampleinclude:: /../../google/tests/system/google/cloud/cloud_memorystore/example_cloud_memorystore_redis.py
     :language: python
     :dedent: 4
-    :start-after: [START howto_operator_set_iam_permissions]
-    :end-before: [END howto_operator_set_iam_permissions]
+    :start-after: [START howto_operator_set_acl_permission]
+    :end-before: [END howto_operator_set_acl_permission]
 
 For further information look at: `Granting restricted permissions for import and export
-<https://cloud.google.com/memorystore/docs/redis/access-control#required_permissions_for_import_and_export>`__
+<https://cloud.google.com/memorystore/docs/redis/import-export-restricted-permissions>`__
 
 .. _howto/operator:CloudMemorystoreCreateInstanceOperator:
 

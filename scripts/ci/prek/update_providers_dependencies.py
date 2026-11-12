@@ -16,10 +16,11 @@
 # specific language governing permissions and limitations
 # under the License.
 # /// script
-# requires-python = ">=3.11,<3.12"
+# requires-python = ">=3.10,<3.11"
 # dependencies = [
 #   "pyyaml>=6.0.3",
 #   "rich>=13.6.0",
+#   "tomli>=2.0.1",
 # ]
 # ///
 from __future__ import annotations
@@ -27,7 +28,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import tomllib
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -59,14 +59,18 @@ errors: list[str] = []
 
 suspended_paths: list[str] = []
 
-ALL_DEPENDENCIES: dict[str, dict[str, list[Any]]] = defaultdict(lambda: defaultdict(list))
+ALL_DEPENDENCIES: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
 
 ALL_PROVIDERS: dict[str, dict[str, Any]] = defaultdict(lambda: defaultdict())
 ALL_PROVIDER_FILES: list[Path] = []
 
 
 def load_pyproject_toml(pyproject_toml_file_path: Path) -> dict[str, Any]:
-    return tomllib.loads(pyproject_toml_file_path.read_text(encoding="utf-8"))
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib  # type: ignore[no-redef]
+    return tomllib.loads(pyproject_toml_file_path.read_text())
 
 
 def find_all_providers_and_provider_files():
@@ -91,7 +95,7 @@ def find_all_providers_and_provider_files():
                         f"The provider {provider_name} does not have 'src' folder"
                         f" in {provider_yaml_file.parent}"
                     )
-                provider_info = yaml.safe_load(provider_yaml_file.read_text(encoding="utf-8"))
+                provider_info = yaml.safe_load(provider_yaml_file.read_text())
                 if provider_info["state"] == "suspended":
                     suspended_paths.append(
                         provider_yaml_file.parent.relative_to(AIRFLOW_PROVIDERS_ROOT_PATH).as_posix()
@@ -204,33 +208,29 @@ if __name__ == "__main__":
         for error in errors:
             console.print(f"[red] {error}")
         console.print(f"[bright_blue]Total: {len(errors)} errors.")
-    unique_sorted_dependencies: dict[str, dict[str, list[Any] | str]] = defaultdict(dict)
+    unique_sorted_dependencies: dict[str, dict[str, list[str] | str]] = defaultdict(dict)
     for key in sorted(ALL_DEPENDENCIES.keys()):
         unique_sorted_dependencies[key]["deps"] = sorted(ALL_DEPENDENCIES[key]["deps"])
         unique_sorted_dependencies[key]["devel-deps"] = sorted(ALL_DEPENDENCIES[key]["devel-deps"])
-        unique_sorted_dependencies[key]["plugins"] = sorted(
-            ALL_DEPENDENCIES[key]["plugins"], key=lambda plugin: plugin["name"]
-        )
+        unique_sorted_dependencies[key]["plugins"] = sorted(ALL_DEPENDENCIES[key]["plugins"])
         unique_sorted_dependencies[key]["cross-providers-deps"] = sorted(
             set(ALL_DEPENDENCIES[key]["cross-providers-deps"])
         )
         excluded_versions = ALL_PROVIDERS[key].get("excluded-python-versions")
         unique_sorted_dependencies[key]["excluded-python-versions"] = excluded_versions or []
-        excluded_platforms = ALL_PROVIDERS[key].get("excluded-platforms")
-        unique_sorted_dependencies[key]["excluded-platforms"] = excluded_platforms or []
         unique_sorted_dependencies[key]["state"] = STATES[key]
     if errors:
         console.print()
         console.print("[red]Errors found during verification. Exiting!")
         console.print()
         sys.exit(1)
-    old_content = (
-        DEPENDENCIES_JSON_FILE_PATH.read_text(encoding="utf-8")
-        if DEPENDENCIES_JSON_FILE_PATH.exists()
-        else ""
+    old_dependencies = (
+        DEPENDENCIES_JSON_FILE_PATH.read_text() if DEPENDENCIES_JSON_FILE_PATH.exists() else "{}"
     )
+    new_dependencies = json.dumps(unique_sorted_dependencies, indent=2) + "\n"
+    old_content = DEPENDENCIES_JSON_FILE_PATH.read_text() if DEPENDENCIES_JSON_FILE_PATH.exists() else ""
     new_content = json.dumps(unique_sorted_dependencies, indent=2) + "\n"
-    DEPENDENCIES_JSON_FILE_PATH.write_text(new_content, encoding="utf-8")
+    DEPENDENCIES_JSON_FILE_PATH.write_text(new_content)
     if new_content != old_content:
         console.print()
         console.print(f"Written {DEPENDENCIES_JSON_FILE_PATH}")

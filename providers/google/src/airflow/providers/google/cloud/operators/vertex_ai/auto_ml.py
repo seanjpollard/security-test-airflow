@@ -46,8 +46,6 @@ if TYPE_CHECKING:
 class AutoMLTrainingJobBaseOperator(GoogleCloudBaseOperator):
     """The base class for operators that launch AutoML jobs on VertexAI."""
 
-    template_fields: Sequence[str] = ("gcp_conn_id",)
-
     def __init__(
         self,
         *,
@@ -116,7 +114,6 @@ class CreateAutoMLForecastingTrainingJobOperator(AutoMLTrainingJobBaseOperator):
         "impersonation_chain",
         "display_name",
         "model_display_name",
-        "gcp_conn_id",
     )
     operator_extra_links = (VertexAIModelLink(), VertexAITrainingLink())
 
@@ -149,7 +146,6 @@ class CreateAutoMLForecastingTrainingJobOperator(AutoMLTrainingJobBaseOperator):
         validation_options: str | None = None,
         budget_milli_node_hours: int = 1000,
         region: str,
-        gcp_conn_id: str = "google_cloud_default",
         impersonation_chain: str | Sequence[str] | None = None,
         parent_model: str | None = None,
         window_stride_length: int | None = None,
@@ -161,7 +157,6 @@ class CreateAutoMLForecastingTrainingJobOperator(AutoMLTrainingJobBaseOperator):
             display_name=display_name,
             model_display_name=model_display_name,
             region=region,
-            gcp_conn_id=gcp_conn_id,
             impersonation_chain=impersonation_chain,
             parent_model=parent_model,
             **kwargs,
@@ -271,7 +266,6 @@ class CreateAutoMLImageTrainingJobOperator(AutoMLTrainingJobBaseOperator):
         "dataset_id",
         "region",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (VertexAIModelLink(), VertexAITrainingLink())
 
@@ -290,17 +284,12 @@ class CreateAutoMLImageTrainingJobOperator(AutoMLTrainingJobBaseOperator):
         budget_milli_node_hours: int | None = None,
         disable_early_stopping: bool = False,
         region: str,
-        gcp_conn_id: str = "google_cloud_default",
         impersonation_chain: str | Sequence[str] | None = None,
         parent_model: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(
-            region=region,
-            gcp_conn_id=gcp_conn_id,
-            impersonation_chain=impersonation_chain,
-            parent_model=parent_model,
-            **kwargs,
+            region=region, impersonation_chain=impersonation_chain, parent_model=parent_model, **kwargs
         )
         self.dataset_id = dataset_id
         self.prediction_type = prediction_type
@@ -369,7 +358,6 @@ class CreateAutoMLTabularTrainingJobOperator(AutoMLTrainingJobBaseOperator):
         "dataset_id",
         "region",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (VertexAIModelLink(), VertexAITrainingLink())
 
@@ -394,17 +382,12 @@ class CreateAutoMLTabularTrainingJobOperator(AutoMLTrainingJobBaseOperator):
         export_evaluated_data_items_bigquery_destination_uri: str | None = None,
         export_evaluated_data_items_override_destination: bool = False,
         region: str,
-        gcp_conn_id: str = "google_cloud_default",
         impersonation_chain: str | Sequence[str] | None = None,
         parent_model: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(
-            region=region,
-            gcp_conn_id=gcp_conn_id,
-            impersonation_chain=impersonation_chain,
-            parent_model=parent_model,
-            **kwargs,
+            region=region, impersonation_chain=impersonation_chain, parent_model=parent_model, **kwargs
         )
         self.dataset_id = dataset_id
         self.target_column = target_column
@@ -498,13 +481,7 @@ class DeleteAutoMLTrainingJobOperator(GoogleCloudBaseOperator):
     AutoMLTabularTrainingJob, AutoMLTextTrainingJob, or AutoMLVideoTrainingJob.
     """
 
-    template_fields: Sequence[str] = (
-        "training_pipeline_id",
-        "region",
-        "project_id",
-        "impersonation_chain",
-        "gcp_conn_id",
-    )
+    template_fields = ("training_pipeline_id", "region", "project_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -562,7 +539,6 @@ class ListAutoMLTrainingJobOperator(GoogleCloudBaseOperator):
         "region",
         "project_id",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = [
         VertexAITrainingPipelinesLink(),

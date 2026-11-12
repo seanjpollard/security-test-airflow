@@ -33,6 +33,6 @@ Here is the current Database schema diagram.
    `db command <cli-and-env-variables-ref.html#db>`_ for the commands that you can use to manage
    the migrations.
 
-.. This diagram is automatically generated during documentation build by the ``generate_erd`` Sphinx extension.
+.. This image is automatically generated during documentation build by the ``generate_erd`` Sphinx extension.
 
-.. mermaid:: img/airflow_erd.mmd
+.. image:: img/airflow_erd.svg

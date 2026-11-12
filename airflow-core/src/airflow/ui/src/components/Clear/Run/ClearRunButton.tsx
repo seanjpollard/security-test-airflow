@@ -16,51 +16,58 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import type { ButtonProps } from "@chakra-ui/react";
-import { useDisclosure } from "@chakra-ui/react";
+import { IconButton, useDisclosure } from "@chakra-ui/react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { useTranslation } from "react-i18next";
 import { CgRedo } from "react-icons/cg";
 
 import type { DAGRunResponse } from "openapi/requests/types.gen";
-
-import { IconButton } from "src/system-components";
-
-import { SHORTCUTS } from "src/context/keyboardShortcuts";
-import { useShortcut } from "src/hooks/useShortcut";
+import { Tooltip } from "src/components/ui";
 
 import ClearRunDialog from "./ClearRunDialog";
 
 type Props = {
   readonly dagRun: DAGRunResponse;
   readonly isHotkeyEnabled?: boolean;
-} & ButtonProps;
+};
 
-export const ClearRunButton = ({ dagRun, isHotkeyEnabled = false, ...rest }: Props) => {
+const ClearRunButton = ({ dagRun, isHotkeyEnabled = false }: Props) => {
   const { onClose, onOpen, open } = useDisclosure();
   const { t: translate } = useTranslation();
 
-  useShortcut({
-    ...SHORTCUTS.runActions.clearRun,
-    callback: () => {
+  useHotkeys(
+    "shift+c",
+    () => {
       onOpen();
     },
-    options: { enabled: isHotkeyEnabled },
-  });
+    { enabled: isHotkeyEnabled },
+  );
 
   return (
     <>
-      <IconButton
-        {...rest}
-        label={
+      <Tooltip
+        closeDelay={100}
+        content={
           isHotkeyEnabled
             ? translate("dags:runAndTaskActions.clear.buttonTooltip")
             : translate("dags:runAndTaskActions.clear.button", { type: translate("dagRun_one") })
         }
-        onClick={onOpen}
+        openDelay={100}
       >
-        <CgRedo />
-      </IconButton>
-      <ClearRunDialog dagRun={dagRun} onClose={onClose} open={open} />
+        <IconButton
+          aria-label={translate("dags:runAndTaskActions.clear.button", { type: translate("dagRun_one") })}
+          colorPalette="brand"
+          onClick={onOpen}
+          size="md"
+          variant="ghost"
+        >
+          <CgRedo />
+        </IconButton>
+      </Tooltip>
+
+      {open ? <ClearRunDialog dagRun={dagRun} onClose={onClose} open={open} /> : undefined}
     </>
   );
 };
+
+export default ClearRunButton;

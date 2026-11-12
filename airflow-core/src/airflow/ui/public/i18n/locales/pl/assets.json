@@ -1,36 +1,11 @@
 {
   "additional_data": "Dodatkowe dane",
-  "alias_few": "Aliasy",
-  "alias_many": "Aliasów",
-  "alias_one": "Alias",
-  "alias_other": "Aliasy",
-  "aliases": "Aliasy",
   "asset_few": "Zasoby",
   "asset_many": "Zasobów",
   "asset_one": "Zasób",
   "asset_other": "Zasoby",
-  "assetStateStore": {
-    "add": "Dodaj wpis magazynu stanu zasobu",
-    "clearAll": {
-      "resource": "całego magazynu stanu zasobu",
-      "title": "Wyczyść cały magazyn stanu zasobu",
-      "warning": "Cały magazyn stanu zasobu zostanie wyczyszczony. Zadania, które używają go do koordynacji pracy, utracą zachowane dane."
-    },
-    "delete": "Usuń wpis magazynu stanu zasobu",
-    "deleteWarning": "Zasób utraci ten zachowany wpis magazynu stanu.",
-    "edit": "Edytuj wpis magazynu stanu zasobu",
-    "emptyState": "Magazyn stanu zasobu przechowuje wartości przypisane do tożsamości zasobu, współdzielone przez wszystkie wykonania Dagów. Workery mogą zapisywać do magazynu stanu zasobu przez Task SDK.",
-    "entry_few": "Wpisy",
-    "entry_many": "Wpisów",
-    "entry_one": "Wpis",
-    "entry_other": "Wpisy",
-    "lastUpdatedBy": "Ostatnio zaktualizowane przez",
-    "lastUpdatedByApi": "API",
-    "lastUpdatedByWatcher": "Watcher",
-    "title": "Magazyn stanu zasobu"
-  },
-  "consumingDags": "Dagi konsumujące",
-  "consumingTasks": "Zadania konsumujące",
+  "consumingDags": "Przetwarzanie Dagów",
+  "consumingTasks": "Przetwarzanie zadań",
   "createEvent": {
     "button": "Utwórz zdarzenie",
     "manual": {
@@ -39,25 +14,20 @@
       "label": "Ręcznie"
     },
     "materialize": {
-      "description": "Uruchom Daga nadrzędnego względem tego zasobu",
-      "descriptionWithDag": "Uruchom Daga nadrzędnego względem tego zasobu: {{dagName}}",
+      "description": "Wykonaj Dag zależny od tego zasobu",
+      "descriptionWithDag": "Wykonaj Dag zależny od tego zasobu: {{dagName}}",
       "label": "Materializuj",
-      "unpauseDag": "Wznów {{dagName}} przy uruchomieniu"
+      "unpauseDag": "Wznów {{dagName}} przy wywołaniu"
     },
     "success": {
       "manualDescription": "Ręczne utworzenie zdarzenia zasobu zakończone sukcesem.",
       "manualTitle": "Zdarzenie zasobu utworzone",
-      "materializeDescription": "Nadrzędny Dag {{dagId}} został pomyślnie uruchomiony.",
+      "materializeDescription": "Zależny Dag {{dagId}} został pomyślnie wywołany.",
       "materializeTitle": "Materializowanie zasobu"
     },
     "title": "Utwórz zdarzenie zasobu dla {{name}}"
   },
-  "events": "Zdarzenia",
-  "filters": {
-    "groupPlaceholder": "Szukaj grupy",
-    "hasEvents": "Ma zdarzenia",
-    "lastEventDateRange": "Data ostatniego zdarzenia"
-  },
+  "extra": "Dodatkowe",
   "group": "Grupa",
   "lastAssetEvent": "Ostatnie zdarzenie zasobu",
   "name": "Nazwa",
@@ -65,10 +35,5 @@
   "scheduledDags": "Zaplanowane Dagi",
   "scheduling": "Planowanie",
   "searchPlaceholder": "Szukaj zasobów",
-  "taskDependencies": "Zależności zadań",
-  "watcher_few": "Watchery",
-  "watcher_many": "Watcherów",
-  "watcher_one": "Watcher",
-  "watcher_other": "Watchery",
-  "watchers": "Watchery"
+  "taskDependencies": "Zależności zadań"
 }

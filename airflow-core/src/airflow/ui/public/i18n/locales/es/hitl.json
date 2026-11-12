@@ -1,7 +1,8 @@
 {
   "filters": {
     "body": "Cuerpo",
-    "createdAt": "Creado en",
+    "createdAtFrom": "Creado Desde",
+    "createdAtTo": "Creado Hasta",
     "response": {
       "all": "Todas",
       "pending": "Pendientes",
@@ -11,9 +12,9 @@
   "requiredAction_many": "Acciones Requeridas",
   "requiredAction_one": "Acción Requerida",
   "requiredAction_other": "Acciones Requeridas",
-  "requiredActionCount_many": "Acciones Requeridas ({{count, number}})",
-  "requiredActionCount_one": "Acción Requerida ({{count, number}})",
-  "requiredActionCount_other": "Acciones Requeridas ({{count, number}})",
+  "requiredActionCount_many": "Acciones Requeridas ({{count}})",
+  "requiredActionCount_one": "Acción Requerida ({{count}})",
+  "requiredActionCount_other": "Acciones Requeridas ({{count}})",
   "requiredActionState": "Estado de Acción Requerida",
   "response": {
     "created": "Respuesta creada el ",
@@ -22,34 +23,19 @@
     "optionsLabel": "Opciones",
     "received": "Respuesta recibida en ",
     "respond": "Responder",
-    "responded_by_user_name": "Respondido por (Nombre de Usuario)",
-    "selectAtLeastOne": "Selecciona al menos una opción",
+    "responded_by_user_name": "Respondido por (Nombre de usuario)",
     "success": "Respuesta de {{taskId}} exitosa",
     "title": "Instancia de Tarea Humana - {{taskId}}"
   },
-  "review": {
-    "detail": {
-      "selectRequiredAction": "Selecciona una acción requerida para ver detalles"
-    },
-    "list": {
-      "completedRequiredActions": "Acciones requeridas completadas ({{count, number}})",
-      "loadError": "No se pudieron cargar las acciones requeridas",
-      "loadingActions": "Cargando acciones requeridas...",
-      "pendingRequiredActions": "Acciones requeridas pendientes ({{count, number}})"
-    },
-    "openReviewDrawer": "Abrir Panel de Revisión",
-    "pageLimitHint": "Solo se muestran aquí las primeras acciones. Usa \"$t(review.viewAll)\" para ver todas.",
-    "viewAll": "Ver todas las acciones requeridas"
-  },
   "state": {
-    "approvalReceived": "Aprobación Recibida",
-    "approvalRequired": "Aprobación Requerida",
-    "choiceReceived": "Elección Recibida",
-    "choiceRequired": "Elección Requerida",
-    "noResponseReceived": "Respuesta No Recibida",
-    "rejectionReceived": "Rechazo Recibido",
-    "responseReceived": "Respuesta Recibida",
-    "responseRequired": "Respuesta Requerida"
+    "approvalReceived": "Aprobación recibida",
+    "approvalRequired": "Aprobación requerida",
+    "choiceReceived": "Elección recibida",
+    "choiceRequired": "Elección requerida",
+    "noResponseReceived": "No se recibió respuesta",
+    "rejectionReceived": "Rechazo recibido",
+    "responseReceived": "Respuesta recibida",
+    "responseRequired": "Respuesta requerida"
   },
   "subject": "Asunto"
 }

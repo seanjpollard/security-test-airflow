@@ -65,7 +65,7 @@ class CreateEndpointOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = ("region", "project_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("region", "project_id", "impersonation_chain")
     operator_extra_links = (VertexAIEndpointLink(),)
 
     def __init__(
@@ -148,13 +148,7 @@ class DeleteEndpointOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = (
-        "region",
-        "endpoint_id",
-        "project_id",
-        "impersonation_chain",
-        "gcp_conn_id",
-    )
+    template_fields = ("region", "endpoint_id", "project_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -238,14 +232,7 @@ class DeployModelOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = (
-        "region",
-        "endpoint_id",
-        "project_id",
-        "deployed_model",
-        "impersonation_chain",
-        "gcp_conn_id",
-    )
+    template_fields = ("region", "endpoint_id", "project_id", "deployed_model", "impersonation_chain")
     operator_extra_links = (VertexAIModelLink(),)
 
     def __init__(
@@ -331,13 +318,7 @@ class GetEndpointOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = (
-        "region",
-        "endpoint_id",
-        "project_id",
-        "impersonation_chain",
-        "gcp_conn_id",
-    )
+    template_fields = ("region", "endpoint_id", "project_id", "impersonation_chain")
     operator_extra_links = (VertexAIEndpointLink(),)
 
     def __init__(
@@ -435,7 +416,7 @@ class ListEndpointsOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = ("region", "project_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("region", "project_id", "impersonation_chain")
     operator_extra_links = (VertexAIEndpointListLink(),)
 
     def __init__(
@@ -524,14 +505,7 @@ class UndeployModelOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = (
-        "region",
-        "endpoint_id",
-        "deployed_model_id",
-        "project_id",
-        "impersonation_chain",
-        "gcp_conn_id",
-    )
+    template_fields = ("region", "endpoint_id", "deployed_model_id", "project_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -605,13 +579,7 @@ class UpdateEndpointOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = (
-        "region",
-        "endpoint_id",
-        "project_id",
-        "impersonation_chain",
-        "gcp_conn_id",
-    )
+    template_fields = ("region", "endpoint_id", "project_id", "impersonation_chain")
     operator_extra_links = (VertexAIEndpointLink(),)
 
     def __init__(

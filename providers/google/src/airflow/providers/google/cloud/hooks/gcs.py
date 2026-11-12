@@ -1201,36 +1201,6 @@ class GCSHook(GoogleBaseHook):
 
         self.log.info("A new ACL entry created in bucket: %s", bucket_name)
 
-    def add_bucket_iam_binding(
-        self,
-        bucket_name: str,
-        role: str,
-        member: str,
-        user_project: str | None = None,
-    ) -> None:
-        """
-        Add a member to an IAM role binding on a bucket.
-
-        :param bucket_name: Name of a bucket.
-        :param role: The IAM role to grant.
-        :param member: The IAM member to grant the role to.
-        :param user_project: (Optional) The project to be billed for this request.
-            Required for Requester Pays buckets.
-        """
-        self.log.info("Adding %s to IAM role %s on bucket %s", member, role, bucket_name)
-        client = self.get_conn()
-        bucket = client.bucket(bucket_name=bucket_name, user_project=user_project)
-        policy = bucket.get_iam_policy(requested_policy_version=3)
-        for binding in policy.bindings:
-            if binding["role"] == role and binding.get("condition") is None:
-                binding["members"].add(member)
-                break
-        else:
-            policy.bindings.append({"role": role, "members": {member}})
-        bucket.set_iam_policy(policy)
-
-        self.log.info("Added %s to IAM role %s on bucket %s", member, role, bucket_name)
-
     def insert_object_acl(
         self,
         bucket_name: str,
@@ -1392,7 +1362,6 @@ class GCSHook(GoogleBaseHook):
         gcs_bucket = self.get_bucket(bucket_name)
         local_gcs_objects = []
 
-        local_dir_resolved = local_dir_path.resolve()
         for blob in gcs_bucket.list_blobs(prefix=prefix):
             # GCS lists "directories" as objects ending with a slash. We should skip them.
             if blob.name.endswith("/"):
@@ -1400,16 +1369,6 @@ class GCSHook(GoogleBaseHook):
 
             blob_path = Path(blob.name)
             local_target_path = local_dir_path.joinpath(blob_path.relative_to(prefix))
-            # Containment check: ``blob.name`` originates outside the worker, and GCS allows
-            # object names containing ``..``. Resolve the target and assert it stays under
-            # ``local_dir`` so a hostile blob name cannot write outside the intended directory
-            # (CWE-22).
-            if not local_target_path.resolve().is_relative_to(local_dir_resolved):
-                raise ValueError(
-                    f"Refusing to write GCS blob {blob.name!r}: resolved path "
-                    f"{local_target_path} escapes the target directory {local_dir_path}."
-                )
-
             if not local_target_path.parent.exists():
                 local_target_path.parent.mkdir(parents=True, exist_ok=True)
                 self.log.debug("Created local directory: %s", local_target_path.parent)

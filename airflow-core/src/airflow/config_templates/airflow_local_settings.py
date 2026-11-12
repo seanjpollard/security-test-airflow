@@ -50,9 +50,6 @@ DAG_PROCESSOR_LOG_TARGET: str = conf.get_mandatory_value("logging", "DAG_PROCESS
 BASE_LOG_FOLDER: str = os.path.expanduser(conf.get_mandatory_value("logging", "BASE_LOG_FOLDER"))
 
 # This isn't used anymore, but kept for compat of people who might have imported it
-# Default value for the ``[logging] logging_config_class`` option. Plain
-# ``logging.config.dictConfig`` dict; the ``_class`` suffix on the config option
-# is historical.
 DEFAULT_LOGGING_CONFIG: dict[str, Any] = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -124,11 +121,6 @@ if EXTRA_LOGGER_NAMES:
 ##################
 
 REMOTE_LOGGING: bool = conf.getboolean("logging", "remote_logging")
-
-# Side-channel attributes read by ``discover_remote_log_handler`` from whichever
-# module ``[logging] logging_config_class`` resolves through. Custom modules that
-# override that option should define both at module scope to enable remote
-# task-log read-back.
 REMOTE_TASK_LOG: RemoteLogIO | RemoteLogStreamIO | None = None
 DEFAULT_REMOTE_CONN_ID: str | None = None
 
@@ -256,25 +248,19 @@ if REMOTE_LOGGING:
         )
 
     elif remote_base_log_folder.startswith("stackdriver://"):
-        from airflow.providers.google.cloud.log.stackdriver_task_handler import StackdriverRemoteLogIO
-
         key_path = conf.get_mandatory_value("logging", "GOOGLE_KEY_PATH", fallback=None)
         # stackdriver:///airflow-tasks => airflow-tasks
         log_name = urlsplit(remote_base_log_folder).path[1:]
+        STACKDRIVER_REMOTE_HANDLERS = {
+            "task": {
+                "class": "airflow.providers.google.cloud.log.stackdriver_task_handler.StackdriverTaskHandler",
+                "formatter": "airflow",
+                "gcp_log_name": log_name,
+                "gcp_key_path": key_path,
+            }
+        }
 
-        REMOTE_TASK_LOG = StackdriverRemoteLogIO(
-            **cast(
-                "dict[str, Any]",
-                {
-                    "base_log_folder": BASE_LOG_FOLDER,
-                    "gcp_log_name": log_name,
-                    "gcp_key_path": key_path,
-                    "delete_local_copy": delete_local_copy,
-                }
-                | _io_kwargs,
-            )
-        )
-
+        DEFAULT_LOGGING_CONFIG["handlers"].update(STACKDRIVER_REMOTE_HANDLERS)
     elif remote_base_log_folder.startswith("oss://"):
         from airflow.providers.alibaba.cloud.log.oss_task_handler import OSSRemoteLogIO
 
@@ -357,10 +343,7 @@ if REMOTE_LOGGING:
     elif OPENSEARCH_HOST:
         from airflow.providers.opensearch.log.os_task_handler import OpensearchRemoteLogIO
 
-        # ``[opensearch] port`` declares an empty-string default, so the key is always present and
-        # ``conf.getint`` raises on ``int("")`` instead of falling back to 9200.
-        _opensearch_port = conf.get("opensearch", "PORT", fallback="")
-        OPENSEARCH_PORT = int(_opensearch_port) if _opensearch_port else 9200
+        OPENSEARCH_PORT = conf.getint("opensearch", "PORT", fallback=9200)
         OPENSEARCH_USERNAME: str = conf.get_mandatory_value("opensearch", "USERNAME")
         OPENSEARCH_PASSWORD: str = conf.get_mandatory_value("opensearch", "PASSWORD")
         OPENSEARCH_WRITE_STDOUT: bool = conf.getboolean("opensearch", "WRITE_STDOUT")

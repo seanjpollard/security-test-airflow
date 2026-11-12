@@ -16,7 +16,6 @@
 # under the License.
 from __future__ import annotations
 
-from multiprocessing import SimpleQueue
 from unittest.mock import MagicMock
 
 import pytest
@@ -30,10 +29,8 @@ def setup_executor(monkeypatch):
     executor.workers = {}
     executor._unread_messages = MagicMock()
     executor.activity_queue = MagicMock()
-    executor.result_queue = SimpleQueue()
     monkeypatch.setattr(executor, "_spawn_worker", MagicMock())
-    yield executor
-    executor.result_queue.close()
+    return executor
 
 
 def test_no_workers_on_no_work(setup_executor):

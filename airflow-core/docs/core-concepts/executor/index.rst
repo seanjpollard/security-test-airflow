@@ -271,18 +271,20 @@ Example:
 
     ExecuteTask(
         token="mock",
-        ti=TaskInstanceDTO(
+        ti=TaskInstance(
             id=UUID("4d828a62-a417-4936-a7a6-2b3fabacecab"),
             task_id="mock",
             dag_id="mock",
             run_id="mock",
             try_number=1,
-            dag_version_id=UUID("4d828a62-a417-4936-a7a6-2b3fabacecab"),
             map_index=-1,
             pool_slots=1,
             queue="default",
             priority_weight=1,
             executor_config=None,
+            parent_context_carrier=None,
+            context_carrier=None,
+            queued_dttm=None,
         ),
         dag_rel_path=PurePosixPath("mock.py"),
         bundle_info=BundleInfo(name="n/a", version="no matter"),
@@ -321,7 +323,7 @@ The following methods aren't required to override to have a functional Airflow e
 * ``start``: The Airflow scheduler job will call this method after it initializes the executor object. Any additional setup required by the executor can be completed here.
 * ``end``: The Airflow scheduler job will call this method as it is tearing down. Any synchronous cleanup required to finish running jobs should be done here.
 * ``terminate``: More forcefully stop the executor, even killing/stopping in-flight tasks instead of synchronously waiting for completion.
-* ``try_adopt_task_instances``: Tasks that have been abandoned (e.g. from a scheduler job that died) are provided to the executor to adopt or otherwise handle them via this method. Any tasks that cannot be adopted (by default the BaseExecutor assumes all cannot be adopted) should be returned. Successfully adopted unfinished tasks occupy executor parallelism slots until completion is reported.
+* ``try_adopt_task_instances``: Tasks that have been abandoned (e.g. from a scheduler job that died) are provided to the executor to adopt or otherwise handle them via this method. Any tasks that cannot be adopted (by default the BaseExecutor assumes all cannot be adopted) should be returned.
 * ``get_cli_commands``: Executors may vend CLI commands to users by implementing this method, see the `CLI`_ section below for more details.
 * ``get_task_log``: Executors may vend log messages to Airflow task logs by implementing this method, see the `Logging`_ section below for more details.
 
@@ -336,27 +338,6 @@ The ``BaseExecutor`` class interface contains a set of attributes that Airflow c
 * ``is_single_threaded``: Whether or not the executor is single threaded. This is particularly relevant to what database backends are supported. Single threaded executors can run with any backend, including SQLite.
 * ``is_production``: Whether or not the executor should be used for production purposes. A UI message is displayed to users when they are using a non-production ready executor.
 * ``serve_logs``: Whether or not the executor supports serving logs, see :doc:`/administration-and-deployment/logging-monitoring/logging-tasks`.
-* ``supports_task_instance_uuid``: Whether task submission, adoption, result decoding and cleanup all use task-instance UUIDs. Defaults to ``False`` to support existing provider releases. ``LocalExecutor`` enables this capability.
-
-.. versionadded:: 3.4.0
-
-   The ``supports_task_instance_uuid`` capability, ``TaskInstanceUuid``, and the ``get_workload_key`` and
-   ``get_task_key`` helpers.
-
-UUID-capable executors use ``get_workload_key(workload)`` and ``get_task_key(ti)`` for executor bookkeeping.
-These helpers return ``TaskInstanceUuid`` for task workloads. ``TaskInstanceUuid`` wraps the task instance UUID
-and is available from ``airflow.executors.workloads.types``. Executor queues and results use this distinct key;
-the task instance model and workload DTO retain their UUID-valued ``id`` fields.
-``ExecuteTask.key`` retains its coordinate-based value for existing providers. Providers supporting older
-Airflow releases must guard use of these helpers with ``AIRFLOW_V_3_4_PLUS`` or feature detection and retain
-their paths for older Airflow versions.
-
-The scheduler translates legacy coordinate events using UUIDs captured during submission or adoption;
-it never resolves them against the current database row. Unknown or ambiguous identities are discarded.
-Legacy executors cannot distinguish a delayed event from a new attempt that reuses the entire coordinate
-key, including the try number. Features requiring isolation across such reuse must require
-``supports_task_instance_uuid``. Updating dispatch keys alone does not satisfy this capability: remote
-results and adopted tasks must retain the UUID of the submitted attempt.
 
 CLI
 ^^^

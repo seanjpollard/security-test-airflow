@@ -18,11 +18,10 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy.orm import Session
 
 from airflow.models.dag import DagModel
 from airflow.models.dagwarning import DagWarning
-from airflow.utils.session import NEW_SESSION, provide_session
+from airflow.utils.session import provide_session
 
 from tests_common.test_utils.asserts import assert_queries_count
 from tests_common.test_utils.db import clear_db_dag_warnings, clear_db_dags
@@ -49,7 +48,7 @@ expected_display_names = {
 
 @pytest.fixture(autouse=True)
 @provide_session
-def setup(dag_maker, testing_dag_bundle, *, session: Session = NEW_SESSION) -> None:
+def setup(dag_maker, testing_dag_bundle, session=None) -> None:
     clear_db_dags()
     clear_db_dag_warnings()
 
@@ -115,26 +114,7 @@ class TestGetDagWarnings:
         response = test_client.get("/dagWarnings", params={"warning_type": "invalid"})
         response_json = response.json()
         assert response.status_code == 422
-        assert response_json["detail"][0]["msg"] == (
-            "Input should be 'asset conflict', 'duplicate dag id', 'non-existent pool', "
-            "'runtime varying value' or 'task group cycle'"
+        assert (
+            response_json["detail"][0]["msg"]
+            == "Input should be 'asset conflict', 'non-existent pool' or 'runtime varying value'"
         )
-
-    def test_get_dag_warnings_non_matching_type(self, test_client):
-        response = test_client.get("/dagWarnings", params={"warning_type": "yaml:unused_type"})
-        response_json = response.json()
-        assert response.status_code == 200
-        assert response_json["total_entries"] == 0
-        assert response_json["dag_warnings"] == []
-
-    def test_get_dag_warnings_importer_defined_type(self, test_client, session):
-        session.add(DagWarning(DAG1_ID, "yaml:schema_violation", "importer message"))
-        session.commit()
-
-        response = test_client.get("/dagWarnings", params={"warning_type": "yaml:schema_violation"})
-
-        assert response.status_code == 200
-        response_json = response.json()
-        assert response_json["total_entries"] == 1
-        assert response_json["dag_warnings"][0]["warning_type"] == "yaml:schema_violation"
-        assert response_json["dag_warnings"][0]["message"] == "importer message"

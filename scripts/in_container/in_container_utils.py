@@ -29,8 +29,6 @@ from rich.console import Console
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
-    from fastapi.routing import RouteContext
-    from starlette.routing import BaseRoute
 
 
 click.rich_click.COLOR_SYSTEM = "standard"
@@ -69,17 +67,13 @@ def run_command(cmd: list[str], github_actions: bool, **kwargs) -> subprocess.Co
 def generate_openapi_file(app: FastAPI, file_path: Path, prefix: str = "", only_ui: bool = False):
     import yaml
     from fastapi.openapi.utils import get_openapi
-    from fastapi.routing import iter_route_contexts
+    from fastapi.routing import APIRoute
 
-    routes: list[BaseRoute | RouteContext] = list(app.routes)
     if only_ui:
-        routes = []
-        for context in iter_route_contexts(app.routes):
-            if context.path and context.path.startswith("/ui/"):
-                # ui_router sets include_in_schema=False to keep these routes out of the public spec, and
-                # FastAPI fixes that flag on an included route when it first resolves it.
-                object.__setattr__(context, "include_in_schema", True)
-                routes.append(context)
+        for route in app.routes:
+            if not isinstance(route, APIRoute):
+                continue
+            route.include_in_schema = route.path.startswith("/ui/")
 
     with file_path.open("w+") as f:
         openapi_schema = get_openapi(
@@ -87,7 +81,7 @@ def generate_openapi_file(app: FastAPI, file_path: Path, prefix: str = "", only_
             version=app.version,
             openapi_version=app.openapi_version,
             description=app.description,
-            routes=routes,
+            routes=app.routes,
         )
         if prefix:
             openapi_schema["paths"] = {

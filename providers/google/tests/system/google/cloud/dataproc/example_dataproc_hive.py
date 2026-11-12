@@ -95,7 +95,7 @@ with DAG(
     schedule="@once",
     start_date=datetime(2021, 1, 1),
     catchup=False,
-    tags=["example", "managed-spark", "hive"],
+    tags=["example", "dataproc", "hive"],
 ) as dag:
     # [START how_to_cloud_dataproc_create_cluster_operator]
     create_cluster = DataprocCreateClusterOperator(

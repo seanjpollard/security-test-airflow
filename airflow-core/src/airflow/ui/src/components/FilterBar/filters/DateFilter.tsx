@@ -16,8 +16,6 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import type { ChangeEvent } from "react";
-
 import dayjs from "dayjs";
 
 import { DateTimeInput } from "src/components/DateTimeInput";
@@ -31,7 +29,7 @@ export const DateFilter = ({ filter, onChange, onRemove }: FilterPluginProps) =>
   const displayValue =
     hasValue && typeof filter.value === "string" ? dayjs(filter.value).format("MMM DD, YYYY, hh:mm A") : "";
 
-  const handleDateChange = (event: ChangeEvent<HTMLInputElement>) => {
+  const handleDateChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const { value } = event.target;
 
     onChange(value || undefined);

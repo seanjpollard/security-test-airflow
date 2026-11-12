@@ -20,9 +20,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import { useConnectionServiceDeleteConnection, useConnectionServiceGetConnectionsKey } from "openapi/queries";
-
-import { toaster } from "src/system-components";
-
+import { toaster } from "src/components/ui";
 import { createErrorToaster } from "src/utils";
 
 export const useDeleteConnection = ({ onSuccessConfirm }: { onSuccessConfirm: () => void }) => {

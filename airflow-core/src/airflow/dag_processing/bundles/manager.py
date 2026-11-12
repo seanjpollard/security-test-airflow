@@ -16,19 +16,12 @@
 # under the License.
 from __future__ import annotations
 
-import functools
-import importlib
-import logging
-import os
 import warnings
-from collections import defaultdict
-from contextlib import nullcontext
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING
 
 from itsdangerous import URLSafeSerializer
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import and_, delete, exists, or_, select, update
+from sqlalchemy import delete, select
 
 from airflow._shared.module_loading import import_string
 from airflow.configuration import conf
@@ -36,50 +29,15 @@ from airflow.dag_processing.bundles.base import BaseDagBundle  # noqa: TC001
 from airflow.exceptions import AirflowConfigException
 from airflow.models.dagbundle import DagBundleModel
 from airflow.models.team import Team
-from airflow.providers_manager import ProvidersManager
 from airflow.utils.log.logging_mixin import LoggingMixin
-from airflow.utils.session import NEW_SESSION, create_session, provide_session
+from airflow.utils.session import NEW_SESSION, provide_session
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Collection, Iterable
-    from contextlib import AbstractContextManager
+    from collections.abc import Iterable
 
-    from sqlalchemy.engine import CursorResult
     from sqlalchemy.orm import Session
 
-log = logging.getLogger(__name__)
-
 _example_dag_bundle_name = "example_dags"
-
-# Chunk size for the one-time startup repair of unconfigured bundles.
-_REASSIGN_BATCH_SIZE = 1000
-
-
-def _guess_best_bundle_for_fileloc(
-    fileloc: str, descending_bundle_paths: dict[str, Path]
-) -> tuple[str, str] | None:
-    """
-    Return ``(bundle_name, relative_fileloc)`` for the first bundle whose path contains ``fileloc``.
-
-    ``descending_bundle_paths`` must be sorted by path length descending so
-    the deepest bundle wins when paths overlap.
-
-    Returns ``None`` when ``fileloc`` is not under any bundle's path.
-
-    Uses the same plain ``Path.relative_to`` check as
-    ``BaseDagImporter.get_relative_path``, so the ``relative_fileloc`` written
-    here matches what the next parse computes for the same file. Filelocs are
-    produced by the Dag processor parsing admin-controlled bundle files, so they
-    are trusted and need no path-traversal normalization.
-    """
-    file_path = Path(fileloc)
-    for name, path in descending_bundle_paths.items():
-        try:
-            relative = file_path.relative_to(path)
-        except ValueError:
-            continue
-        return name, str(relative)
-    return None
 
 
 class _ExternalBundleConfig(BaseModel):
@@ -110,28 +68,6 @@ def _bundle_item_exc(msg):
     )
 
 
-class _BundleConfigSnapshot(NamedTuple):
-    """The configured Dag bundles, as names only and as full configs."""
-
-    configs: tuple[_ExternalBundleConfig, ...]
-    names: frozenset[str]
-
-
-@functools.cache
-def _load_bundle_config_snapshot() -> _BundleConfigSnapshot:
-    """Read and validate the configured Dag bundles, without importing their classes."""
-    bundle_config_list = _read_bundle_config_list()
-    if not bundle_config_list:
-        return _BundleConfigSnapshot(configs=(), names=frozenset())
-    if conf.getboolean("core", "LOAD_EXAMPLES"):
-        _add_example_dag_bundle(bundle_config_list)
-        _add_provider_example_dags_to_bundle(bundle_config_list)
-    return _BundleConfigSnapshot(
-        configs=tuple(bundle_config_list),
-        names=frozenset(cfg.name for cfg in bundle_config_list),
-    )
-
-
 def _parse_bundle_config(config_list) -> list[_ExternalBundleConfig]:
     bundles = {}
     for item in config_list:
@@ -155,37 +91,6 @@ def _parse_bundle_config(config_list) -> list[_ExternalBundleConfig]:
     return list(bundles.values())
 
 
-def _read_bundle_config_list() -> list[_ExternalBundleConfig]:
-    config_list = conf.getjson("dag_processor", "dag_bundle_config_list")
-    if not config_list:
-        return []
-    if not isinstance(config_list, list):
-        raise AirflowConfigException(
-            "Section `dag_processor` key `dag_bundle_config_list` "
-            f"must be list but got {config_list.__class__}"
-        )
-    return _parse_bundle_config(config_list)
-
-
-def get_configured_bundle_names() -> frozenset[str]:
-    """Get the names of the configured Dag bundles, without importing their classes."""
-    return _load_bundle_config_snapshot().names
-
-
-def get_configured_bundle_team_names() -> dict[str, str | None]:
-    """
-    Get the team owning each explicitly configured Dag bundle.
-
-    This reads the config rather than going through ``DagBundlesManager`` so that callers who only
-    need the declared bundle partition neither import every bundle class nor see the example-Dag
-    bundles that ``DagBundlesManager.parse_config`` injects when ``[core] load_examples`` is set --
-    those are added by Airflow, not declared by the deployment.
-
-    :return: mapping of bundle name to team name, ``None`` for bundles that are not team scoped.
-    """
-    return {cfg.name: cfg.team_name for cfg in _read_bundle_config_list()}
-
-
 def _add_example_dag_bundle(bundle_config_list: list[_ExternalBundleConfig]):
     from airflow import example_dags
 
@@ -199,61 +104,6 @@ def _add_example_dag_bundle(bundle_config_list: list[_ExternalBundleConfig]):
             },
         )
     )
-
-
-def _add_provider_example_dags_to_bundle(bundle_config_list: list[_ExternalBundleConfig]):
-    """
-    Add an ``example_dags`` folder of every installed provider as a bundle.
-
-    Provider locations are resolved through ``ProvidersManager`` instead of
-    walking ``airflow.providers.__path__`` so that:
-
-    - nested providers (e.g. ``apache-airflow-providers-common-sql`` whose
-      module path is ``airflow.providers.common.sql``) are discovered;
-    - providers installed outside the ``airflow.providers`` namespace package
-      are discovered via their entry point.
-    """
-    # Dedup on the resolved on-disk folder rather than the bundle name: distributions
-    # under ``airflow.providers.common.*`` use ``pkgutil.extend_path``, so when several
-    # ``common-*`` packages are installed ``airflow.providers.common.__path__`` has
-    # multiple entries and the inner loop iterates more than once. Path-based dedup
-    # only skips when the same folder is seen twice; distinct folders are preserved.
-    seen: set[str] = set()
-
-    for package_name in ProvidersManager().providers:
-        # Heuristic: derive the import path from the canonical
-        # ``apache-airflow-providers-*`` distribution name. Tracked as a follow-up
-        # to record the provider module path on ``ProviderInfo`` (see
-        # https://github.com/apache/airflow/issues/66305).
-        if package_name.startswith("apache-airflow-providers-"):
-            suffix = package_name[len("apache-airflow-providers-") :]
-            module_name = "airflow.providers." + suffix.replace("-", ".")
-        else:
-            module_name = package_name.replace("-", "_")
-        try:
-            module = importlib.import_module(module_name)
-            module_paths = list(getattr(module, "__path__", []))
-        except Exception:
-            log.exception("Could not load provider module %s for example DAG discovery", module_name)
-            continue
-
-        for module_path in module_paths:
-            example_dag_folder = os.path.join(module_path, "example_dags")
-            if not os.path.isdir(example_dag_folder):
-                continue
-            if example_dag_folder in seen:
-                continue
-            seen.add(example_dag_folder)
-            bundle_name = f"{package_name}-example-dags"
-            bundle_config_list.append(
-                _ExternalBundleConfig(
-                    name=bundle_name,
-                    classpath="airflow.dag_processing.bundles.local.LocalDagBundle",
-                    kwargs={
-                        "path": example_dag_folder,
-                    },
-                )
-            )
 
 
 def _is_safe_bundle_url(url: str) -> bool:
@@ -314,16 +164,8 @@ def _sign_bundle_url(url: str, bundle_name: str) -> str:
 class DagBundlesManager(LoggingMixin):
     """Manager for DAG bundles."""
 
-    def __init__(
-        self,
-        *args,
-        bundle_names: Collection[str] | None = None,
-        bundle_context: Callable[[str], AbstractContextManager] | None = None,
-        **kwargs,
-    ):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._bundle_names = bundle_names
-        self._bundle_context = bundle_context or (lambda _: nullcontext())
         self._bundle_config: dict[str, _InternalBundleConfig] = {}
         self.parse_config()
 
@@ -338,13 +180,19 @@ class DagBundlesManager(LoggingMixin):
         if self._bundle_config:
             return
 
-        bundle_config_list = _load_bundle_config_snapshot().configs
-        if not bundle_config_list:
+        config_list = conf.getjson("dag_processor", "dag_bundle_config_list")
+        if not config_list:
             return
+        if not isinstance(config_list, list):
+            raise AirflowConfigException(
+                "Section `dag_processor` key `dag_bundle_config_list` "
+                f"must be list but got {config_list.__class__}"
+            )
+        bundle_config_list = _parse_bundle_config(config_list)
+        if conf.getboolean("core", "LOAD_EXAMPLES"):
+            _add_example_dag_bundle(bundle_config_list)
 
         for bundle_config in bundle_config_list:
-            if self._bundle_names is not None and bundle_config.name not in self._bundle_names:
-                continue
             if bundle_config.team_name and not conf.getboolean("core", "multi_team"):
                 raise AirflowConfigException(
                     "Section `dag_processor` key `dag_bundle_config_list` "
@@ -361,28 +209,11 @@ class DagBundlesManager(LoggingMixin):
         self.log.info("DAG bundles loaded: %s", ", ".join(self._bundle_config.keys()))
 
     @provide_session
-    def sync_bundles_to_db(self, *, deactivate_missing: bool = True, session: Session = NEW_SESSION) -> None:
-        """
-        Persist the configured DAG bundles into ``DagBundleModel`` rows.
-
-        This only reconciles bundle metadata, not the DAGs contained in them.
-        Parsing each bundle's DAG files and writing the resulting
-        ``DagModel`` / ``SerializedDagModel`` rows is the responsibility of
-        ``DagBag`` plus ``sync_bag_to_db`` (or, in production, the DAG
-        processor); calling this method does not trigger that work.
-
-        :param deactivate_missing: When ``True`` (the default), any bundle stored in
-            the database that is not present in this manager's config is marked
-            inactive. This is only correct when the calling process sees the
-            *complete* bundle configuration. When multiple dag-processors each run
-            with a partial config (e.g. one bundle per processor), pass ``False`` so a
-            processor does not disable bundles owned by other processors -- otherwise
-            the processors repeatedly deactivate each other and never converge.
-        """
+    def sync_bundles_to_db(self, *, session: Session = NEW_SESSION) -> None:
         self.log.debug("Syncing DAG bundles to the database")
 
         def _extract_and_sign_template(bundle_name: str) -> tuple[str | None, dict]:
-            bundle_instance = self.get_bundle(bundle_name)
+            bundle_instance = self.get_bundle(name)
             new_template_ = bundle_instance.view_url_template()
             new_params_ = self._extract_template_params(bundle_instance)
             if new_template_:
@@ -399,16 +230,6 @@ class DagBundlesManager(LoggingMixin):
                     self.log.debug("Signed URL template for bundle %s", bundle_name)
             return new_template_, new_params_
 
-        # Bundle initialization and template generation can close the shared session,
-        # detaching loaded rows. Complete them before loading rows to update.
-        templates: dict[str, tuple[str | None, dict | None]] = {}
-        for name in self._bundle_config:
-            try:
-                with self._bundle_context(name):
-                    templates[name] = _extract_and_sign_template(name)
-            except Exception as e:
-                self.log.exception("Error creating bundle '%s': %s", name, e)
-
         stored = {b.name: b for b in session.scalars(select(DagBundleModel)).all()}
         bundle_to_team = {
             bundle.name: bundle.teams[0].name if len(bundle.teams) == 1 else None
@@ -422,16 +243,13 @@ class DagBundlesManager(LoggingMixin):
                 if not team:
                     raise _bundle_item_exc(f"Team '{config.team_name}' does not exist")
 
-            bundle = stored.pop(name, None)
-            if name in templates:
-                new_template, new_params = templates[name]
-            elif bundle:
-                # Template failure does not mean the bundle was removed from configuration.
-                new_template, new_params = bundle.signed_url_template, bundle.template_params
-            else:
+            try:
+                new_template, new_params = _extract_and_sign_template(name)
+            except Exception as e:
+                self.log.exception("Error creating bundle '%s': %s", name, e)
                 continue
 
-            if bundle:
+            if bundle := stored.pop(name, None):
                 bundle.active = True
                 if new_template != bundle.signed_url_template:
                     bundle.signed_url_template = new_template
@@ -467,11 +285,6 @@ class DagBundlesManager(LoggingMixin):
                 )
                 bundle.teams = []
 
-        if not deactivate_missing:
-            # This process only owns a subset of the bundles, so the remaining stored
-            # bundles may well be owned by another dag-processor. Leave them alone.
-            return
-
         # Import here to avoid circular import
         from airflow.models.errors import ParseImportError
 
@@ -481,199 +294,6 @@ class DagBundlesManager(LoggingMixin):
             self.log.warning("DAG bundle %s is no longer found in config and has been disabled", name)
             session.execute(delete(ParseImportError).where(ParseImportError.bundle_name == name))
             self.log.info("Deleted import errors for bundle %s which is no longer configured", name)
-
-    def reassign_dags_with_unconfigured_bundles(self) -> int:
-        """
-        Reassign Dags pointing at unconfigured bundles to a configured one.
-
-        Side effect of the ``0082_3_1_0_make_bundle_name_not_nullable``
-        migration (#63323): legacy rows get ``bundle_name='dags-folder'``
-        and NULL ``relative_fileloc``, which raises ``Requested bundle
-        '{name}' is not configured.`` at trigger time when the deployment
-        uses a custom bundle.
-
-        Each legacy-candidate row (NULL ``relative_fileloc`` and no
-        ``DagVersion``) is routed to the most-specific configured bundle
-        whose path contains its ``fileloc``, writing ``relative_fileloc``
-        atomically. Rows whose ``fileloc`` is under no configured bundle
-        are left untouched -- writing ``bundle_name`` without a verified
-        ``relative_fileloc`` would produce a row task workers cannot
-        execute -- and instead self-heal via the normal staleness
-        lifecycle: ``sync_bundles_to_db`` deactivates the old bundle, the
-        stale-scan marks the row stale, and the next successful parse
-        from any configured bundle resets everything via
-        ``update_dag_parsing_results_in_db``. No manual ``airflow dags
-        reserialize`` is required.
-
-        Multi-team-safe because a bundle path belongs to at most one team.
-        Each chunk runs in its own internally-owned transaction so the
-        row-lock window stays bounded and no caller-provided session is
-        committed.
-
-        :return: Number of Dags reassigned.
-        """
-        # Import here to avoid circular import
-        # (manager -> dag -> dagrun -> taskinstance -> dag_version -> manager)
-        from airflow.models.dag import DagModel
-        from airflow.models.dag_version import DagVersion
-
-        # Fast-skip once any 3.x parse cycle has run. DagVersion is written
-        # only by the parse path, and that path overwrites both bundle_name
-        # and relative_fileloc on every parse (see
-        # ``DagModelOperation.update_dags``), so any legacy row whose file
-        # is under a configured bundle self-heals at the next parse and any
-        # row whose file is under no configured bundle self-heals via the
-        # staleness lifecycle -- reassign has no work the parse path will
-        # not do itself. The probe is an index hit on dag_version's PK
-        # vs. a sequential scan of dag (no index on relative_fileloc).
-        with create_session() as session:
-            if session.scalar(select(DagVersion.id).limit(1)) is not None:
-                return 0
-
-            if not (active_bundle_paths := self._resolve_active_bundle_paths(session=session)):
-                self.log.info(
-                    "No active Dag bundles with resolvable paths; skipping reassignment of Dags "
-                    "with unconfigured bundles."
-                )
-                return 0
-
-        # Chunked UPDATEs ordered by (bundle_name, dag_id), one transaction per
-        # chunk; repaired rows drop out of the predicate because writing
-        # relative_fileloc makes the IS NULL clause false. Scanning in
-        # bundle_name order groups the movements log by source bundle without
-        # a Python-side re-sort.
-        #
-        # Legacy-candidate predicate (rows never parsed in 3.x): NULL
-        # relative_fileloc (the 0082 migration leaves it NULL) AND NOT EXISTS
-        # DagVersion (the parse path writes DagModel.bundle_name before the
-        # DagVersion). Equivalent under that invariant; both stated as
-        # defense in depth and repeated on the UPDATE itself as a CAS guard
-        # so a concurrent parser write wins the race.
-        movements: dict[tuple[str | None, str], int] = defaultdict(int)
-        total_reassigned = 0
-        total_backfilled = 0
-        total_skipped = 0
-        last_seen: tuple[str, str] | None = None
-
-        while True:
-            with create_session() as session:
-                query = (
-                    select(DagModel.dag_id, DagModel.bundle_name, DagModel.fileloc)
-                    .where(
-                        DagModel.relative_fileloc.is_(None),
-                        ~exists().where(DagVersion.dag_id == DagModel.dag_id),
-                    )
-                    .order_by(DagModel.bundle_name, DagModel.dag_id)
-                    .limit(_REASSIGN_BATCH_SIZE)
-                )
-                if last_seen is not None:
-                    last_bundle, last_dag_id = last_seen
-                    query = query.where(
-                        or_(
-                            DagModel.bundle_name > last_bundle,
-                            and_(DagModel.bundle_name == last_bundle, DagModel.dag_id > last_dag_id),
-                        )
-                    )
-
-                if not (chunk := session.execute(query).all()):
-                    break
-                last_seen = (chunk[-1].bundle_name, chunk[-1].dag_id)
-
-            # Route every legacy row by fileloc, not just those on
-            # unconfigured bundles, so a migration-assigned dags-folder
-            # row whose file lives under a different configured bundle
-            # gets relocated instead of stranded. Classify as skip
-            # (no match), backfill (match == current bundle), or
-            # reassign (match != current bundle).
-            chunk_updates: list[tuple[str, str | None, str, str]] = []
-            for row in chunk:
-                match = (
-                    _guess_best_bundle_for_fileloc(row.fileloc, active_bundle_paths) if row.fileloc else None
-                )
-                if match is None:
-                    total_skipped += 1
-                    continue
-                target, relative = match
-                chunk_updates.append((row.dag_id, row.bundle_name, target, relative))
-
-            if not chunk_updates:
-                continue
-
-            with create_session() as session:
-                # create_session commits on context exit, bounding the
-                # row-lock window to one chunk.
-                for dag_id, prev_bundle, target, relative in chunk_updates:
-                    result = cast(
-                        "CursorResult",
-                        session.execute(
-                            update(DagModel)
-                            .where(
-                                DagModel.dag_id == dag_id,
-                                DagModel.relative_fileloc.is_(None),
-                                ~exists().where(DagVersion.dag_id == DagModel.dag_id),
-                            )
-                            .values(relative_fileloc=relative, bundle_name=target)
-                            .execution_options(synchronize_session=False)
-                        ),
-                    )
-
-                    if result.rowcount:
-                        # Rowcount is the source of truth for whether the CAS actually fired
-                        if target == prev_bundle:
-                            total_backfilled += 1
-                        else:
-                            movements[(prev_bundle, target)] += 1
-                            total_reassigned += 1
-                    else:
-                        self.log.debug("Skipping repair for Dag '%s': lost race to parser.", dag_id)
-
-        for (prev, target), n in movements.items():
-            self.log.info(
-                "Reassigning %d Dag(s) from bundle '%s' to '%s'",
-                n,
-                prev,
-                target,
-            )
-
-        if total_backfilled:
-            self.log.info("Backfilled relative_fileloc for %d legacy Dag(s).", total_backfilled)
-
-        if total_skipped:
-            self.log.warning(
-                "Skipped %d legacy Dag(s) whose fileloc is not under any configured bundle; "
-                "triggering them will keep raising \"Requested bundle '{name}' is not configured.\" "
-                "until a bundle whose path contains the fileloc is added to "
-                "dag_bundle_config_list. The next parse will then restore them automatically, "
-                "or run `airflow dags reserialize` to force the parse path to rewrite "
-                "bundle_name and relative_fileloc immediately.",
-                total_skipped,
-            )
-
-        return total_reassigned
-
-    def _resolve_active_bundle_paths(self, *, session: Session) -> dict[str, Path]:
-        """
-        Return paths for configured-and-active bundles.
-
-        A bundle is "configured-and-active" when it is both in the manager's
-        config and persisted as ``active=True`` in ``dag_bundle`` -- bundles
-        missing from ``dag_bundle`` are excluded so they can't trigger an FK
-        violation if used as a reassignment target.
-
-        The returned dict is ``{name: path}`` ordered by path length descending
-        so the most specific bundle wins in ``_guess_best_bundle_for_fileloc``.
-        """
-        active_db_names = set(
-            session.scalars(select(DagBundleModel.name).where(DagBundleModel.active.is_(True)))
-        )
-
-        active_bundle_paths: dict[str, Path] = {}
-        for bundle in self.get_all_dag_bundles():
-            if bundle.name not in active_db_names:
-                continue
-            active_bundle_paths[bundle.name] = bundle.path
-
-        return dict(sorted(active_bundle_paths.items(), key=lambda item: len(str(item[1])), reverse=True))
 
     @staticmethod
     def _extract_template_params(bundle_instance: BaseDagBundle) -> dict:
@@ -704,35 +324,19 @@ class DagBundlesManager(LoggingMixin):
 
         return params
 
-    def get_bundle(
-        self, name: str, version: str | None = None, version_data: dict[str, Any] | None = None
-    ) -> BaseDagBundle:
+    def get_bundle(self, name: str, version: str | None = None) -> BaseDagBundle:
         """
         Get a DAG bundle by name.
 
         :param name: The name of the DAG bundle.
         :param version: The version of the DAG bundle you need (optional). If not provided, ``tracking_ref`` will be used instead.
-        :param version_data: Optional structured data associated with this version (e.g., S3 manifest).
 
         :return: The DAG bundle.
         """
         cfg_bundle = self._bundle_config.get(name)
         if not cfg_bundle:
             raise ValueError(f"Requested bundle '{name}' is not configured.")
-        with self._bundle_context(name):
-            return cfg_bundle.bundle_class(
-                name=name, version=version, version_data=version_data, **cfg_bundle.kwargs
-            )
-
-    @classmethod
-    def is_bundle_configured(cls, name: str) -> bool:
-        """
-        Return whether *name* is a configured Dag bundle.
-
-        Deliberately reads configured names only: a caller validating a bundle name
-        must not depend on every *other* configured bundle's class being importable.
-        """
-        return name in _load_bundle_config_snapshot().names
+        return cfg_bundle.bundle_class(name=name, version=version, **cfg_bundle.kwargs)
 
     def get_all_dag_bundles(self) -> Iterable[BaseDagBundle]:
         """
@@ -742,9 +346,7 @@ class DagBundlesManager(LoggingMixin):
         """
         for name, cfg in self._bundle_config.items():
             try:
-                with self._bundle_context(name):
-                    bundle = cfg.bundle_class(name=name, version=None, **cfg.kwargs)
-                yield bundle
+                yield cfg.bundle_class(name=name, version=None, **cfg.kwargs)
             except Exception as e:
                 self.log.exception("Error creating bundle '%s': %s", name, e)
                 # Skip this bundle and continue with others

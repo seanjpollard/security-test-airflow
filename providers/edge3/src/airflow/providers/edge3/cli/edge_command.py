@@ -260,20 +260,30 @@ def list_edge_workers(args) -> None:
     _check_valid_db_connection()
     from airflow.providers.edge3.models.edge_worker import get_registered_edge_hosts
 
-    all_hosts_iter = get_registered_edge_hosts(
-        states=args.state,
-        worker_name_pattern=args.worker_name_pattern,
-        queues=args.queues.split(",") if args.queues else None,
-    )
+    all_hosts_iter = get_registered_edge_hosts(states=args.state)
     # Format and print worker info on the screen
-    fields = ["worker_name", "state", "queues", "jobs_active", "maintenance_comment"]
+    fields = [
+        "worker_name",
+        "state",
+        "queues",
+        "jobs_active",
+        "concurrency",
+        "free_concurrency",
+        "maintenance_comment",
+    ]
 
     all_hosts = []
     for host in all_hosts_iter:
-        host_data = {f: getattr(host, f, None) for f in fields}
-        sysinfo = host.sysinfo if isinstance(host.sysinfo, dict) else {}
-        host_data["concurrency"] = sysinfo.get("concurrency")
-        host_data["free_concurrency"] = sysinfo.get("free_concurrency")
+        host_data = {
+            f: getattr(host, f, None) for f in fields if f not in ("concurrency", "free_concurrency")
+        }
+        try:
+            sysinfo = json.loads(host.sysinfo or "{}")
+            host_data["concurrency"] = sysinfo.get("concurrency")
+            host_data["free_concurrency"] = sysinfo.get("free_concurrency")
+        except (json.JSONDecodeError, TypeError):
+            host_data["concurrency"] = None
+            host_data["free_concurrency"] = None
         all_hosts.append(host_data)
 
     AirflowConsole().print_as(data=all_hosts, output=args.output)
@@ -314,8 +324,8 @@ def remote_worker_update_maintenance_comment(args) -> None:
     try:
         change_maintenance_comment(args.edge_hostname, args.comments)
         logger.info("Maintenance comments updated for %s by %s.", args.edge_hostname, getuser())
-    except TypeError as e:
-        raise SystemExit(str(e))
+    except TypeError:
+        raise SystemExit
 
 
 @cli_utils.action_cli(check_db=False)
@@ -329,8 +339,8 @@ def remove_remote_worker(args) -> None:
     try:
         remove_worker(args.edge_hostname)
         logger.info("Edge Worker host %s removed by %s.", args.edge_hostname, getuser())
-    except TypeError as e:
-        raise SystemExit(str(e))
+    except TypeError:
+        raise SystemExit
 
 
 @cli_utils.action_cli(check_db=False)
@@ -392,7 +402,8 @@ def add_worker_queues(args) -> None:
         add_worker_queues(args.edge_hostname, queues)
         logger.info("Added queues %s to Edge Worker host %s by %s.", queues, args.edge_hostname, getuser())
     except TypeError as e:
-        raise SystemExit(str(e))
+        logger.error(str(e))
+        raise SystemExit
 
 
 @cli_utils.action_cli(check_db=False)
@@ -413,7 +424,8 @@ def remove_worker_queues(args) -> None:
             "Removed queues %s from Edge Worker host %s by %s.", queues, args.edge_hostname, getuser()
         )
     except TypeError as e:
-        raise SystemExit(str(e))
+        logger.error(str(e))
+        raise SystemExit
 
 
 @cli_utils.action_cli(check_db=False)
@@ -436,4 +448,5 @@ def set_remote_worker_concurrency(args) -> None:
             getuser(),
         )
     except TypeError as e:
-        raise SystemExit(str(e))
+        logger.error(str(e))
+        raise SystemExit

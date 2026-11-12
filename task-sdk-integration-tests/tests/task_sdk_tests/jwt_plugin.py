@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import jwt
@@ -57,7 +57,7 @@ class JWTTokenGenerator:
         Returns:
             JWT token as a string
         """
-        now = int(datetime.now(UTC).timestamp())
+        now = int(datetime.now(timezone.utc).timestamp())
 
         claims = {
             "jti": uuid.uuid4().hex,

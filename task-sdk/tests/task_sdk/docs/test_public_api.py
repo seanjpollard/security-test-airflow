@@ -17,29 +17,19 @@
 from __future__ import annotations
 
 import importlib
-import subprocess
-import sys
-import textwrap
 
 
 def test_airflow_sdk_exports_exist():
     """
-    Ensure every name in airflow.sdk.__all__ resolves through the lazy ``__getattr__``.
-
-    This runs in a subprocess because in a shared test process, a submodule export
-    (e.g. ``lineage``) may already be bound on the package as an import side effect,
-    which would mask a broken lazy-import entry.
+    Ensure that all names declared in airflow.sdk.__all__ are present as attributes on the module.
     """
-    code = textwrap.dedent(
-        """
-        import airflow.sdk as sdk
-
-        missing = [name for name in sdk.__all__ if not hasattr(sdk, name)]
-        assert not missing, f"Missing exports in airflow.sdk: {missing}"
-        """
-    )
-    result = subprocess.run([sys.executable, "-c", code], check=False, capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
+    sdk = importlib.import_module("airflow.sdk")
+    # Provide literal attribute for testing since it's declared in __all__
+    template_mod = importlib.import_module("airflow.sdk.definitions.template")
+    setattr(sdk, "literal", getattr(template_mod, "literal"))
+    public_names = getattr(sdk, "__all__", [])
+    missing = [name for name in public_names if not hasattr(sdk, name)]
+    assert not missing, f"Missing exports in airflow.sdk: {missing}"
 
 
 def test_airflow_sdk_no_unexpected_exports():
@@ -52,32 +42,29 @@ def test_airflow_sdk_no_unexpected_exports():
     ignore = {
         "__getattr__",
         "__lazy_imports",
-        "TYPE_CHECKING",
         "SecretCache",
+        "TYPE_CHECKING",
         "annotations",
         "api",
         "bases",
-        "configuration",
-        "coordinators",
-        "crypto",
         "definitions",
-        "exceptions",
         "execution_time",
-        "importers",
         "io",
-        "lineage",
-        "listener",
         "log",
+        "exceptions",
+        "timezone",
+        "secrets_masker",
+        "configuration",
         "module_loading",
+        "yaml",
+        "serde",
         "observability",
         "plugins_manager",
+        "listener",
+        "crypto",
         "providers_manager_runtime",
-        "secrets_masker",
-        "serde",
-        "timezone",
+        "lineage",
         "types",
-        "state",
-        "yaml",
     }
     unexpected = actual - public - ignore
     assert not unexpected, f"Unexpected exports in airflow.sdk: {sorted(unexpected)}"

@@ -118,9 +118,81 @@ class TestSCBackwardsCompatibility:
 class TestSecurityContext:
     """Tests security context."""
 
+    def test_default_setting(self):
+        docs = render_chart(
+            values={
+                "securityContext": {"runAsUser": 6000, "fsGroup": 60},
+                "flower": {"enabled": True},
+                "statsd": {"enabled": False},
+            },
+            show_only=[
+                "templates/dag-processor/dag-processor-deployment.yaml",
+                "templates/flower/flower-deployment.yaml",
+                "templates/scheduler/scheduler-deployment.yaml",
+                "templates/triggerer/triggerer-deployment.yaml",
+                "templates/api-server/api-server-deployment.yaml",
+                "templates/workers/worker-deployment.yaml",
+                "templates/jobs/create-user-job.yaml",
+                "templates/jobs/migrate-database-job.yaml",
+            ],
+        )
+
+        for doc in docs:
+            assert jmespath.search("spec.template.spec.securityContext.runAsUser", doc) == 6000
+            assert jmespath.search("spec.template.spec.securityContext.fsGroup", doc) == 60
+
+    def test_check_local_setting(self):
+        component_contexts = {"securityContext": {"runAsUser": 9000, "fsGroup": 90}}
+        docs = render_chart(
+            values={
+                "uid": 3000,
+                "gid": 30,
+                "securityContext": {"runAsUser": 6000, "fsGroup": 60},
+                "workers": component_contexts,
+                "flower": {"enabled": True, **component_contexts},
+                "scheduler": component_contexts,
+                "dagProcessor": component_contexts,
+                "createUserJob": component_contexts,
+                "migrateDatabaseJob": component_contexts,
+                "triggerer": component_contexts,
+                "redis": component_contexts,
+                "statsd": {"enabled": True, **component_contexts},
+            },
+            show_only=[
+                "templates/flower/flower-deployment.yaml",
+                "templates/dag-processor/dag-processor-deployment.yaml",
+                "templates/scheduler/scheduler-deployment.yaml",
+                "templates/triggerer/triggerer-deployment.yaml",
+                "templates/workers/worker-deployment.yaml",
+                "templates/jobs/create-user-job.yaml",
+                "templates/jobs/migrate-database-job.yaml",
+                "templates/statsd/statsd-deployment.yaml",
+                "templates/redis/redis-statefulset.yaml",
+            ],
+        )
+
+        for doc in docs:
+            assert jmespath.search("spec.template.spec.securityContext.runAsUser", doc) == 9000
+            assert jmespath.search("spec.template.spec.securityContext.fsGroup", doc) == 90
+
     # Test priority:
     # <local>.securityContexts > securityContexts > uid + gid
-    def test_check_local_setting_default_version(self):
+    @pytest.mark.parametrize(
+        "workers_values",
+        [
+            {"securityContexts": {"pod": {"runAsUser": 9000, "fsGroup": 90}}},
+            {"celery": {"securityContexts": {"pod": {"runAsUser": 9000, "fsGroup": 90}}}},
+            {
+                "celery": {
+                    "enableDefault": False,
+                    "sets": [
+                        {"name": "test", "securityContexts": {"pod": {"runAsUser": 9000, "fsGroup": 90}}}
+                    ],
+                },
+            },
+        ],
+    )
+    def test_check_local_setting_default_version(self, workers_values):
         component_contexts = {"securityContexts": {"pod": {"runAsUser": 9000, "fsGroup": 90}}}
         docs = render_chart(
             values={
@@ -128,7 +200,7 @@ class TestSecurityContext:
                 "gid": 30,
                 "securityContexts": {"pod": {"runAsUser": 6000, "fsGroup": 60}},
                 "apiServer": component_contexts,
-                "workers": {"celery": component_contexts},
+                "workers": workers_values,
                 "dagProcessor": component_contexts,
                 "flower": {"enabled": True, **component_contexts},
                 "scheduler": component_contexts,
@@ -156,6 +228,23 @@ class TestSecurityContext:
             assert jmespath.search("spec.template.spec.securityContext.runAsUser", doc) == 9000
             assert jmespath.search("spec.template.spec.securityContext.fsGroup", doc) == 90
 
+    # Test containerSecurity priority over uid under components using localSecurityContext
+    def test_check_local_uid(self):
+        component_contexts = {"uid": 3000, "securityContext": {"runAsUser": 7000}}
+        docs = render_chart(
+            values={
+                "redis": component_contexts,
+                "statsd": {"enabled": True, **component_contexts},
+            },
+            show_only=[
+                "templates/statsd/statsd-deployment.yaml",
+                "templates/redis/redis-statefulset.yaml",
+            ],
+        )
+
+        for doc in docs:
+            assert jmespath.search("spec.template.spec.securityContext.runAsUser", doc) == 7000
+
     # Test securityContexts for main containers
     def test_global_security_context(self):
         ctx_value_pod = {"runAsUser": 7000}
@@ -166,7 +255,6 @@ class TestSecurityContext:
                 "executor": "CeleryExecutor,KubernetesExecutor",
                 "cleanup": {"enabled": True},
                 "flower": {"enabled": True},
-                "otelCollector": {"tracesEnabled": True},
                 "pgbouncer": {"enabled": True},
             },
             show_only=[
@@ -177,7 +265,6 @@ class TestSecurityContext:
                 "templates/jobs/create-user-job.yaml",
                 "templates/jobs/migrate-database-job.yaml",
                 "templates/triggerer/triggerer-deployment.yaml",
-                "templates/otel-collector/otel-collector-deployment.yaml",
                 "templates/pgbouncer/pgbouncer-deployment.yaml",
                 "templates/statsd/statsd-deployment.yaml",
                 "templates/redis/redis-statefulset.yaml",
@@ -191,19 +278,18 @@ class TestSecurityContext:
             "spec.jobTemplate.spec.template.spec.securityContext", docs[0]
         )
 
-        for doc in docs[1:-4]:
+        for doc in docs[1:-3]:
             assert ctx_value_container == jmespath.search(
                 "spec.template.spec.containers[0].securityContext", doc
             )
             assert ctx_value_pod == jmespath.search("spec.template.spec.securityContext", doc)
 
-        # Global security context is not propagated to otel collector, pgbouncer, redis and statsd,
-        # so we test default value
+        # Global security context is not propagated to pgbouncer, redis and statsd, so we test default value
         default_ctx_value_container = {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}}
         default_ctx_value_pod_pgbouncer = {"runAsUser": 65534}
         default_ctx_value_pod_statsd = {"runAsUser": 65534}
         default_ctx_value_pod_redis = {"runAsUser": 0}
-        for doc in docs[-4:]:
+        for doc in docs[-3:]:
             assert default_ctx_value_container == jmespath.search(
                 "spec.template.spec.containers[0].securityContext", doc
             )
@@ -218,7 +304,25 @@ class TestSecurityContext:
         assert default_ctx_value_pod_redis == jmespath.search("spec.template.spec.securityContext", docs[-1])
 
     # Test securityContexts for main containers
-    def test_main_container_setting(self):
+    @pytest.mark.parametrize(
+        "workers_values",
+        [
+            {"securityContexts": {"container": {"allowPrivilegeEscalation": False}}},
+            {"celery": {"securityContexts": {"container": {"allowPrivilegeEscalation": False}}}},
+            {
+                "celery": {
+                    "enableDefault": False,
+                    "sets": [
+                        {
+                            "name": "test",
+                            "securityContexts": {"container": {"allowPrivilegeEscalation": False}},
+                        }
+                    ],
+                },
+            },
+        ],
+    )
+    def test_main_container_setting(self, workers_values):
         ctx_value = {"allowPrivilegeEscalation": False}
         security_context = {"securityContexts": {"container": ctx_value}}
         docs = render_chart(
@@ -228,9 +332,8 @@ class TestSecurityContext:
                 "scheduler": security_context,
                 "dagProcessor": security_context,
                 "apiServer": security_context,
-                "workers": {"celery": security_context},
+                "workers": workers_values,
                 "flower": {"enabled": True, **security_context},
-                "otelCollector": {"tracesEnabled": True, **security_context},
                 "statsd": security_context,
                 "createUserJob": security_context,
                 "migrateDatabaseJob": security_context,
@@ -245,7 +348,6 @@ class TestSecurityContext:
                 "templates/api-server/api-server-deployment.yaml",
                 "templates/dag-processor/dag-processor-deployment.yaml",
                 "templates/workers/worker-deployment.yaml",
-                "templates/otel-collector/otel-collector-deployment.yaml",
                 "templates/statsd/statsd-deployment.yaml",
                 "templates/jobs/create-user-job.yaml",
                 "templates/jobs/migrate-database-job.yaml",
@@ -263,13 +365,34 @@ class TestSecurityContext:
             assert ctx_value == jmespath.search("spec.template.spec.containers[0].securityContext", doc)
 
     # Test securityContexts for log-groomer-sidecar main container
-    def test_log_groomer_sidecar_container_setting(self):
+    @pytest.mark.parametrize(
+        "workers_values",
+        [
+            {"logGroomerSidecar": {"securityContexts": {"container": {"allowPrivilegeEscalation": False}}}},
+            {
+                "celery": {
+                    "logGroomerSidecar": {
+                        "securityContexts": {"container": {"allowPrivilegeEscalation": False}}
+                    }
+                }
+            },
+            {
+                "logGroomerSidecar": {"securityContexts": {"container": {"runAsUser": 20}}},
+                "celery": {
+                    "logGroomerSidecar": {
+                        "securityContexts": {"container": {"allowPrivilegeEscalation": False}}
+                    }
+                },
+            },
+        ],
+    )
+    def test_log_groomer_sidecar_container_setting(self, workers_values):
         ctx_value = {"allowPrivilegeEscalation": False}
         spec = {"logGroomerSidecar": {"securityContexts": {"container": ctx_value}}}
         docs = render_chart(
             values={
                 "scheduler": spec,
-                "workers": {"celery": spec},
+                "workers": workers_values,
                 "dagProcessor": spec,
                 "triggerer": spec,
             },
@@ -299,27 +422,108 @@ class TestSecurityContext:
 
         assert ctx_value == jmespath.search("spec.template.spec.containers[1].securityContext", docs[0])
 
-    # Test securityContexts for worker-kerberos native sidecar
-    def test_worker_kerberos_container_security_context(self):
-        docs = render_chart(
-            values={
-                "workers": {
-                    "celery": {
-                        "kerberosSidecar": {
-                            "enabled": True,
-                            "securityContexts": {"container": {"allowPrivilegeEscalation": False}},
-                        }
+    # Test securityContexts for worker-kerberos main container
+    @pytest.mark.parametrize(
+        "workers_values",
+        [
+            {
+                "kerberosSidecar": {
+                    "enabled": True,
+                    "securityContexts": {"container": {"allowPrivilegeEscalation": False}},
+                }
+            },
+            {
+                "celery": {
+                    "kerberosSidecar": {
+                        "enabled": True,
+                        "securityContexts": {"container": {"allowPrivilegeEscalation": False}},
                     }
                 }
             },
+            {
+                "kerberosSidecar": {"securityContexts": {"container": {"runAsUser": 10}}},
+                "celery": {
+                    "kerberosSidecar": {
+                        "enabled": True,
+                        "securityContexts": {"container": {"allowPrivilegeEscalation": False}},
+                    }
+                },
+            },
+        ],
+    )
+    def test_worker_kerberos_container_security_context(self, workers_values):
+        docs = render_chart(
+            values={"workers": workers_values},
+            show_only=["templates/workers/worker-deployment.yaml"],
+        )
+
+        assert jmespath.search("spec.template.spec.containers[2].securityContext", docs[0]) == {
+            "allowPrivilegeEscalation": False
+        }
+
+    @pytest.mark.parametrize(
+        "workers_values",
+        [
+            {
+                "kerberosInitContainer": {
+                    "enabled": True,
+                    "securityContexts": {"container": {"runAsUser": 2000}},
+                }
+            },
+            {
+                "celery": {
+                    "kerberosInitContainer": {
+                        "enabled": True,
+                        "securityContexts": {"container": {"runAsUser": 2000}},
+                    }
+                }
+            },
+            {
+                "kerberosInitContainer": {
+                    "enabled": True,
+                    "securityContexts": {"container": {"allowPrivilegeEscalation": False}},
+                },
+                "celery": {
+                    "kerberosInitContainer": {
+                        "enabled": True,
+                        "securityContexts": {"container": {"runAsUser": 2000}},
+                    }
+                },
+            },
+        ],
+    )
+    def test_worker_kerberos_init_container_security_contexts(self, workers_values):
+        docs = render_chart(
+            values={"workers": workers_values},
             show_only=["templates/workers/worker-deployment.yaml"],
         )
 
         assert jmespath.search(
-            "spec.template.spec.initContainers[?name=='worker-kerberos'] | [0].securityContext", docs[0]
-        ) == {"allowPrivilegeEscalation": False}
+            "spec.template.spec.initContainers[?name=='kerberos-init'] | [0].securityContext", docs[0]
+        ) == {"runAsUser": 2000}
 
-    def test_wait_for_migrations_init_container_setting(self):
+    @pytest.mark.parametrize(
+        "workers_values",
+        [
+            {"waitForMigrations": {"securityContexts": {"container": {"allowPrivilegeEscalation": False}}}},
+            {
+                "celery": {
+                    "waitForMigrations": {
+                        "securityContexts": {"container": {"allowPrivilegeEscalation": False}}
+                    }
+                }
+            },
+            {
+                "waitForMigrations": {"securityContexts": {"container": {"runAsUser": 0}}},
+                "celery": {
+                    "waitForMigrations": {
+                        "securityContexts": {"container": {"allowPrivilegeEscalation": False}}
+                    }
+                },
+            },
+        ],
+    )
+    def test_wait_for_migrations_init_container_setting(self, workers_values):
         ctx_value = {"allowPrivilegeEscalation": False}
         spec = {
             "waitForMigrations": {
@@ -333,7 +537,7 @@ class TestSecurityContext:
                 "apiServer": spec,
                 "triggerer": spec,
                 "dagProcessor": spec,
-                "workers": {"celery": spec},
+                "workers": workers_values,
             },
             show_only=[
                 "templates/scheduler/scheduler-deployment.yaml",
@@ -348,19 +552,37 @@ class TestSecurityContext:
             assert ctx_value == jmespath.search("spec.template.spec.initContainers[0].securityContext", doc)
 
     # Test securityContexts for volume-permissions init container
-    def test_volume_permissions_init_container_setting(self):
-        docs = render_chart(
-            values={
-                "workers": {
-                    "celery": {
-                        "persistence": {
-                            "enabled": True,
-                            "fixPermissions": True,
-                            "securityContexts": {"container": {"allowPrivilegeEscalation": False}},
-                        }
+    @pytest.mark.parametrize(
+        "workers_values",
+        [
+            {
+                "persistence": {"securityContexts": {"container": {"allowPrivilegeEscalation": False}}},
+                "celery": {"persistence": {"enabled": True, "fixPermissions": True}},
+            },
+            {
+                "celery": {
+                    "persistence": {
+                        "enabled": True,
+                        "fixPermissions": True,
+                        "securityContexts": {"container": {"allowPrivilegeEscalation": False}},
                     }
                 }
             },
+            {
+                "persistence": {"securityContexts": {"container": {"allowPrivilegeEscalation": True}}},
+                "celery": {
+                    "persistence": {
+                        "enabled": True,
+                        "fixPermissions": True,
+                        "securityContexts": {"container": {"allowPrivilegeEscalation": False}},
+                    }
+                },
+            },
+        ],
+    )
+    def test_volume_permissions_init_container_setting(self, workers_values):
+        docs = render_chart(
+            values={"workers": workers_values},
             show_only=["templates/workers/worker-deployment.yaml"],
         )
 
@@ -368,7 +590,20 @@ class TestSecurityContext:
             "allowPrivilegeEscalation": False
         }
 
-    def test_main_pod_setting(self):
+    @pytest.mark.parametrize(
+        "workers_values",
+        [
+            {"securityContexts": {"pod": {"runAsUser": 7000}}},
+            {"celery": {"securityContexts": {"pod": {"runAsUser": 7000}}}},
+            {
+                "celery": {
+                    "enableDefault": False,
+                    "sets": [{"name": "test", "securityContexts": {"pod": {"runAsUser": 7000}}}],
+                },
+            },
+        ],
+    )
+    def test_main_pod_setting(self, workers_values):
         ctx_value = {"runAsUser": 7000}
         security_context = {"securityContexts": {"pod": ctx_value}}
         docs = render_chart(
@@ -377,7 +612,7 @@ class TestSecurityContext:
                 "cleanup": {"enabled": True, **security_context},
                 "scheduler": security_context,
                 "apiServer": security_context,
-                "workers": {"celery": security_context},
+                "workers": workers_values,
                 "flower": {"enabled": True, **security_context},
                 "statsd": security_context,
                 "createUserJob": security_context,
@@ -408,252 +643,132 @@ class TestSecurityContext:
         for doc in docs[1:]:
             assert ctx_value == jmespath.search("spec.template.spec.securityContext", doc)
 
-    def test_disable_defaults_pod_and_container(self):
-        docs = render_chart(
-            values={
-                "securityContexts": {"disableDefaults": True},
-                "flower": {"enabled": True},
-                "otelCollector": {"tracesEnabled": True},
-                "pgbouncer": {"enabled": True},
-                "statsd": {"enabled": True},
-            },
-            show_only=[
-                "templates/flower/flower-deployment.yaml",
-                "templates/scheduler/scheduler-deployment.yaml",
-                "templates/api-server/api-server-deployment.yaml",
-                "templates/dag-processor/dag-processor-deployment.yaml",
-                "templates/workers/worker-deployment.yaml",
-                "templates/jobs/create-user-job.yaml",
-                "templates/jobs/migrate-database-job.yaml",
-                "templates/triggerer/triggerer-deployment.yaml",
-                "templates/pgbouncer/pgbouncer-deployment.yaml",
-                "templates/statsd/statsd-deployment.yaml",
-                "templates/redis/redis-statefulset.yaml",
-                "templates/otel-collector/otel-collector-deployment.yaml",
-            ],
-        )
-
-        assert all(v is None for v in jmespath.search("[].spec.template.spec.securityContext", docs[:-1]))
-        assert jmespath.search("spec.template.spec.securityContext", docs[-1]) == {}
-        assert all(
-            v is None for v in jmespath.search("[].spec.template.spec.containers[0].securityContext", docs)
-        )
-
-    def test_disable_defaults_pod_and_container_cronjob(self):
-        docs = render_chart(
-            values={
-                "securityContexts": {"disableDefaults": True},
-                "executor": "CeleryExecutor,KubernetesExecutor",
-                "cleanup": {"enabled": True},
-            },
-            show_only=["templates/cleanup/cleanup-cronjob.yaml"],
-        )
-
-        assert jmespath.search("spec.jobTemplate.spec.template.spec.securityContext", docs[0]) is None
-        assert (
-            jmespath.search("spec.jobTemplate.spec.template.spec.containers[0].securityContext", docs[0])
-            is None
-        )
-
-    def test_disable_defaults_gitsync_containers(self):
-        docs = render_chart(
-            values={
-                "securityContexts": {"disableDefaults": True},
-                "dags": {"gitSync": {"enabled": True}},
-            },
-            show_only=[
-                "templates/workers/worker-deployment.yaml",
-                "templates/triggerer/triggerer-deployment.yaml",
-                "templates/dag-processor/dag-processor-deployment.yaml",
-            ],
-        )
-
-        for doc in docs:
-            assert (
-                jmespath.search(
-                    "spec.template.spec.initContainers[?name=='git-sync-init'].securityContext | [0]",
-                    doc,
-                )
-                is None
-            )
-            assert (
-                jmespath.search(
-                    "spec.template.spec.containers[?name=='git-sync'].securityContext | [0]",
-                    doc,
-                )
-                is None
-            )
-
-    def test_disable_defaults_volume_permissions_init_container_skipped(self):
-        """With no explicit uid/gid override, the volume-permissions init container is omitted entirely."""
-        docs = render_chart(
-            values={
-                "securityContexts": {"disableDefaults": True},
-                "workers": {
-                    "celery": {
-                        "persistence": {"enabled": True, "fixPermissions": True},
-                    }
-                },
-            },
-            show_only=["templates/workers/worker-deployment.yaml"],
-        )
-
-        assert (
-            jmespath.search("spec.template.spec.initContainers[?name=='volume-permissions']", docs[0]) == []
-        )
-
-    def test_disable_defaults_explicit_override_still_applied(self):
-        ctx_value = {"runAsUser": 7000}
-        docs = render_chart(
-            values={
-                "securityContexts": {"disableDefaults": True, "pod": ctx_value},
-                "workers": {
-                    "celery": {
-                        "persistence": {"enabled": True, "fixPermissions": True},
-                    }
-                },
-            },
-            show_only=[
-                "templates/scheduler/scheduler-deployment.yaml",
-                "templates/workers/worker-deployment.yaml",
-            ],
-        )
-
-        for doc in docs:
-            assert ctx_value == jmespath.search("spec.template.spec.securityContext", doc)
-
-        assert (
-            jmespath.search("spec.template.spec.initContainers[?name=='volume-permissions']", docs[1]) != []
-        )
-
     @pytest.mark.parametrize(
-        ("component_values", "show_only", "security_context_path"),
+        "workers_values",
         [
-            (
-                {"scheduler": {"securityContexts": {"pod": {"runAsUser": 8000}}}},
-                "templates/scheduler/scheduler-deployment.yaml",
-                "spec.template.spec.securityContext",
-            ),
-            (
-                {"apiServer": {"securityContexts": {"pod": {"runAsUser": 8000}}}},
-                "templates/api-server/api-server-deployment.yaml",
-                "spec.template.spec.securityContext",
-            ),
-            (
-                {"dagProcessor": {"securityContexts": {"pod": {"runAsUser": 8000}}}},
-                "templates/dag-processor/dag-processor-deployment.yaml",
-                "spec.template.spec.securityContext",
-            ),
-            (
-                {"triggerer": {"securityContexts": {"pod": {"runAsUser": 8000}}}},
-                "templates/triggerer/triggerer-deployment.yaml",
-                "spec.template.spec.securityContext",
-            ),
-            (
-                {"workers": {"celery": {"securityContexts": {"pod": {"runAsUser": 8000}}}}},
-                "templates/workers/worker-deployment.yaml",
-                "spec.template.spec.securityContext",
-            ),
-            (
-                {"flower": {"enabled": True, "securityContexts": {"pod": {"runAsUser": 8000}}}},
-                "templates/flower/flower-deployment.yaml",
-                "spec.template.spec.securityContext",
-            ),
-            (
-                {"statsd": {"securityContexts": {"pod": {"runAsUser": 8000}}}},
-                "templates/statsd/statsd-deployment.yaml",
-                "spec.template.spec.securityContext",
-            ),
-            (
-                {"pgbouncer": {"enabled": True, "securityContexts": {"pod": {"runAsUser": 8000}}}},
-                "templates/pgbouncer/pgbouncer-deployment.yaml",
-                "spec.template.spec.securityContext",
-            ),
-            (
-                {"redis": {"securityContexts": {"pod": {"runAsUser": 8000}}}},
-                "templates/redis/redis-statefulset.yaml",
-                "spec.template.spec.securityContext",
-            ),
-            (
-                {"createUserJob": {"securityContexts": {"pod": {"runAsUser": 8000}}}},
-                "templates/jobs/create-user-job.yaml",
-                "spec.template.spec.securityContext",
-            ),
-            (
-                {"migrateDatabaseJob": {"securityContexts": {"pod": {"runAsUser": 8000}}}},
-                "templates/jobs/migrate-database-job.yaml",
-                "spec.template.spec.securityContext",
-            ),
-            (
-                {
-                    "executor": "CeleryExecutor,KubernetesExecutor",
-                    "cleanup": {"enabled": True, "securityContexts": {"pod": {"runAsUser": 8000}}},
+            {"securityContext": {"runAsUser": 7000}},
+            {
+                "celery": {
+                    "enableDefault": False,
+                    "sets": [{"name": "test", "securityContext": {"runAsUser": 7000}}],
                 },
-                "templates/cleanup/cleanup-cronjob.yaml",
-                "spec.jobTemplate.spec.template.spec.securityContext",
-            ),
-            (
-                {"databaseCleanup": {"enabled": True, "securityContexts": {"pod": {"runAsUser": 8000}}}},
-                "templates/database-cleanup/database-cleanup-cronjob.yaml",
-                "spec.jobTemplate.spec.template.spec.securityContext",
-            ),
-        ],
-        ids=[
-            "scheduler",
-            "apiServer",
-            "dagProcessor",
-            "triggerer",
-            "workers.celery",
-            "flower",
-            "statsd",
-            "pgbouncer",
-            "redis",
-            "createUserJob",
-            "migrateDatabaseJob",
-            "cleanup",
-            "databaseCleanup",
+            },
         ],
     )
-    def test_disable_defaults_component_level_override_still_applied(
-        self, component_values, show_only, security_context_path
-    ):
-        docs = render_chart(
-            values={"securityContexts": {"disableDefaults": True}, **component_values},
-            show_only=[show_only],
-        )
-
-        assert jmespath.search(security_context_path, docs[0]) == {"runAsUser": 8000}
-
-    def test_disable_defaults_workers_volume_permissions_init_container_still_added(self):
+    def test_main_pod_setting_legacy_security(self, workers_values):
+        ctx_value = {"runAsUser": 7000}
+        security_context = {"securityContext": ctx_value}
         docs = render_chart(
             values={
-                "securityContexts": {"disableDefaults": True},
-                "workers": {
-                    "celery": {
-                        "securityContexts": {"pod": {"runAsUser": 8000}},
-                        "persistence": {"enabled": True, "fixPermissions": True},
-                    }
-                },
+                "executor": "CeleryExecutor,KubernetesExecutor",
+                "cleanup": {"enabled": True, **security_context},
+                "scheduler": security_context,
+                "workers": workers_values,
+                "flower": {"enabled": True, **security_context},
+                "statsd": security_context,
+                "createUserJob": security_context,
+                "migrateDatabaseJob": security_context,
+                "triggerer": security_context,
+                "redis": security_context,
+                "dagProcessor": security_context,
             },
-            show_only=["templates/workers/worker-deployment.yaml"],
+            show_only=[
+                "templates/cleanup/cleanup-cronjob.yaml",
+                "templates/flower/flower-deployment.yaml",
+                "templates/scheduler/scheduler-deployment.yaml",
+                "templates/workers/worker-deployment.yaml",
+                "templates/statsd/statsd-deployment.yaml",
+                "templates/jobs/create-user-job.yaml",
+                "templates/jobs/migrate-database-job.yaml",
+                "templates/triggerer/triggerer-deployment.yaml",
+                "templates/redis/redis-statefulset.yaml",
+                "templates/dag-processor/dag-processor-deployment.yaml",
+            ],
         )
 
-        assert (
-            jmespath.search("spec.template.spec.initContainers[?name=='volume-permissions']", docs[0]) != []
+        assert ctx_value == jmespath.search("spec.jobTemplate.spec.template.spec.securityContext", docs[0])
+
+        for doc in docs[1:]:
+            assert ctx_value == jmespath.search("spec.template.spec.securityContext", doc)
+
+    def test_deprecated_overwrite_global(self):
+        docs = render_chart(
+            values={
+                "securityContext": {"runAsUser": 6000, "fsGroup": 60},
+                "securityContexts": {"pod": {"runAsUser": 9000, "fsGroup": 90}},
+            },
+            show_only=[
+                "templates/flower/flower-deployment.yaml",
+                "templates/scheduler/scheduler-deployment.yaml",
+                "templates/triggerer/triggerer-deployment.yaml",
+                "templates/api-server/api-server-deployment.yaml",
+                "templates/workers/worker-deployment.yaml",
+                "templates/dag-processor/dag-processor-deployment.yaml",
+                "templates/jobs/create-user-job.yaml",
+                "templates/jobs/migrate-database-job.yaml",
+            ],
         )
+
+        for doc in docs:
+            assert jmespath.search("spec.template.spec.securityContext.runAsUser", doc) == 9000
+            assert jmespath.search("spec.template.spec.securityContext.fsGroup", doc) == 90
+
+    @pytest.mark.parametrize(
+        "workers_values",
+        [
+            {
+                "securityContext": {"runAsUser": 6000, "fsGroup": 60},
+                "securityContexts": {"pod": {"runAsUser": 9000, "fsGroup": 90}},
+            },
+            {
+                "securityContext": {"runAsUser": 6000, "fsGroup": 60},
+                "celery": {"securityContexts": {"pod": {"runAsUser": 9000, "fsGroup": 90}}},
+            },
+            {
+                "securityContext": {"runAsUser": 6000, "fsGroup": 60},
+                "celery": {
+                    "enableDefault": False,
+                    "sets": [
+                        {"name": "test", "securityContexts": {"pod": {"runAsUser": 9000, "fsGroup": 90}}}
+                    ],
+                },
+            },
+        ],
+    )
+    def test_deprecated_overwrite_local(self, workers_values):
+        context = {
+            "securityContext": {"runAsUser": 6000, "fsGroup": 60},
+            "securityContexts": {"pod": {"runAsUser": 9000, "fsGroup": 90}},
+        }
+
+        docs = render_chart(
+            values={
+                "flower": context,
+                "scheduler": context,
+                "triggerer": context,
+                "workers": workers_values,
+                "dagProcessor": context,
+            },
+            show_only=[
+                "templates/flower/flower-deployment.yaml",
+                "templates/scheduler/scheduler-deployment.yaml",
+                "templates/triggerer/triggerer-deployment.yaml",
+                "templates/workers/worker-deployment.yaml",
+                "templates/dag-processor/dag-processor-deployment.yaml",
+            ],
+        )
+
+        for doc in docs:
+            assert jmespath.search("spec.template.spec.securityContext.runAsUser", doc) == 9000
+            assert jmespath.search("spec.template.spec.securityContext.fsGroup", doc) == 90
 
     def test_workers_overwrite_local(self):
         docs = render_chart(
             values={
                 "workers": {
-                    "celery": {
-                        "enableDefault": False,
-                        "securityContexts": {"pod": {"runAsUser": 6000, "fsGroup": 60}},
-                        "sets": [
-                            {"name": "test", "securityContexts": {"pod": {"runAsUser": 9000, "fsGroup": 90}}}
-                        ],
-                    },
-                }
+                    "securityContexts": {"pod": {"runAsUser": 6000, "fsGroup": 60}},
+                    "celery": {"securityContexts": {"pod": {"runAsUser": 9000, "fsGroup": 90}}},
+                },
             },
             show_only=["templates/workers/worker-deployment.yaml"],
         )
@@ -661,22 +776,70 @@ class TestSecurityContext:
         assert jmespath.search("spec.template.spec.securityContext.runAsUser", docs[0]) == 9000
         assert jmespath.search("spec.template.spec.securityContext.fsGroup", docs[0]) == 90
 
-    def test_workers_sets_overwrite_local_container(self):
-        docs = render_chart(
-            values={
-                "workers": {
-                    "celery": {
-                        "enableDefault": False,
-                        "securityContexts": {"container": {"allowPrivilegeEscalation": True}},
-                        "sets": [
-                            {
-                                "name": "test",
-                                "securityContexts": {"container": {"allowPrivilegeEscalation": False}},
-                            }
-                        ],
-                    },
-                }
+    @pytest.mark.parametrize(
+        "values",
+        [
+            {
+                "securityContexts": {"pod": {"runAsUser": 6000, "fsGroup": 60}},
+                "celery": {
+                    "enableDefault": False,
+                    "sets": [
+                        {"name": "test", "securityContexts": {"pod": {"runAsUser": 9000, "fsGroup": 90}}}
+                    ],
+                },
             },
+            {
+                "celery": {
+                    "enableDefault": False,
+                    "securityContexts": {"pod": {"runAsUser": 6000, "fsGroup": 60}},
+                    "sets": [
+                        {"name": "test", "securityContexts": {"pod": {"runAsUser": 9000, "fsGroup": 90}}}
+                    ],
+                },
+            },
+        ],
+    )
+    def test_workers_sets_overwrite_local(self, values):
+        docs = render_chart(
+            values={"workers": values},
+            show_only=["templates/workers/worker-deployment.yaml"],
+        )
+
+        assert jmespath.search("spec.template.spec.securityContext.runAsUser", docs[0]) == 9000
+        assert jmespath.search("spec.template.spec.securityContext.fsGroup", docs[0]) == 90
+
+    @pytest.mark.parametrize(
+        "values",
+        [
+            {
+                "securityContexts": {"container": {"allowPrivilegeEscalation": True}},
+                "celery": {
+                    "enableDefault": False,
+                    "sets": [
+                        {
+                            "name": "test",
+                            "securityContexts": {"container": {"allowPrivilegeEscalation": False}},
+                        }
+                    ],
+                },
+            },
+            {
+                "celery": {
+                    "enableDefault": False,
+                    "securityContexts": {"container": {"allowPrivilegeEscalation": True}},
+                    "sets": [
+                        {
+                            "name": "test",
+                            "securityContexts": {"container": {"allowPrivilegeEscalation": False}},
+                        }
+                    ],
+                },
+            },
+        ],
+    )
+    def test_workers_sets_overwrite_local_container(self, values):
+        docs = render_chart(
+            values={"workers": values},
             show_only=["templates/workers/worker-deployment.yaml"],
         )
 
@@ -700,6 +863,21 @@ class TestSecurityContext:
                         }
                     ],
                 }
+            },
+            {
+                "persistence": {"securityContexts": {"container": {"allowPrivilegeEscalation": True}}},
+                "celery": {
+                    "enableDefault": False,
+                    "sets": [
+                        {
+                            "name": "set1",
+                            "persistence": {
+                                "fixPermissions": True,
+                                "securityContexts": {"container": {"allowPrivilegeEscalation": False}},
+                            },
+                        }
+                    ],
+                },
             },
             {
                 "celery": {

@@ -1297,7 +1297,6 @@ class DataprocAsyncHook(GoogleBaseAsyncHook):
     ) -> None:
         super().__init__(gcp_conn_id=gcp_conn_id, impersonation_chain=impersonation_chain, **kwargs)
         self._cached_client: JobControllerAsyncClient | None = None
-        self._cached_batch_client: BatchControllerAsyncClient | None = None
 
     async def get_cluster_client(self, region: str | None = None) -> ClusterControllerAsyncClient:
         """Create a ClusterControllerAsyncClient."""
@@ -1339,17 +1338,15 @@ class DataprocAsyncHook(GoogleBaseAsyncHook):
 
     async def get_batch_client(self, region: str | None = None) -> BatchControllerAsyncClient:
         """Create a BatchControllerAsyncClient."""
-        if self._cached_batch_client is None:
-            sync_hook = await self.get_sync_hook()
+        sync_hook = await self.get_sync_hook()
 
-            self._cached_batch_client = BatchControllerAsyncClient(
-                credentials=sync_hook.get_credentials(),
-                client_info=CLIENT_INFO,
-                client_options=sync_hook.get_client_options(
-                    api_endpoint_override=sync_hook._get_api_endpoint(region=region)
-                ),
-            )
-        return self._cached_batch_client
+        return BatchControllerAsyncClient(
+            credentials=sync_hook.get_credentials(),
+            client_info=CLIENT_INFO,
+            client_options=sync_hook.get_client_options(
+                api_endpoint_override=sync_hook._get_api_endpoint(region=region)
+            ),
+        )
 
     async def get_operations_client(self, region: str) -> OperationsClient:
         """Create a OperationsClient."""

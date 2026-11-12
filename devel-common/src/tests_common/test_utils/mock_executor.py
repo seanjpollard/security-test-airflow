@@ -30,11 +30,6 @@ from airflow.models.taskinstancekey import TaskInstanceKey
 from airflow.utils.session import create_session
 from airflow.utils.state import State
 
-from tests_common.test_utils.version_compat import AIRFLOW_V_3_4_PLUS
-
-if AIRFLOW_V_3_4_PLUS:
-    from airflow.executors.workloads import WorkloadType
-
 if TYPE_CHECKING:
     from airflow.executors import workloads
 
@@ -43,7 +38,6 @@ class MockExecutor(BaseExecutor):
     """TestExecutor is used for unit testing purposes."""
 
     supports_pickling = False
-    supports_task_instance_uuid = True
     mock_module_path = "mock.executor.path"
     mock_alias = "mock_executor"
 
@@ -85,27 +79,23 @@ class MockExecutor(BaseExecutor):
             return
 
         with create_session() as session:
-            if AIRFLOW_V_3_4_PLUS:
-                task_queue = self.executor_queues[WorkloadType.EXECUTE_TASK]
-            else:
-                task_queue = self.queued_tasks
-            self.history.append(list(task_queue.values()))
+            self.history.append(list(self.queued_tasks.values()))
 
             # Create a stable/predictable sort order for events in self.history
             # for tests!
             def sort_by(item):
                 key, workload = item
-                (dag_id, task_id, date, try_number, map_index) = workload.ti.key
+                (dag_id, task_id, date, try_number, map_index) = key
                 # For workloads, use the task instance priority if available
                 prio = getattr(workload.ti, "priority_weight", 1) if hasattr(workload, "ti") else 1
                 # Sort by priority (DESC), then date,task, try
                 return -prio, date, dag_id, task_id, map_index, try_number
 
             open_slots = self.parallelism - len(self.running)
-            sorted_queue = sorted(task_queue.items(), key=sort_by)
+            sorted_queue = sorted(self.queued_tasks.items(), key=sort_by)
             for key, workload in sorted_queue[:open_slots]:
-                task_queue.pop(key)
-                state = self.mock_task_results[workload.ti.key]
+                self.queued_tasks.pop(key)
+                state = self.mock_task_results[key]
                 ti = TaskInstance.get_task_instance(
                     task_id=workload.ti.task_id,
                     run_id=workload.ti.run_id,

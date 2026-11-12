@@ -22,8 +22,10 @@
 ###########################################
 {{- if .Values.scheduler.enabled }}
 {{- $local := contains "Local" .Values.executor }}
+# Is persistence enabled on the _workers_?
 # This is important because in $local mode, the scheduler assumes the role of the worker
-{{- $stateful := and $local .Values.workers.celery.persistence.enabled }}
+{{- $persistence := or .Values.workers.celery.persistence.enabled (and (not (has .Values.workers.celery.persistence.enabled (list true false))) .Values.workers.persistence.enabled) }}
+{{- $stateful := and $local $persistence }}
 # We can skip Dags mounts on scheduler if dagProcessor is enabled, except with $local mode
 {{- $localOrDagProcessorDisabled := or (not .Values.dagProcessor.enabled) $local }}
 {{- $remoteLogging := or .Values.elasticsearch.enabled .Values.opensearch.enabled }}
@@ -48,7 +50,7 @@ metadata:
     release: {{ .Release.Name }}
     chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
     heritage: {{ .Release.Service }}
-    executor: {{ .Values.executor | replace "," "-" | replace ":" "-" | replace ";" "-" | replace "=" "-" | trunc 63 | trimSuffix "-" | trimSuffix ":" | trimSuffix "_" | trimSuffix "." | quote }}
+    executor: {{ .Values.executor | replace "," "-" | trunc 63 | trimSuffix "-" | trimSuffix ":" | trimSuffix "_" | trimSuffix "." | quote }}
     {{- with .Values.labels }}
       {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -66,8 +68,8 @@ spec:
   {{- if and $stateful .Values.scheduler.updateStrategy }}
   updateStrategy: {{- toYaml .Values.scheduler.updateStrategy | nindent 4 }}
   {{- end }}
-  {{- if and $stateful .Values.workers.celery.persistence.persistentVolumeClaimRetentionPolicy }}
-  persistentVolumeClaimRetentionPolicy: {{- toYaml .Values.workers.celery.persistence.persistentVolumeClaimRetentionPolicy | nindent 4 }}
+  {{- if and $stateful (or .Values.workers.celery.persistence.persistentVolumeClaimRetentionPolicy .Values.workers.persistence.persistentVolumeClaimRetentionPolicy) }}
+  persistentVolumeClaimRetentionPolicy: {{- toYaml (.Values.workers.celery.persistence.persistentVolumeClaimRetentionPolicy | default .Values.workers.persistence.persistentVolumeClaimRetentionPolicy) | nindent 4 }}
   {{- end }}
   {{- if and (not $stateful) .Values.scheduler.strategy }}
   strategy: {{- toYaml .Values.scheduler.strategy | nindent 4 }}
@@ -131,13 +133,10 @@ spec:
       restartPolicy: Always
       terminationGracePeriodSeconds: {{ .Values.scheduler.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "scheduler.serviceAccountName" . }}
-      enableServiceLinks: {{ .Values.enableServiceLinks }}
       {{- if and (eq (include "airflow.podLaunchingExecutor" .) "true") (not .Values.scheduler.serviceAccount.automountServiceAccountToken) }}
       automountServiceAccountToken: false
       {{- end }}
-      {{- if $securityContext }}
       securityContext: {{ $securityContext | nindent 8 }}
-      {{- end }}
       imagePullSecrets: {{ include "image_pull_secrets" . | nindent 8 }}
       {{- if .Values.scheduler.hostAliases }}
       hostAliases: {{- toYaml .Values.scheduler.hostAliases | nindent 8 }}
@@ -148,18 +147,16 @@ spec:
           resources: {{- toYaml .Values.scheduler.resources | nindent 12 }}
           image: {{ template "airflow_image_for_migrations" . }}
           imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
-          {{- if $containerSecurityContextWaitForMigrations }}
           securityContext: {{ $containerSecurityContextWaitForMigrations | nindent 12 }}
-          {{- end }}
           volumeMounts:
             - name: logs
-              mountPath: {{ template "airflow_logs" . }}
+              mountPath: "/opt/airflow/logs"
               {{- if .Values.logs.persistence.subPath }}
               subPath: {{ .Values.logs.persistence.subPath }}
               {{- end }}
             {{- include "airflow_config_mount" . | nindent 12 }}
             {{- if .Values.volumeMounts }}
-              {{- tpl (toYaml .Values.volumeMounts) . | nindent 12 }}
+              {{- toYaml .Values.volumeMounts | nindent 12 }}
             {{- end }}
             {{- if .Values.scheduler.extraVolumeMounts }}
               {{- tpl (toYaml .Values.scheduler.extraVolumeMounts) . | nindent 12 }}
@@ -168,7 +165,7 @@ spec:
           envFrom: {{- include "custom_airflow_environment_from" . | default "\n  []" | indent 10 }}
           env:
             {{- include "custom_airflow_environment" . | indent 10 }}
-            {{- include "standard_airflow_environment" . | indent 10 }}
+            {{- include "standard_airflow_environment" (merge (dict "IncludeJwtSecret" false) .) | indent 10 }}
             {{- if .Values.scheduler.waitForMigrations.env }}
               {{- tpl (toYaml .Values.scheduler.waitForMigrations.env) $ | nindent 12 }}
             {{- end }}
@@ -183,9 +180,7 @@ spec:
         - name: scheduler
           image: {{ template "airflow_image" . }}
           imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
-          {{- if $containerSecurityContext }}
           securityContext: {{ $containerSecurityContext | nindent 12 }}
-          {{- end }}
           {{- if $containerLifecycleHooks }}
           lifecycle: {{- tpl (toYaml $containerLifecycleHooks) . | nindent 12 }}
           {{- end }}
@@ -198,8 +193,7 @@ spec:
           envFrom: {{- include "custom_airflow_environment_from" . | default "\n  []" | indent 10 }}
           env:
             {{- include "custom_airflow_environment" . | indent 10 }}
-            {{- include "standard_airflow_environment" . | indent 10 }}
-            {{- include "jwt_secret_environment" . | indent 10 }}
+            {{- include "standard_airflow_environment" (merge (dict "IncludeJwtSecret" true) .) | indent 10 }}
             {{- include "container_extra_envs" (list . .Values.scheduler.env) | indent 10 }}
           livenessProbe:
             initialDelaySeconds: {{ .Values.scheduler.livenessProbe.initialDelaySeconds }}
@@ -247,12 +241,16 @@ spec:
               {{- include "airflow_dags_mount" . | nindent 12 }}
             {{- end }}
             {{- if .Values.volumeMounts }}
-              {{- tpl (toYaml .Values.volumeMounts) . | nindent 12 }}
+              {{- toYaml .Values.volumeMounts | nindent 12 }}
             {{- end }}
             {{- if .Values.scheduler.extraVolumeMounts }}
               {{- tpl (toYaml .Values.scheduler.extraVolumeMounts) . | nindent 12 }}
             {{- end }}
-            {{- include "serviceAccountTokenVolumeMount" (list . .Values.scheduler.serviceAccount)  | nindent 12 }}
+            {{- if and (eq (include "airflow.podLaunchingExecutor" .) "true") (not .Values.scheduler.serviceAccount.automountServiceAccountToken) .Values.scheduler.serviceAccount.serviceAccountTokenVolume.enabled }}
+            - name: {{ .Values.scheduler.serviceAccount.serviceAccountTokenVolume.volumeName }}
+              mountPath: {{ .Values.scheduler.serviceAccount.serviceAccountTokenVolume.mountPath }}
+              readOnly: true
+            {{- end }}
         {{- if and $localOrDagProcessorDisabled .Values.dags.gitSync.enabled }}
           {{- include "git_sync_container" . | indent 8 }}
         {{- end }}
@@ -261,9 +259,7 @@ spec:
           resources: {{- toYaml .Values.scheduler.logGroomerSidecar.resources | nindent 12 }}
           image: {{ template "airflow_image" . }}
           imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
-          {{- if $containerSecurityContextLogGroomerSidecar }}
           securityContext: {{ $containerSecurityContextLogGroomerSidecar | nindent 12 }}
-          {{- end }}
           {{- if $containerLifecycleHooksLogGroomerSidecar  }}
           lifecycle: {{- tpl (toYaml $containerLifecycleHooksLogGroomerSidecar) . | nindent 12 }}
           {{- end }}
@@ -306,7 +302,7 @@ spec:
               subPath: {{ .Values.logs.persistence.subPath }}
               {{- end }}
             {{- if .Values.volumeMounts }}
-              {{- tpl (toYaml .Values.volumeMounts) . | nindent 12 }}
+              {{- toYaml .Values.volumeMounts | nindent 12 }}
             {{- end }}
             {{- if .Values.scheduler.extraVolumeMounts }}
               {{- tpl (toYaml .Values.scheduler.extraVolumeMounts) . | nindent 12 }}
@@ -333,12 +329,34 @@ spec:
         {{- end }}
         {{- end }}
         {{- if .Values.volumes }}
-          {{- tpl (toYaml .Values.volumes) . | nindent 8 }}
+          {{- toYaml .Values.volumes | nindent 8 }}
         {{- end }}
         {{- if .Values.scheduler.extraVolumes }}
           {{- tpl (toYaml .Values.scheduler.extraVolumes) . | nindent 8 }}
         {{- end }}
-        {{- include "serviceAccountTokenVolume" (list . .Values.scheduler.serviceAccount) | nindent 8 }}
+        {{- if and (eq (include "airflow.podLaunchingExecutor" .) "true") (not .Values.scheduler.serviceAccount.automountServiceAccountToken) .Values.scheduler.serviceAccount.serviceAccountTokenVolume.enabled }}
+        - name: {{ .Values.scheduler.serviceAccount.serviceAccountTokenVolume.volumeName }}
+          projected:
+            defaultMode: 420
+            sources:
+            - serviceAccountToken:
+                {{- if .Values.scheduler.serviceAccount.serviceAccountTokenVolume.audience }}
+                audience: {{ .Values.scheduler.serviceAccount.serviceAccountTokenVolume.audience }}
+                {{- end }}
+                expirationSeconds: {{ .Values.scheduler.serviceAccount.serviceAccountTokenVolume.expirationSeconds }}
+                path: token
+            - configMap:
+                items:
+                - key: ca.crt
+                  path: ca.crt
+                name: kube-root-ca.crt
+            - downwardAPI:
+                items:
+                - fieldRef:
+                    apiVersion: v1
+                    fieldPath: metadata.namespace
+                  path: namespace
+        {{- end }}
   {{- if .Values.logs.persistence.enabled }}
         - name: logs
           persistentVolumeClaim:
@@ -352,16 +370,16 @@ spec:
       kind: PersistentVolumeClaim
       metadata:
         name: logs
-        {{- if .Values.workers.celery.persistence.annotations }}
-        annotations: {{- toYaml .Values.workers.celery.persistence.annotations | nindent 10 }}
+        {{- if or .Values.workers.celery.persistence.annotations .Values.workers.persistence.annotations }}
+        annotations: {{- toYaml (.Values.workers.celery.persistence.annotations | default .Values.workers.persistence.annotations) | nindent 10 }}
         {{- end }}
       spec:
-      {{- if .Values.workers.celery.persistence.storageClassName }}
-        storageClassName: {{ tpl .Values.workers.celery.persistence.storageClassName . | quote }}
+      {{- if or .Values.workers.celery.persistence.storageClassName .Values.workers.persistence.storageClassName }}
+        storageClassName: {{ tpl (.Values.workers.celery.persistence.storageClassName | default .Values.workers.persistence.storageClassName) . | quote }}
       {{- end }}
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: {{ .Values.workers.celery.persistence.size }}
+            storage: {{ .Values.workers.celery.persistence.size | default .Values.workers.persistence.size }}
   {{- end }}
   {{- end }}

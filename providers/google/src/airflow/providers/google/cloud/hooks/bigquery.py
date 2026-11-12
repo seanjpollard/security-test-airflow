@@ -20,7 +20,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -48,7 +47,6 @@ from google.cloud.bigquery import (
 )
 from google.cloud.bigquery.dataset import AccessEntry, Dataset, DatasetListItem, DatasetReference
 from google.cloud.bigquery.retry import DEFAULT_JOB_RETRY
-from google.cloud.bigquery.routine import Routine, RoutineReference
 from google.cloud.bigquery.table import (
     Row,
     RowIterator,
@@ -71,7 +69,6 @@ from airflow.providers.google.cloud.utils.bigquery import bq_cast
 from airflow.providers.google.cloud.utils.credentials_provider import _get_scopes
 from airflow.providers.google.cloud.utils.lineage import send_hook_lineage_for_bq_job
 from airflow.providers.google.common.consts import CLIENT_INFO
-from airflow.providers.google.common.deprecated import deprecated
 from airflow.providers.google.common.hooks.base_google import (
     _UNSET,
     PROVIDE_PROJECT_ID,
@@ -97,32 +94,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-BIGQUERY_LEGACY_SQL_DEFAULT_WARNING = (
-    "The default value of `use_legacy_sql` is deprecated and will change from `True` to `False` "
-    "in a future provider release. Set `use_legacy_sql=True` explicitly if you need legacy SQL, "
-    "or set `use_legacy_sql=False` to use GoogleSQL."
-)
-
-if TYPE_CHECKING:
-    BigQueryJob = CopyJob | QueryJob | LoadJob | ExtractJob
-else:
-    # Mocked google libs during docs build break the union, but the name must exist for runtime importers.
-    BigQueryJob = Any
-
-_ROUTINE_WRITABLE_PROPERTIES: tuple[str, ...] = (
-    "type_",
-    "language",
-    "arguments",
-    "return_type",
-    "return_table_type",
-    "imported_libraries",
-    "body",
-    "description",
-    "determinism_level",
-    "remote_function_options",
-    "data_governance_type",
-    "external_runtime_options",
-)
+BigQueryJob = CopyJob | QueryJob | LoadJob | ExtractJob
 
 
 class BigQueryHook(GoogleBaseHook, DbApiHook):
@@ -202,15 +174,7 @@ class BigQueryHook(GoogleBaseHook, DbApiHook):
         # Use sentinel pattern to distinguish "not provided" from "explicitly provided"
         if use_legacy_sql is _UNSET:
             value = self._get_field("use_legacy_sql", _UNSET)
-            if value is None:
-                warnings.warn(
-                    BIGQUERY_LEGACY_SQL_DEFAULT_WARNING,
-                    AirflowProviderDeprecationWarning,
-                    stacklevel=2,
-                )
-                self.use_legacy_sql = True
-            else:
-                self.use_legacy_sql = value
+            self.use_legacy_sql: bool = value if value is not None else True
         else:
             self.use_legacy_sql = use_legacy_sql  # type: ignore[assignment]
 
@@ -515,18 +479,11 @@ class BigQueryHook(GoogleBaseHook, DbApiHook):
             Note that if `retry` is specified, the timeout applies to each individual attempt.
         """
         _table_resource: dict[str, Any] = {}
-        if isinstance(table_resource, (Table, TableReference, TableListItem)):
-            _table_resource = table_resource.to_api_repr()
-            if isinstance(table_resource, TableReference):
-                # A bare TableReference serializes to a flat dict without the
-                # "tableReference" wrapper expected by the API resource.
-                _table_resource = {"tableReference": _table_resource}
+        if isinstance(table_resource, Table):
+            _table_resource = Table.from_api_repr(table_resource)  # type: ignore
         if schema_fields:
             _table_resource["schema"] = {"fields": schema_fields}
-        if isinstance(table_resource, dict):
-            table_resource_final = {**table_resource, **_table_resource}
-        else:
-            table_resource_final = _table_resource
+        table_resource_final = {**table_resource, **_table_resource}  # type: ignore
         table_resource = self._resolve_table_reference(
             table_resource=table_resource_final,
             project_id=project_id,
@@ -739,12 +696,11 @@ class BigQueryHook(GoogleBaseHook, DbApiHook):
         :param project_id: The name of the project where we have the table
         :param dataset_id: The name of the dataset where we have the table
         :param table_id: The name of the table
-        :param rows: the rows to insert. Each row is a mapping of column name to
-            value, matching the table schema.
+        :param rows: the rows to insert
 
             .. code-block:: python
 
-                rows = [{"a_key": "a_value_0"}, {"a_key": "a_value_1"}]
+                rows = [{"json": {"a_key": "a_value_0"}}, {"json": {"a_key": "a_value_1"}}]
 
         :param ignore_unknown_values: [Optional] Accept rows that contain values
             that do not match the schema. The unknown values are ignored.
@@ -1213,242 +1169,6 @@ class BigQueryHook(GoogleBaseHook, DbApiHook):
             table_id=table_id,
         )
         return table
-
-    @GoogleBaseHook.fallback_to_default_project_id
-    def create_routine(
-        self,
-        routine: Routine | dict[str, Any],
-        dataset_id: str | None = None,
-        routine_id: str | None = None,
-        project_id: str = PROVIDE_PROJECT_ID,
-        if_exists: str = "fail",
-        retry: Retry = DEFAULT_RETRY,
-        timeout: float | None = None,
-    ) -> Routine:
-        """
-        Create a new routine (UDF, procedure, or TVF) in the dataset.
-
-        :param routine: The routine to create. Either a
-            :class:`~google.cloud.bigquery.routine.Routine` instance or a dict in the format defined
-            at https://cloud.google.com/bigquery/docs/reference/rest/v2/routines#Routine. If the
-            routine reference is incomplete, ``dataset_id`` and ``routine_id`` are used to complete
-            it.
-        :param dataset_id: Optional. The dataset that will own the routine. Required if ``routine``
-            does not include a fully-qualified ``routineReference``.
-        :param routine_id: Optional. The routine identifier. Required if ``routine`` does not
-            include a fully-qualified ``routineReference``.
-        :param project_id: Optional. The project that owns the dataset. Falls back to the hook
-            default.
-        :param if_exists: What to do if a routine with the same identifier already exists:
-            ``"fail"`` (default) raises :class:`google.api_core.exceptions.Conflict`;
-            ``"skip"`` leaves the existing routine untouched and returns it;
-            ``"replace"`` deletes the existing routine and creates the new one.
-        :param retry: Optional. A retry object used to retry requests.
-        :param timeout: Optional. The amount of time, in seconds, to wait for the request.
-        :return: The created (or existing) routine.
-        """
-        if if_exists not in {"fail", "skip", "replace"}:
-            raise ValueError(f"`if_exists` must be one of 'fail', 'skip', 'replace'; got {if_exists!r}")
-        routine = self._build_routine(
-            routine, project_id=project_id, dataset_id=dataset_id, routine_id=routine_id
-        )
-        client = self.get_client(project_id=project_id)
-        ref = routine.reference
-        routine_path = f"{ref.project}.{ref.dataset_id}.{ref.routine_id}"
-
-        if if_exists == "replace":
-            try:
-                client.delete_routine(ref, retry=retry, timeout=timeout)
-                self.log.info("Deleted existing routine before replace: %s", routine_path)
-            except NotFound:
-                pass
-            result = client.create_routine(routine, exists_ok=False, retry=retry, timeout=timeout)
-        else:
-            result = client.create_routine(
-                routine, exists_ok=(if_exists == "skip"), retry=retry, timeout=timeout
-            )
-
-        self.log.info("Created routine: %s", routine_path)
-        return result
-
-    @GoogleBaseHook.fallback_to_default_project_id
-    def update_routine(
-        self,
-        routine: Routine | dict[str, Any],
-        fields: Sequence[str],
-        dataset_id: str | None = None,
-        routine_id: str | None = None,
-        project_id: str = PROVIDE_PROJECT_ID,
-        retry: Retry = DEFAULT_RETRY,
-        timeout: float | None = None,
-    ) -> Routine:
-        """
-        Update specified fields of an existing routine.
-
-        BigQuery's ``routines.update`` endpoint is a full-resource PUT (not a PATCH), so
-        this method fetches the existing routine, merges in the requested field changes,
-        and sends the complete resource back. A field listed in ``fields`` but absent in
-        ``routine`` is cleared on the server.
-
-        :param routine: The routine providing new values for the listed fields, either a
-            :class:`~google.cloud.bigquery.routine.Routine` or a Routine API dict (keys in
-            camelCase, e.g. ``{"description": ..., "definitionBody": ...}``).
-        :param fields: The routine properties to update, given as Routine API field names
-            (e.g. ``["description", "definitionBody"]``).
-        :param dataset_id: Optional. Used to complete the routine reference if missing.
-        :param routine_id: Optional. Used to complete the routine reference if missing.
-        :param project_id: Optional. The project that owns the dataset.
-        :param retry: Optional. A retry object used to retry requests.
-        :param timeout: Optional. The amount of time, in seconds, to wait for the request.
-        """
-        if not fields:
-            raise ValueError("`fields` must be a non-empty sequence of routine properties to update.")
-
-        if isinstance(routine, Routine):
-            updates_repr = routine.to_api_repr()
-        else:
-            updates_repr = dict(routine)
-
-        ref_repr = dict(updates_repr.get("routineReference") or {})
-        ref_repr.setdefault("projectId", project_id)
-        if dataset_id:
-            ref_repr.setdefault("datasetId", dataset_id)
-        if routine_id:
-            ref_repr.setdefault("routineId", routine_id)
-
-        client = self.get_client(project_id=project_id)
-        existing = client.get_routine(RoutineReference.from_api_repr(ref_repr), retry=retry, timeout=timeout)
-        merged_repr = existing.to_api_repr()
-        for field in fields:
-            if field in updates_repr:
-                merged_repr[field] = updates_repr[field]
-            else:
-                merged_repr.pop(field, None)
-
-        merged = Routine.from_api_repr(merged_repr)
-        result = client.update_routine(
-            merged, list(_ROUTINE_WRITABLE_PROPERTIES), retry=retry, timeout=timeout
-        )
-        out_ref = result.reference
-        self.log.info("Updated routine: %s.%s.%s", out_ref.project, out_ref.dataset_id, out_ref.routine_id)
-        return result
-
-    @GoogleBaseHook.fallback_to_default_project_id
-    def delete_routine(
-        self,
-        dataset_id: str,
-        routine_id: str,
-        project_id: str = PROVIDE_PROJECT_ID,
-        not_found_ok: bool = True,
-        retry: Retry = DEFAULT_RETRY,
-        timeout: float | None = None,
-    ) -> None:
-        """
-        Delete an existing routine.
-
-        :param dataset_id: The dataset that owns the routine.
-        :param routine_id: The identifier of the routine to delete.
-        :param project_id: Optional. The project that owns the dataset.
-        :param not_found_ok: If ``True`` (default), ignore "not found" errors.
-        :param retry: Optional. A retry object used to retry requests.
-        :param timeout: Optional. The amount of time, in seconds, to wait for the request.
-        """
-        ref = RoutineReference.from_api_repr(
-            {"projectId": project_id, "datasetId": dataset_id, "routineId": routine_id}
-        )
-        routine_path = f"{project_id}.{dataset_id}.{routine_id}"
-        try:
-            self.get_client(project_id=project_id).delete_routine(ref, retry=retry, timeout=timeout)
-        except NotFound:
-            if not not_found_ok:
-                raise
-            self.log.info("Routine not found, ignoring: %s", routine_path)
-            return
-        self.log.info("Deleted routine: %s", routine_path)
-
-    @GoogleBaseHook.fallback_to_default_project_id
-    def get_routine(
-        self,
-        dataset_id: str,
-        routine_id: str,
-        project_id: str = PROVIDE_PROJECT_ID,
-        retry: Retry = DEFAULT_RETRY,
-        timeout: float | None = None,
-    ) -> Routine:
-        """
-        Retrieve the metadata for a routine.
-
-        :param dataset_id: The dataset that owns the routine.
-        :param routine_id: The identifier of the routine to fetch.
-        :param project_id: Optional. The project that owns the dataset.
-        :param retry: Optional. A retry object used to retry requests.
-        :param timeout: Optional. The amount of time, in seconds, to wait for the request.
-        """
-        ref = RoutineReference.from_api_repr(
-            {"projectId": project_id, "datasetId": dataset_id, "routineId": routine_id}
-        )
-        return self.get_client(project_id=project_id).get_routine(ref, retry=retry, timeout=timeout)
-
-    @GoogleBaseHook.fallback_to_default_project_id
-    def list_routines(
-        self,
-        dataset_id: str,
-        project_id: str = PROVIDE_PROJECT_ID,
-        max_results: int | None = None,
-        page_token: str | None = None,
-        retry: Retry = DEFAULT_RETRY,
-        timeout: float | None = None,
-    ) -> list[Routine]:
-        """
-        List routines in a dataset.
-
-        :param dataset_id: The dataset to list routines for.
-        :param project_id: Optional. The project that owns the dataset.
-        :param max_results: Optional. The maximum number of routines to return.
-        :param page_token: Optional. An opaque token identifying the page of results to return.
-        :param retry: Optional. A retry object used to retry requests.
-        :param timeout: Optional. The amount of time, in seconds, to wait for the request.
-        :return: The list of routines. Only a subset of fields is populated; fetch individual
-            routines via :meth:`get_routine` for the complete resource.
-        """
-        dataset_ref = DatasetReference(project=project_id, dataset_id=dataset_id)
-        iterator = self.get_client(project_id=project_id).list_routines(
-            dataset_ref,
-            max_results=max_results,
-            page_token=page_token,
-            retry=retry,
-            timeout=timeout,
-        )
-        return list(iterator)
-
-    @staticmethod
-    def _build_routine(
-        routine: Routine | dict[str, Any],
-        project_id: str,
-        dataset_id: str | None,
-        routine_id: str | None,
-    ) -> Routine:
-        """Return a :class:`Routine` with a fully-qualified reference, filling gaps from kwargs."""
-        if isinstance(routine, Routine):
-            resource = routine.to_api_repr()
-        else:
-            resource = dict(routine)
-
-        ref = resource.setdefault("routineReference", {})
-        ref.setdefault("projectId", project_id)
-        if dataset_id:
-            ref.setdefault("datasetId", dataset_id)
-        if routine_id:
-            ref.setdefault("routineId", routine_id)
-
-        missing = [k for k in ("projectId", "datasetId", "routineId") if not ref.get(k)]
-        if missing:
-            raise ValueError(
-                "Routine reference is missing required fields "
-                f"{missing!r}. Provide them via `dataset_id`/`routine_id` or in the routine "
-                "reference itself."
-            )
-        return Routine.from_api_repr(resource)
 
     @GoogleBaseHook.fallback_to_default_project_id
     def poll_job_complete(
@@ -2450,11 +2170,7 @@ class BigQueryAsyncHook(GoogleBaseAsyncHook):
                 self.log.error("Failed to cancel BigQuery job %s: %s", job_id, str(e))
                 raise
 
-    @deprecated(
-        planned_removal_date="April 30, 2027",
-        use_instead="airflow.providers.google.cloud.hooks.bigquery.BigQueryAsyncHook.aget_records",
-        category=AirflowProviderDeprecationWarning,
-    )
+    # TODO: Convert get_records into an async method
     def get_records(
         self,
         query_results: dict[str, Any],
@@ -2477,44 +2193,6 @@ class BigQueryAsyncHook(GoogleBaseAsyncHook):
             fields_names = [field["name"] for field in fields]
             col_types = [field["type"] for field in fields]
             for dict_row in rows:
-                typed_row = [bq_cast(vs["v"], col_type) for vs, col_type in zip(dict_row["f"], col_types)]
-                if as_dict:
-                    typed_row_dict = dict(zip(fields_names, typed_row))
-                    buffer.append(typed_row_dict)
-                else:
-                    buffer.append(typed_row)
-        return buffer
-
-    async def aget_records(
-        self,
-        query_results: dict[str, Any],
-        as_dict: bool = False,
-        selected_fields: str | list[str] | None = None,
-        yield_frequency: int = 1000,
-    ) -> list[Any]:
-        """
-        Convert a response from BigQuery to records asynchronously.
-
-        Periodically yields control back to the event loop when processing large
-        result sets to prevent blocking the Triggerer event loop.
-
-        :param query_results: the results from a SQL query
-        :param as_dict: if True returns the result as a list of dictionaries, otherwise as list of lists.
-        :param selected_fields:
-        :param yield_frequency: number of rows processed before yielding to the asyncio event loop.
-            Set to 0 to disable yielding.
-        """
-        if isinstance(selected_fields, str):
-            selected_fields = selected_fields.split(",")
-        buffer: list[Any] = []
-        if rows := query_results.get("rows"):
-            fields = query_results["schema"]["fields"]
-            fields = [field for field in fields if not selected_fields or field["name"] in selected_fields]
-            fields_names = [field["name"] for field in fields]
-            col_types = [field["type"] for field in fields]
-            for i, dict_row in enumerate(rows):
-                if yield_frequency > 0 and i > 0 and i % yield_frequency == 0:
-                    await asyncio.sleep(0)
                 typed_row = [bq_cast(vs["v"], col_type) for vs, col_type in zip(dict_row["f"], col_types)]
                 if as_dict:
                     typed_row_dict = dict(zip(fields_names, typed_row))

@@ -38,21 +38,19 @@ The following tables lists the configurable parameters of the Airflow chart and 
         - Default
 
       {% for param in section["params"] %}
-         {% if "deprecated" not in param["description"] %}
-
       * - ``{{ param["name"] }}``
         - {{ param["description"] }}
         - ``{{ param["default"] }}``
-            {% if param["examples"] %}
+         {% if param["examples"] %}
 
           .. code-block:: yaml
              :caption: Examples
 
              {{ param["examples"] | indent(width=10) }}
 
-            {% endif %}
          {% endif %}
       {% endfor %}
+
    {% endfor %}
 
 
@@ -77,41 +75,3 @@ and install the chart:
 .. code-block:: bash
 
    helm install my-release apache-airflow/airflow --values override-values.yaml
-
-Deprecated Parameters
-=====================
-
-The following table contains all deprecated configuration parameters of the Airflow chart with their default values. All values defined in below table will be removed
-in the next Helm Chart major release.
-
-.. jinja:: params_ctx
-
-   {% if deprecations_exist %}
-   .. list-table::
-      :widths: 15 10 30
-      :header-rows: 1
-
-      * - Parameter
-        - Description
-        - Default
-
-   {% for section in sections %}
-      {% for param in section["params"] %}
-         {% if "deprecated" in param["description"] %}
-      * - ``{{ param["name"] }}``
-        - {{ param["description"] }}
-        - ``{{ param["default"] }}``
-            {% if param["examples"] %}
-
-          .. code-block:: yaml
-             :caption: Examples
-
-             {{ param["examples"] | indent(width=10) }}
-
-            {% endif %}
-         {% endif %}
-      {% endfor %}
-   {% endfor %}
-   {% else %}
-   There are no deprecations within current release of Helm Chart.
-   {% endif %}

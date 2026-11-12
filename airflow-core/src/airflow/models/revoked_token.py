@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, ClassVar
 
 import structlog
@@ -44,18 +44,18 @@ class RevokedToken(Base):
     # Track last cleanup time to avoid running cleanup on every request
     _last_cleanup_time: ClassVar[float] = 0.0
 
-    jti: Mapped[str] = mapped_column(String(255), primary_key=True)
+    jti: Mapped[str] = mapped_column(String(32), primary_key=True)
     exp: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
 
     @classmethod
     @provide_session
-    def revoke(cls, jti: str, exp: datetime, *, session: Session = NEW_SESSION) -> None:
+    def revoke(cls, jti: str, exp: datetime, session: Session = NEW_SESSION) -> None:
         """Add a token JTI to the revoked tokens."""
         session.merge(cls(jti=jti, exp=exp))
 
     @classmethod
     @provide_session
-    def is_revoked(cls, jti: str, *, session: Session = NEW_SESSION) -> bool:
+    def is_revoked(cls, jti: str, session: Session = NEW_SESSION) -> bool:
         """Check if a token JTI has been revoked."""
         cls._maybe_cleanup_expired(session)
         return bool(session.scalar(select(exists().where(cls.jti == jti))))
@@ -74,6 +74,6 @@ class RevokedToken(Base):
         if now - cls._last_cleanup_time >= cleanup_interval:
             cls._last_cleanup_time = now
             try:
-                session.execute(delete(cls).where(cls.exp < datetime.now(tz=UTC)))
+                session.execute(delete(cls).where(cls.exp < datetime.now(tz=timezone.utc)))
             except Exception:
                 log.exception("Failed to clean up expired revoked tokens")

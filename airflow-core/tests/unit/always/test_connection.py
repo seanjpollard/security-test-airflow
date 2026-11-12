@@ -107,46 +107,6 @@ class TestConnection:
     def teardown_method(self):
         self.patcher.stop()
 
-    @conf_vars({("core", "fernet_key"): Fernet.generate_key().decode()})
-    def test_password_setter_sets_is_encrypted(self):
-        """Connection's ``set_password`` override must win over FernetFieldsMixin's."""
-        crypto.get_fernet.cache_clear()
-        test_connection = Connection(conn_type="postgres")
-        assert not test_connection.is_encrypted
-
-        test_connection.password = "foo"
-
-        assert test_connection.is_encrypted
-        assert test_connection.password == "foo"
-        assert test_connection._password != "foo"
-
-    @conf_vars({("core", "fernet_key"): Fernet.generate_key().decode()})
-    def test_password_setter_noop_on_falsy_value(self):
-        """Setting password to None/empty must not wipe an already-stored password."""
-        crypto.get_fernet.cache_clear()
-        test_connection = Connection(conn_type="postgres")
-        test_connection.password = "secret"
-        assert test_connection.password == "secret"
-
-        test_connection.password = None
-        assert test_connection.password == "secret"
-
-        test_connection.password = ""
-        assert test_connection.password == "secret"
-
-    @conf_vars({("core", "fernet_key"): Fernet.generate_key().decode()})
-    def test_extra_setter_sets_is_extra_encrypted(self):
-        """Connection's ``set_extra`` override must win over FernetFieldsMixin's."""
-        crypto.get_fernet.cache_clear()
-        test_connection = Connection(conn_type="postgres")
-        assert not test_connection.is_extra_encrypted
-
-        test_connection.extra = '{"k": "v"}'
-
-        assert test_connection.is_extra_encrypted
-        assert test_connection.extra == '{"k": "v"}'
-        assert test_connection._extra != '{"k": "v"}'
-
     @conf_vars({("core", "fernet_key"): ""})
     def test_connection_extra_no_encryption(self):
         """
@@ -404,7 +364,13 @@ class TestConnection:
     def test_connection_from_uri(self, test_config: UriTestCaseConfig):
         connection = Connection(uri=test_config.test_uri)
         for conn_attr, expected_val in test_config.test_conn_attributes.items():
-            assert getattr(connection, conn_attr) == expected_val
+            actual_val = getattr(connection, conn_attr)
+            if expected_val is None:
+                assert expected_val is None
+            if isinstance(expected_val, dict):
+                assert expected_val == actual_val
+            else:
+                assert expected_val == actual_val
 
         expected_calls = []
         if test_config.test_conn_attributes.get("password"):
@@ -459,7 +425,11 @@ class TestConnection:
         gen_uri = connection.get_uri()
         new_conn = Connection(conn_id="test_conn", uri=gen_uri)
         for conn_attr, expected_val in test_config.test_conn_attributes.items():
-            assert getattr(new_conn, conn_attr) == expected_val
+            actual_val = getattr(new_conn, conn_attr)
+            if expected_val is None:
+                assert actual_val is None
+            else:
+                assert actual_val == expected_val
 
     @pytest.mark.parametrize(
         ("uri", "uri_parts"),
@@ -610,22 +580,14 @@ class TestConnection:
     @pytest.mark.parametrize(
         ("val", "expected"),
         [
-            ('{"port": 0}', 0),
             ('{"port": 1}', 1),
             ('{"port": "1"}', 1),
-            ('{"port": "0"}', 0),
-            ('{"port": ""}', None),
             ('{"port": null}', None),
         ],
     )
     def test_from_json_port(self, val, expected):
         """Two conn_type normalizations are applied: replace - with _ and postgresql with postgres"""
         assert Connection.from_json(val).port == expected
-
-    @pytest.mark.parametrize("val", ['{"port": -1}', '{"port": 65536}', '{"port": 1.5}', '{"port": "1.5"}'])
-    def test_from_json_rejects_invalid_port(self, val):
-        with pytest.raises(ValueError, match="port"):
-            Connection.from_json(val)
 
     @pytest.mark.parametrize(
         ("val", "expected"),

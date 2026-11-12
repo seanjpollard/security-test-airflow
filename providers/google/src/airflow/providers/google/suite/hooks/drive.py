@@ -29,19 +29,6 @@ from googleapiclient.http import HttpRequest, MediaFileUpload
 from airflow.providers.google.common.hooks.base_google import GoogleBaseHook
 
 
-def _escape_drive_query_value(value: str) -> str:
-    r"""
-    Escape a value for interpolation into a Drive ``q=`` string literal.
-
-    The Drive query language delimits string literals with single quotes and escapes
-    ``'`` and ``\\`` with a backslash. Values reaching these queries are frequently
-    object names taken from a source bucket listing rather than written by hand, so a
-    quote in the value is ordinary input; left unescaped it ends the literal early and
-    the expression no longer means what the caller intended.
-    """
-    return str(value).replace("\\", "\\\\").replace("'", "\\'")
-
-
 class GoogleDriveHook(GoogleBaseHook):
     """
     Hook for the Google Drive APIs.
@@ -100,8 +87,8 @@ class GoogleDriveHook(GoogleBaseHook):
             conditions = [
                 "trashed=false",
                 "mimeType='application/vnd.google-apps.folder'",
-                f"name='{_escape_drive_query_value(current_folder)}'",
-                f"'{_escape_drive_query_value(current_parent)}' in parents",
+                f"name='{current_folder}'",
+                f"'{current_parent}' in parents",
             ]
             result = (
                 service.files()
@@ -154,7 +141,7 @@ class GoogleDriveHook(GoogleBaseHook):
         :return: request
         """
         service = self.get_conn()
-        request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+        request = service.files().get_media(fileId=file_id)
         return request
 
     def exists(
@@ -236,9 +223,9 @@ class GoogleDriveHook(GoogleBaseHook):
 
         :return: Google Drive file id if the file exists, otherwise None
         """
-        query = f"name = '{_escape_drive_query_value(file_name)}'"
+        query = f"name = '{file_name}'"
         if folder_id:
-            query += f" and '{_escape_drive_query_value(folder_id)}' in parents"
+            query += f" and parents in '{folder_id}'"
 
         if not include_trashed:
             query += " and trashed=false"
@@ -317,7 +304,7 @@ class GoogleDriveHook(GoogleBaseHook):
             try:
                 upload_location = self._resolve_file_path(folder_id)
             except GoogleApiClientError as e:
-                self.log.exception("A problem has been encountered when trying to resolve file path: %s", e)
+                self.log.warning("A problem has been encountered when trying to resolve file path: ", e)
 
         if show_full_target_path:
             self.log.info("File %s uploaded to gdrive://%s.", local_location, upload_location)
@@ -335,29 +322,3 @@ class GoogleDriveHook(GoogleBaseHook):
         """
         request = self.get_media_request(file_id=file_id)
         self.download_content_from_request(file_handle=file_handle, request=request, chunk_size=chunk_size)
-
-    def create_file(
-        self,
-        file_metadata: dict[str, Any],
-        fields: str = "id, webViewLink",
-        supports_all_drives: bool = True,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        """
-        Create a file on Google Drive.
-
-        :param file_metadata: Metadata of the file that will be created, e.g. name, mime type, etc.
-        :param fields: Selector specifying which fields to include in a partial response.
-            Default is "id, webViewLink".
-        :param supports_all_drives: Whether the requesting application supports both My Drive and shared drives.
-            Default is True.
-        """
-        service = self.get_conn()
-
-        response = (
-            service.files()
-            .create(body=file_metadata, fields=fields, supportsAllDrives=supports_all_drives, **kwargs)
-            .execute(num_retries=self.num_retries)
-        )
-
-        return response

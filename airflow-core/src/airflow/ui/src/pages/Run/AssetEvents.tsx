@@ -19,9 +19,7 @@
 import { useParams } from "react-router-dom";
 
 import { useDagRunServiceGetDagRun, useDagRunServiceGetUpstreamAssetEvents } from "openapi/queries";
-
 import { AssetEvents as AssetEventsTable } from "src/components/Assets/AssetEvents";
-
 import { isStatePending, useAutoRefresh } from "src/utils";
 
 export const AssetEvents = () => {
@@ -35,12 +33,12 @@ export const AssetEvents = () => {
       dagRunId: runId,
     },
     undefined,
-    { refetchInterval: (query) => isStatePending(query.state.data?.state) && refetchInterval },
+    { refetchInterval: (query) => (isStatePending(query.state.data?.state) ? refetchInterval : false) },
   );
 
   const { data, isLoading } = useDagRunServiceGetUpstreamAssetEvents({ dagId, dagRunId: runId }, undefined, {
     enabled: dagRun?.run_type === "asset_triggered",
-    refetchInterval: () => isStatePending(dagRun?.state) && refetchInterval,
+    refetchInterval: () => (isStatePending(dagRun?.state) ? refetchInterval : false),
   });
 
   return <AssetEventsTable data={data} isLoading={isLoading} titleKey="common:sourceAssetEvent" />;

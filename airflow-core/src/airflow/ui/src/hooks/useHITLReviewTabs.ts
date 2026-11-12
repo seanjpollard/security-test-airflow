@@ -16,14 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useEffect } from "react";
-
 import { useQuery } from "@tanstack/react-query";
 import axios, { type AxiosError } from "axios";
+import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { OpenAPI } from "openapi/requests/core/OpenAPI";
-
 import type { TabItem } from "src/hooks/useRequiredActionTabs";
 
 const HITL_REVIEW_PLUGIN_TAB = "plugin/hitl-review";
@@ -32,8 +30,6 @@ export type UseHITLReviewTabsOptions = {
   enabled?: boolean;
   mapIndex?: number;
   refetchInterval?: number | false;
-  regionId?: string;
-  regionIndex?: number;
 };
 
 const filterHITLReviewTabs = (tabs: Array<TabItem>, hasHitlData: boolean): Array<TabItem> =>
@@ -52,7 +48,7 @@ export const useHITLReviewTabs = (
   tabs: Array<TabItem>,
   options: UseHITLReviewTabsOptions = {},
 ) => {
-  const { enabled = true, mapIndex = -1, refetchInterval, regionId, regionIndex } = options;
+  const { enabled = true, mapIndex = -1, refetchInterval } = options;
   const hasHitlTab = tabs.some((tab) => tab.value === HITL_REVIEW_PLUGIN_TAB);
   const location = useLocation();
   const navigate = useNavigate();
@@ -69,8 +65,6 @@ export const useHITLReviewTabs = (
           params: {
             dag_id: dagId,
             map_index: mapIndex,
-            region_id: regionId,
-            region_index: regionIndex,
             run_id: dagRunId,
             task_id: taskId,
           },
@@ -94,7 +88,7 @@ export const useHITLReviewTabs = (
 
           return Promise.reject(error);
         }),
-    queryKey: ["hitl-review-session", dagId, dagRunId, taskId, mapIndex, regionId, regionIndex],
+    queryKey: ["hitl-review-session", dagId, dagRunId, taskId, mapIndex],
     refetchInterval,
   });
 
@@ -104,23 +98,9 @@ export const useHITLReviewTabs = (
       !isLoadingHITLReviewSession &&
       location.pathname.includes("plugin/hitl-review")
     ) {
-      void Promise.resolve(
-        navigate(
-          regionId === undefined
-            ? redirectPath
-            : { pathname: location.pathname.replace("/plugin/hitl-review", ""), search: location.search },
-        ),
-      );
+      void Promise.resolve(navigate(redirectPath));
     }
-  }, [
-    hasHITLReviewSession,
-    isLoadingHITLReviewSession,
-    location.pathname,
-    location.search,
-    navigate,
-    redirectPath,
-    regionId,
-  ]);
+  }, [hasHITLReviewSession, isLoadingHITLReviewSession, location.pathname, navigate, redirectPath]);
 
   return {
     hasHITLReviewSession,

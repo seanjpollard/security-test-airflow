@@ -241,8 +241,6 @@ class CloudSQLBaseOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = ("gcp_conn_id",)
-
     def __init__(
         self,
         *,
@@ -293,6 +291,10 @@ class CloudSQLBaseOperator(GoogleCloudBaseOperator):
 
     def execute(self, context: Context):
         pass
+
+    @staticmethod
+    def _get_settings_version(instance):
+        return instance.get(SETTINGS).get(SETTINGS_VERSION)
 
 
 class CloudSQLCreateInstanceOperator(CloudSQLBaseOperator):
@@ -1021,7 +1023,6 @@ class CloudSQLExportInstanceOperator(CloudSQLBaseOperator):
                 gcp_conn_id=self.gcp_conn_id,
                 impersonation_chain=self.impersonation_chain,
                 poke_interval=self.poke_interval,
-                api_version=self.api_version,
             ),
             method_name="execute_complete",
         )

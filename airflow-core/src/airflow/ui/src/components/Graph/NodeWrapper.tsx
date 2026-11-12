@@ -16,9 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import type { PropsWithChildren } from "react";
-
 import { Handle, Position } from "@xyflow/react";
+import type { PropsWithChildren } from "react";
 
 export const NodeWrapper = ({ children }: PropsWithChildren) => (
   <>

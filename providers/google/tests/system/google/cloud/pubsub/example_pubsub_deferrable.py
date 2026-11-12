@@ -78,7 +78,6 @@ with DAG(
         project_id=PROJECT_ID,
         subscription=subscription,
         deferrable=True,
-        return_immediately=False,
     )
     # [END howto_operator_gcp_pubsub_pull_message_with_async_sensor]
 

@@ -19,7 +19,4 @@
 Keycloak auth manager token API
 ===============================
 
-.. swagger-plugin:: ../../src/airflow/providers/keycloak/auth_manager/openapi/v2-keycloak-auth-manager-generated.yaml
-    :id: keycloak-auth-manager-api-ref
-    :page-title: Keycloak auth manager token API
-    :swagger-options: { "tryItOutEnabled": "false", "supportedSubmitMethods": [] }
+It's a stub file. It will be automatically converted during the build process into valid documentation by the Sphinx plugin. See: /docs/conf.py

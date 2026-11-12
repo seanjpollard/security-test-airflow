@@ -17,35 +17,20 @@
  * under the License.
  */
 import { FilterBar } from "src/components/FilterBar";
-
 import { SearchParamsKeys } from "src/constants/searchParams";
 import { useFiltersHandler, type FilterableSearchParamsKeys } from "src/utils";
 
-type Props = {
-  readonly showGanttDateFilters?: boolean;
-};
+const searchParamKeys: Array<FilterableSearchParamsKeys> = [
+  SearchParamsKeys.STATE,
+  SearchParamsKeys.RUN_TYPE,
+  SearchParamsKeys.TRIGGERING_USER_NAME_PATTERN,
+  SearchParamsKeys.RUN_AFTER_RANGE,
+];
 
-export const GridFilters = ({ showGanttDateFilters = false }: Props) => {
-  const searchParamKeys: Array<FilterableSearchParamsKeys> = [
-    SearchParamsKeys.RUN_ID_PATTERN,
-    SearchParamsKeys.STATE,
-    SearchParamsKeys.RUN_TYPE,
-    SearchParamsKeys.TRIGGERING_USER_NAME_PATTERN,
-    SearchParamsKeys.RUN_AFTER_RANGE,
-  ];
-
-  if (showGanttDateFilters) {
-    searchParamKeys.push(SearchParamsKeys.START_DATE_RANGE, SearchParamsKeys.END_DATE_RANGE);
-  }
-
+export const GridFilters = () => {
   const { filterConfigs, handleFiltersChange, initialValues } = useFiltersHandler(searchParamKeys);
 
   return (
-    <FilterBar
-      configs={filterConfigs}
-      initialValues={initialValues}
-      onFiltersChange={handleFiltersChange}
-      showPresetFilters={false}
-    />
+    <FilterBar configs={filterConfigs} initialValues={initialValues} onFiltersChange={handleFiltersChange} />
   );
 };

@@ -23,15 +23,11 @@ import {
   UseDagRunServiceGetDagRunKeyFn,
   useDagRunServiceGetDagRunsKey,
   useDagRunServicePatchDagRun,
-  UseGanttServiceGetGanttDataKeyFn,
-  useTaskInstanceServiceGetMappedTaskInstanceKey,
-  useTaskInstanceServiceGetTaskInstanceKey,
   useTaskInstanceServiceGetTaskInstancesKey,
 } from "openapi/queries";
-
 import { createErrorToaster } from "src/utils";
 
-import { dagListQueryKeys, gridQueryKeys, tiPerAttemptQueryKeys } from "./gridViewQueryKeys";
+import { gridQueryKeys } from "./gridViewQueryKeys";
 import { useClearDagRunDryRunKey } from "./useClearDagRunDryRun";
 
 export const usePatchDagRun = ({
@@ -62,12 +58,7 @@ export const usePatchDagRun = ({
       UseDagRunServiceGetDagRunKeyFn({ dagId, dagRunId }),
       [useDagRunServiceGetDagRunsKey],
       [useTaskInstanceServiceGetTaskInstancesKey, { dagId, dagRunId }],
-      [useTaskInstanceServiceGetTaskInstanceKey, { dagId, dagRunId }],
-      [useTaskInstanceServiceGetMappedTaskInstanceKey, { dagId, dagRunId }],
       [useClearDagRunDryRunKey, dagId],
-      UseGanttServiceGetGanttDataKeyFn({ dagId, runId: dagRunId }),
-      ...tiPerAttemptQueryKeys,
-      ...dagListQueryKeys,
     ];
 
     await Promise.all([

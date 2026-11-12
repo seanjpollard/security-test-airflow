@@ -25,26 +25,6 @@ from typing import Any
 from deprecated import deprecated as standard_deprecated
 from deprecated.classic import ClassicAdapter
 
-# English month names used by the `Month DD, YYYY` date format. Hardcoded rather than
-# derived from `calendar`/`strftime` because the `%B` directive is locale-dependent:
-# under a non-English LC_TIME it fails to parse the English month at decoration time and
-# emits a localized month name in the deprecation message.
-_MONTH_NAMES = (
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-)
-_MONTH_NUMBERS = {name.lower(): number for number, name in enumerate(_MONTH_NAMES, start=1)}
-
 
 class AirflowDeprecationAdapter(ClassicAdapter):
     """
@@ -106,11 +86,7 @@ class AirflowDeprecationAdapter(ClassicAdapter):
     def _validate_date(value: str | None) -> date | None:
         if value:
             try:
-                month_name, separator, day_and_year = value.partition(" ")
-                month_number = _MONTH_NUMBERS.get(month_name.lower())
-                if not separator or month_number is None:
-                    raise ValueError(f"Unknown month name in {value!r}.")
-                return datetime.strptime(f"{month_number} {day_and_year}", "%m %d, %Y").date()
+                return datetime.strptime(value, "%B %d, %Y").date()
             except ValueError as ex:
                 error_message = (
                     f"Invalid date '{value}'. "
@@ -150,8 +126,7 @@ class AirflowDeprecationAdapter(ClassicAdapter):
 
     def sunset_message(self) -> str:
         if self.planned_removal_date:
-            month_name = _MONTH_NAMES[self.planned_removal_date.month - 1]
-            return f"after {month_name} {self.planned_removal_date.strftime('%d, %Y')}"
+            return f"after {self.planned_removal_date.strftime('%B %d, %Y')}"
         if self.planned_removal_release:
             return f"since version {self.planned_removal_release}"
         return "in the future"

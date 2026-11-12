@@ -26,77 +26,6 @@
 Changelog
 ---------
 
-3.13.1
-......
-
-Misc
-~~~~
-
-* ``Drop support for Python 3.10 (#74157)``
-
-Doc-only
-~~~~~~~~
-
-* ``Update provider READMEs for the Python 3.11 baseline (#74158)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-   * ``[main] Upgrade important CI environment (#73629)``
-
-3.13.0
-......
-
-Features
-~~~~~~~~
-
-* ``Template every connection id accepted by provider operators (#73286)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-   * ``Revert "[main] Upgrade important CI environment (#73308)" (#73621)``
-   * ``[main] Upgrade important CI environment (#73308)``
-   * ``Prepare providers release 2026-08-18 (#71794)``
-   * ``Adopt flit 4 as the provider distribution build backend (#71186)``
-   * ``Update changelog with better wording (#71161)``
-
-3.12.1
-......
-
-Bug Fixes
-~~~~~~~~~
-
-* ``Reject mixed-separator path traversal in imap attachment names (#70665)``
-* ``Check imap attachment symlink on the resolved destination path (#69194)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-
-3.12.0
-......
-
-Features
-~~~~~~~~
-
-* ``Add overwrite parameter to IMAP hook to prevent silent file overwrites (#68838)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-   * ``Fix inconsistency between generated provider docs and pyproject.toml (#68991)``
-
-3.11.3
-......
-
-Bug Fixes
-~~~~~~~~~
-
-* ``Neutralize path separator in IMAP (#66951)``
-* ``Handle mixed plaintext and RFC 2047 encoded attachment filenames in ImapHook. Add unit test covering mixed plaintext and encoded filename decoding. (#66672)``
-* ``Fix RFC 2047 filename decoding (#65875)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-   * ``Add explicit [tool.flit.sdist] sections to flit-based pyproject.tomls (#65861)``
-
 3.11.2
 ......
 
@@ -292,7 +221,7 @@ Misc
 .....
 
 .. note::
-  This version contains no code changes. It was released to replace a previous version that was yanked due to a packaging issue.
+  This version has no code changes. It's released due to yank of previous version due to packaging issues.
 
 3.8.1
 .....

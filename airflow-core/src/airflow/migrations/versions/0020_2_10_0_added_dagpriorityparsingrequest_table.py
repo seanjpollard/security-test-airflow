@@ -17,7 +17,7 @@
 # under the License.
 
 """
-Add DagPriorityParsingRequest table.
+Added DagPriorityParsingRequest table.
 
 Revision ID: c4602ba06b4b
 Revises: 677fdbb7fc54

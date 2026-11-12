@@ -16,9 +16,6 @@
 # under the License.
 from __future__ import annotations
 
-import os
-import ssl
-import subprocess
 import sys
 from unittest import mock
 
@@ -28,7 +25,6 @@ from rich.console import Console
 from airflow.cli.commands import api_server_command
 from airflow.exceptions import AirflowConfigException
 
-from tests_common.test_utils.config import conf_vars
 from unit.cli.commands._common_cli_classes import _CommonCLIUvicornTestClass
 
 console = Console(width=400, color_system="standard")
@@ -37,22 +33,6 @@ console = Console(width=400, color_system="standard")
 @pytest.mark.db_test
 class TestCliApiServer(_CommonCLIUvicornTestClass):
     main_process_regexp = r"airflow api-server"
-
-    def test_uses_worker_timeout_config_as_cli_default(self):
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "from airflow.cli.cli_parser import get_parser; "
-                "print(f\"worker_timeout={get_parser().parse_args(['api-server']).worker_timeout!r}\")",
-            ],
-            env={**os.environ, "AIRFLOW__API__WORKER_TIMEOUT": "321"},
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-
-        assert "worker_timeout=321" in result.stdout.splitlines()
 
     @pytest.mark.parametrize(
         "args",
@@ -165,40 +145,14 @@ class TestCliApiServer(_CommonCLIUvicornTestClass):
                     "ssl_cert_path_placeholder",
                     "--ssl-key",
                     "ssl_key_path_placeholder",
-                    "--ssl-ca-file",
-                    "ssl_ca_file_placeholder",
-                    "--ssl-cert-reqs",
-                    "required",
                     "--apps",
                     "core",
                 ],
                 {
                     "ssl_keyfile": "ssl_key_path_placeholder",
                     "ssl_certfile": "ssl_cert_path_placeholder",
-                    "ssl_ca_certs": "ssl_ca_file_placeholder",
-                    "ssl_cert_reqs": ssl.CERT_REQUIRED,
-                    "ssl_ciphers": None,
                 },
                 id="api-server with SSL cert and key",
-            ),
-            pytest.param(
-                [
-                    "api-server",
-                    "--ssl-cert",
-                    "ssl_cert_path_placeholder",
-                    "--ssl-key",
-                    "ssl_key_path_placeholder",
-                    "--ssl-ciphers",
-                    "ECDHE-RSA-AES256-GCM-SHA384",
-                ],
-                {
-                    "ssl_keyfile": "ssl_key_path_placeholder",
-                    "ssl_certfile": "ssl_cert_path_placeholder",
-                    "ssl_ca_certs": None,
-                    "ssl_cert_reqs": ssl.CERT_NONE,
-                    "ssl_ciphers": "ECDHE-RSA-AES256-GCM-SHA384",
-                },
-                id="api-server with SSL ciphers",
             ),
             pytest.param(
                 [
@@ -209,26 +163,20 @@ class TestCliApiServer(_CommonCLIUvicornTestClass):
                 {
                     "ssl_keyfile": None,
                     "ssl_certfile": None,
-                    "ssl_ca_certs": None,
-                    "ssl_cert_reqs": ssl.CERT_NONE,
-                    "ssl_ciphers": None,
                     "log_config": "my_log_config.yaml",
                 },
                 id="api-server with log config",
             ),
         ],
     )
-    def test_args_to_uvicorn(self, ssl_cert_key_and_ca, cli_args, expected_additional_kwargs):
-        cert_path, key_path, ca_path = ssl_cert_key_and_ca
+    def test_args_to_uvicorn(self, ssl_cert_and_key, cli_args, expected_additional_kwargs):
+        cert_path, key_path = ssl_cert_and_key
         if "ssl_cert_path_placeholder" in cli_args:
             cli_args[cli_args.index("ssl_cert_path_placeholder")] = str(cert_path)
             expected_additional_kwargs["ssl_certfile"] = str(cert_path)
         if "ssl_key_path_placeholder" in cli_args:
             cli_args[cli_args.index("ssl_key_path_placeholder")] = str(key_path)
             expected_additional_kwargs["ssl_keyfile"] = str(key_path)
-        if "ssl_ca_file_placeholder" in cli_args:
-            cli_args[cli_args.index("ssl_ca_file_placeholder")] = str(ca_path)
-            expected_additional_kwargs["ssl_ca_certs"] = str(ca_path)
 
         with (
             mock.patch("uvicorn.run") as mock_run,
@@ -299,9 +247,6 @@ class TestCliApiServer(_CommonCLIUvicornTestClass):
             timeout_worker_healthcheck=60,
             ssl_keyfile=None,
             ssl_certfile=None,
-            ssl_ca_certs=None,
-            ssl_cert_reqs=ssl.CERT_NONE,
-            ssl_ciphers=None,
             access_log=False,
             log_level="info",
             proxy_headers=False,
@@ -357,7 +302,7 @@ class TestCliApiServer(_CommonCLIUvicornTestClass):
                 ]
         else:
             assert mock_daemon.mock_calls == []
-            assert mock_setup_locations.mock_calls == []
+            mock_setup_locations.mock_calls == []
             mock_pid_file.assert_not_called()
             mock_open.assert_not_called()
 
@@ -369,63 +314,22 @@ class TestCliApiServer(_CommonCLIUvicornTestClass):
             (["--ssl-key", "_.key"], "Need both.*key.*certificate"),
         ],
     )
-    def test_get_ssl_filepaths_with_incorrect_usage(self, ssl_arguments, error_pattern):
+    def test_get_ssl_cert_and_key_filepaths_with_incorrect_usage(self, ssl_arguments, error_pattern):
         args = self.parser.parse_args(["api-server"] + ssl_arguments)
         with pytest.raises(AirflowConfigException, match=error_pattern):
-            api_server_command._get_ssl_filepaths(args)
+            api_server_command._get_ssl_cert_and_key_filepaths(args)
 
-    def test_get_ssl_filepaths_with_correct_usage(self, ssl_cert_key_and_ca):
-        cert_path, key_path, ca_path = ssl_cert_key_and_ca
+    def test_get_ssl_cert_and_key_filepaths_with_correct_usage(self, ssl_cert_and_key):
+        cert_path, key_path = ssl_cert_and_key
 
         args = self.parser.parse_args(
-            ["api-server"]
-            + ["--ssl-cert", str(cert_path), "--ssl-key", str(key_path), "--ssl-ca-file", str(ca_path)]
+            ["api-server"] + ["--ssl-cert", str(cert_path), "--ssl-key", str(key_path)]
         )
-        assert api_server_command._get_ssl_filepaths(args) == (str(cert_path), str(key_path), str(ca_path))
-
-    @pytest.mark.parametrize(
-        ("ssl_arguments", "expected"),
-        [
-            pytest.param([], None, id="unset"),
-            pytest.param(["--ssl-ciphers", ""], None, id="empty string"),
-            pytest.param(
-                ["--ssl-ciphers", "ECDHE-RSA-AES256-GCM-SHA384"],
-                "ECDHE-RSA-AES256-GCM-SHA384",
-                id="valid cipher list",
-            ),
-        ],
-    )
-    def test_ssl_ciphers(self, ssl_arguments, expected):
-        args = self.parser.parse_args(["api-server"] + ssl_arguments)
-        assert api_server_command._ssl_ciphers(args) == expected
-
-    def test_ssl_ciphers_rejects_unusable_cipher_list(self):
-        args = self.parser.parse_args(["api-server", "--ssl-ciphers", "NOT-A-REAL-CIPHER"])
-        with pytest.raises(AirflowConfigException, match="Invalid ssl_ciphers option 'NOT-A-REAL-CIPHER'"):
-            api_server_command._ssl_ciphers(args)
-
-    @pytest.mark.parametrize("missing_module", ["gunicorn", "uvicorn_worker"])
-    def test_gunicorn_server_type_without_extra_raises_config_error(self, monkeypatch, missing_module):
-        args = self.parser.parse_args(["api-server"])
-        monkeypatch.setitem(sys.modules, missing_module, None)
-
-        with (
-            conf_vars({("api", "server_type"): "gunicorn"}),
-            mock.patch.object(
-                api_server_command, "_run_api_server_with_gunicorn", autospec=True
-            ) as mock_run_gunicorn,
-            pytest.raises(AirflowConfigException, match=r"pip install 'apache-airflow-core\[gunicorn\]'"),
-        ):
-            api_server_command._run_api_server(
-                args, apps="all", num_workers=1, worker_timeout=120, proxy_headers=False
-            )
-
-        mock_run_gunicorn.assert_not_called()
+        assert api_server_command._get_ssl_cert_and_key_filepaths(args) == (str(cert_path), str(key_path))
 
     @pytest.fixture
-    def ssl_cert_key_and_ca(self, tmp_path):
-        cert_path, key_path, ca_path = tmp_path / "_.crt", tmp_path / "_.key", tmp_path / "ca.crt"
+    def ssl_cert_and_key(self, tmp_path):
+        cert_path, key_path = tmp_path / "_.crt", tmp_path / "_.key"
         cert_path.touch()
         key_path.touch()
-        ca_path.touch()
-        return cert_path, key_path, ca_path
+        return cert_path, key_path

@@ -117,7 +117,7 @@ Params can be referenced in :ref:`templated strings <templates-ref>` under ``par
     )
 
 Even though Params can use a variety of types, the default behavior of templates is to provide your task with a string.
-You can change this by setting ``render_template_as_native_obj=True`` while initializing the :class:`~airflow.sdk.DAG`.
+You can change this by setting ``render_template_as_native_obj=True`` while initializing the :class:`~airflow.models.dag.DAG`.
 
 .. code-block::
    :emphasize-lines: 4
@@ -144,11 +144,6 @@ This way, the :class:`~airflow.sdk.definitions.param.Param`'s type is respected 
             lambda my_int_param: print(type(my_int_param))
         ),
     )
-
-Because ``render_template_as_native_obj=True`` uses Jinja's native rendering, values that look like
-Python literals can also be converted. For example, a string value of ``"42"`` may be rendered as the
-integer ``42``. Leave native rendering disabled, use a callable template field, or quote the value
-explicitly when the task must receive a string.
 
 Another way to access your param is via a task's ``context`` kwarg.
 
@@ -210,7 +205,7 @@ Use Params to Provide a Trigger UI Form
 
 .. versionadded:: 2.6.0
 
-:class:`~airflow.sdk.DAG` level params are used to render a user friendly trigger form.
+:class:`~airflow.models.dag.DAG` level params are used to render a user friendly trigger form.
 This form is provided when a user clicks on the "Trigger Dag" button.
 
 The Trigger UI Form is rendered based on the pre-defined Dag Params. If the Dag has no params defined, the trigger form is skipped.
@@ -247,17 +242,9 @@ The following features are supported in the Trigger UI Form:
             * | ``format="date-time"``: Generate a date and
               | time-picker with calendar pop-up
             * ``format="time"``: Generate a time-picker
-            * | ``format="duration"``: Generate a duration
-              | input field accepting ISO 8601 duration
-              | strings (e.g. ``P1D``, ``PT15M``, ``PT2H``)
             * ``format="multiline"``: Generate a multi-line textarea
             * | ``enum=["a", "b", "c"]``: Generates a
               | drop-down select list for scalar values.
-              | If the choices come from an external config file,
-              | read that file while the Dag is parsed and pass the
-              | resulting list to ``enum``; the trigger form reads
-              | the serialized Dag Params and does not call dynamic
-              | choice providers when the form opens.
               | As of JSON validation, a value must be
               | selected or the field must be marked as
               | optional explicit. See also details inside
@@ -349,46 +336,10 @@ The following features are supported in the Trigger UI Form:
             | input - because of JSON validation.
             | If you want to have a field value being
             | added optional only, you must allow
-            | the null type in the JSON schema
-            | validation.
+            | JSON schema validation allowing null
+            | values.
           -
           - ``Param(None, type=["null", "string"])``
-
-        * - Multiple non-null types
-
-            e.g. ``["string", "object"]``,
-            ``["integer", "string"]``
-          - | Generates a plain multi-line textarea.
-            | The stored value type is resolved at
-            | input time: the input is first parsed as
-            | JSON; if the parsed type matches one of
-            | the declared schema types it is stored as
-            | that type, otherwise the raw string is
-            | stored. This means:
-            |
-            | * ``"nightly"`` → always stored as a string
-            |   (JSON parse fails).
-            | * ``"45"`` with ``["string", "object"]`` →
-            |   stored as the string ``"45"`` (number is
-            |   not in the schema).
-            | * ``"45"`` with ``["integer", "string"]`` →
-            |   stored as the integer ``45`` (number
-            |   matches ``"integer"``).
-            | * ``'{"key": "val"}'`` with
-            |   ``["string", "object"]`` → stored as an
-            |   object.
-
-            .. note::
-
-               If the schema also defines ``enum`` or
-               ``examples``, the normal dropdown or
-               multi-select widget is used instead of
-               the textarea, because the set of valid
-               values is already constrained.
-          - none.
-          - ``Param("nightly", type=["string", "object"])``
-
-            ``Param(5, type=["integer", "string"])``
 
 - If a form field is left empty, it is passed as ``None`` value to the params dict.
 - Form fields are rendered in the order of definition of ``params`` in the Dag.
@@ -400,6 +351,7 @@ The following features are supported in the Trigger UI Form:
 - On the bottom of the form the generated JSON configuration can be expanded.
   If you want to change values manually, the JSON configuration can be adjusted. Changes in the JSON will be reflected in the form fields.
 - Fields can be required or optional. Typed fields are required by default to ensure they pass JSON schema validation. To make typed fields optional, you must allow the "null" type.
+- Fields without a "section" will be rendered in the default area. Additional sections will be collapsed by default.
 
 .. note::
     If the field is required the default value must be valid according to the schema as well. If the Dag is defined with
@@ -449,7 +401,7 @@ Finally the fourth section shows advanced form elements.
 
 .. versionchanged:: 3.0.0
     By default custom HTML is not allowed to prevent injection of scripts or other malicious HTML code. The previous field named
-    ``description_html`` is now superseded with the attribute ``description_md``. ``description_html`` is not supported anymore.
+    ``description_html`` is now super-seeded with the attribute ``description_md``. ``description_html`` is not supported anymore.
     Custom form elements using the attribute ``custom_html_form`` was deprecated in version 2.8.0 and support was removed in 3.0.0.
 
 Disabling Runtime Param Modification

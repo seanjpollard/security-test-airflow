@@ -56,16 +56,12 @@ class RemoteLogIO(Protocol):
         """
         ...
 
-    def upload(self, path: os.PathLike | str, ti: RuntimeTI | None = None) -> None:
+    def upload(self, path: os.PathLike | str, ti: RuntimeTI) -> None:
         """Upload the given log path to the remote storage."""
         ...
 
-    def read(self, relative_path: str, ti: RuntimeTI | None) -> LogResponse:
-        """
-        Read logs from the given remote log path.
-
-        ``ti`` is None for logs not tied to a task instance, such as deadline callbacks.
-        """
+    def read(self, relative_path: str, ti: RuntimeTI) -> LogResponse:
+        """Read logs from the given remote log path."""
         ...
 
 
@@ -73,12 +69,8 @@ class RemoteLogIO(Protocol):
 class RemoteLogStreamIO(RemoteLogIO, Protocol):
     """Interface for remote task loggers with stream-based read support."""
 
-    def stream(self, relative_path: str, ti: RuntimeTI | None) -> StreamingLogResponse:
-        """
-        Stream-based read interface for reading logs from the given remote log path.
-
-        ``ti`` is None for logs not tied to a task instance, such as deadline callbacks.
-        """
+    def stream(self, relative_path: str, ti: RuntimeTI) -> StreamingLogResponse:
+        """Stream-based read interface for reading logs from the given remote log path."""
         ...
 
 
@@ -87,25 +79,7 @@ def discover_remote_log_handler(
     fallback_path: str,
     import_string: Callable[[str], Any],
 ) -> tuple[RemoteLogIO | None, str | None]:
-    """
-    Look up the optional remote-log handler alongside a logging dictConfig.
-
-    ``[logging] logging_config_class`` is a dotted path to a
-    ``logging.config.dictConfig`` dict. After importing the dict, this helper
-    re-imports the enclosing module and reads two optional module-level
-    attributes via ``getattr``:
-
-    * ``REMOTE_TASK_LOG`` — :class:`RemoteLogIO` / :class:`RemoteLogStreamIO`
-      instance that uploads and reads task logs.
-    * ``DEFAULT_REMOTE_CONN_ID`` — default Airflow connection id for that
-      backend.
-
-    Either may be ``None`` immediately after this call; provider task handlers
-    can still populate ``REMOTE_TASK_LOG`` from inside ``__init__`` when
-    ``dictConfig`` instantiates them (deprecated path). Callers that want to
-    warn on missing remote-log configuration should re-check
-    ``_ActiveLoggingConfig.remote_task_log`` *after* ``dictConfig`` has run.
-    """
+    """Discover and load the remote log handler from a logging config module."""
     # Sometimes we end up with `""` as the value!
     logging_class_path = logging_class_path or fallback_path
 

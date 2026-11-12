@@ -113,7 +113,6 @@ class DataplexCreateTaskOperator(GoogleCloudBaseOperator):
         "body",
         "validate_only",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     template_fields_renderers = {"body": "json"}
     operator_extra_links = (DataplexTaskLink(),)
@@ -236,7 +235,7 @@ class DataplexDeleteTaskOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = ("project_id", "dataplex_task_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("project_id", "dataplex_task_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -325,7 +324,6 @@ class DataplexListTasksOperator(GoogleCloudBaseOperator):
         "filter",
         "order_by",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (DataplexTasksLink(),)
 
@@ -419,7 +417,7 @@ class DataplexGetTaskOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = ("project_id", "dataplex_task_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("project_id", "dataplex_task_id", "impersonation_chain")
     operator_extra_links = (DataplexTaskLink(),)
 
     def __init__(
@@ -515,7 +513,6 @@ class DataplexCreateLakeOperator(GoogleCloudBaseOperator):
         "body",
         "validate_only",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     template_fields_renderers = {"body": "json"}
     operator_extra_links = (DataplexLakeLink(),)
@@ -631,7 +628,7 @@ class DataplexDeleteLakeOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = ("project_id", "lake_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("project_id", "lake_id", "impersonation_chain")
     operator_extra_links = (DataplexLakeLink(),)
 
     def __init__(
@@ -717,13 +714,7 @@ class DataplexCreateOrUpdateDataQualityScanOperator(GoogleCloudBaseOperator):
     :return: Dataplex data scan id
     """
 
-    template_fields: Sequence[str] = (
-        "project_id",
-        "data_scan_id",
-        "body",
-        "impersonation_chain",
-        "gcp_conn_id",
-    )
+    template_fields = ("project_id", "data_scan_id", "body", "impersonation_chain")
     template_fields_renderers = {"body": "json"}
 
     def __init__(
@@ -827,7 +818,7 @@ class DataplexGetDataQualityScanOperator(GoogleCloudBaseOperator):
     :return: Dataplex data scan
     """
 
-    template_fields: Sequence[str] = ("project_id", "data_scan_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("project_id", "data_scan_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -900,7 +891,7 @@ class DataplexDeleteDataQualityScanOperator(GoogleCloudBaseOperator):
     :return: None
     """
 
-    template_fields: Sequence[str] = ("project_id", "data_scan_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("project_id", "data_scan_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -986,7 +977,7 @@ class DataplexRunDataQualityScanOperator(GoogleCloudBaseOperator):
     :return: Dataplex Data Quality scan job id.
     """
 
-    template_fields: Sequence[str] = ("project_id", "data_scan_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("project_id", "data_scan_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -1148,13 +1139,7 @@ class DataplexGetDataQualityScanResultOperator(GoogleCloudBaseOperator):
         is available.
     """
 
-    template_fields: Sequence[str] = (
-        "project_id",
-        "data_scan_id",
-        "impersonation_chain",
-        "job_id",
-        "gcp_conn_id",
-    )
+    template_fields = ("project_id", "data_scan_id", "impersonation_chain", "job_id")
 
     def __init__(
         self,
@@ -1322,13 +1307,7 @@ class DataplexCreateOrUpdateDataProfileScanOperator(GoogleCloudBaseOperator):
     :return: Dataplex data profile id
     """
 
-    template_fields: Sequence[str] = (
-        "project_id",
-        "data_scan_id",
-        "body",
-        "impersonation_chain",
-        "gcp_conn_id",
-    )
+    template_fields = ("project_id", "data_scan_id", "body", "impersonation_chain")
     template_fields_renderers = {"body": "json"}
 
     def __init__(
@@ -1427,7 +1406,7 @@ class DataplexGetDataProfileScanOperator(GoogleCloudBaseOperator):
     :return: Dataplex data profile
     """
 
-    template_fields: Sequence[str] = ("project_id", "data_scan_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("project_id", "data_scan_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -1499,7 +1478,7 @@ class DataplexDeleteDataProfileScanOperator(GoogleCloudBaseOperator):
     :return: None
     """
 
-    template_fields: Sequence[str] = ("project_id", "data_scan_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("project_id", "data_scan_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -1582,7 +1561,7 @@ class DataplexRunDataProfileScanOperator(GoogleCloudBaseOperator):
     :return: Dataplex Data Profile scan job id.
     """
 
-    template_fields: Sequence[str] = ("project_id", "data_scan_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("project_id", "data_scan_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -1721,7 +1700,7 @@ class DataplexGetDataProfileScanResultOperator(GoogleCloudBaseOperator):
         is available.
     """
 
-    template_fields: Sequence[str] = ("project_id", "data_scan_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("project_id", "data_scan_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -1860,7 +1839,6 @@ class DataplexCreateZoneOperator(GoogleCloudBaseOperator):
         "body",
         "lake_id",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     template_fields_renderers = {"body": "json"}
 
@@ -1952,7 +1930,6 @@ class DataplexDeleteZoneOperator(GoogleCloudBaseOperator):
         "lake_id",
         "zone_id",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -2037,7 +2014,6 @@ class DataplexCreateAssetOperator(GoogleCloudBaseOperator):
         "asset_id",
         "body",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     template_fields_renderers = {"body": "json"}
 
@@ -2132,7 +2108,6 @@ class DataplexDeleteAssetOperator(GoogleCloudBaseOperator):
         "zone_id",
         "asset_id",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(

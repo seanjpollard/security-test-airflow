@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from typing import Any
 
 from airflow.models.baseoperator import chain
 from airflow.models.dag import DAG
 from airflow.providers.google.cloud.operators.datastore import (
     CloudDatastoreAllocateIdsOperator,
+    CloudDatastoreBeginTransactionOperator,
     CloudDatastoreCommitOperator,
     CloudDatastoreDeleteOperationOperator,
     CloudDatastoreExportEntitiesOperator,
@@ -58,6 +60,11 @@ KEYS = [
 ]
 # [END how_to_keys_def]
 
+# [START how_to_transaction_def]
+TRANSACTION_OPTIONS: dict[str, Any] = {"readWrite": {}}
+# [END how_to_transaction_def]
+
+
 with DAG(
     DAG_ID,
     schedule="@once",
@@ -74,6 +81,14 @@ with DAG(
         task_id="allocate_ids", partial_keys=KEYS, project_id=PROJECT_ID
     )
     # [END how_to_allocate_ids]
+
+    # [START how_to_begin_transaction]
+    begin_transaction_commit = CloudDatastoreBeginTransactionOperator(
+        task_id="begin_transaction_commit",
+        transaction_options=TRANSACTION_OPTIONS,
+        project_id=PROJECT_ID,
+    )
+    # [END how_to_begin_transaction]
 
     # [START how_to_commit_def]
     COMMIT_BODY = {
@@ -114,21 +129,25 @@ with DAG(
 
     # [START get_operation_state]
     get_operation = CloudDatastoreGetOperationOperator(
-        task_id="get_operation", name="{{ task_instance.xcom_pull('export_task')['name'] }}"
+        task_id="get_operation",
+        # verbose form: "{{ task_instance.xcom_pull('export_task')['name'] }}"
+        name=export_task.output["name"],
     )
     # [END get_operation_state]
 
     # [START delete_operation]
     delete_export_operation = CloudDatastoreDeleteOperationOperator(
         task_id="delete_export_operation",
-        name="{{ task_instance.xcom_pull('export_task')['name'] }}",
+        # verbose form: "{{ task_instance.xcom_pull('export_task')['name'] }}"
+        name=export_task.output["name"],
         trigger_rule=TriggerRule.ALL_DONE,
     )
     # [END delete_operation]
 
     delete_import_operation = CloudDatastoreDeleteOperationOperator(
         task_id="delete_import_operation",
-        name="{{ task_instance.xcom_pull('import_task')['name'] }}",
+        # verbose form: "{{ task_instance.xcom_pull('import_task')['name'] }}"
+        name=import_task.output["name"],
         trigger_rule=TriggerRule.ALL_DONE,
     )
 
@@ -141,6 +160,7 @@ with DAG(
         create_bucket,
         # TEST BODY
         allocate_ids,
+        begin_transaction_commit,
         commit_task,
         export_task,
         import_task,

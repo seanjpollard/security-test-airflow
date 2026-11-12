@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -82,16 +83,15 @@ PROVIDERS_PATHS = {
 }
 
 
-SKIPPED_DIRECTORY_NAMES = frozenset({"node_modules", ".pnpm-store"})
-
-
-def get_directory_hash(directory: Path) -> str:
+def get_directory_hash(directory: Path, skip_path_regexps: list[str]) -> str:
+    files = sorted(directory.rglob("*"))
+    for skip_path_regexp in skip_path_regexps:
+        matcher = re.compile(skip_path_regexp)
+        files = [file for file in files if not matcher.match(os.fspath(file.resolve()))]
     sha = hashlib.sha256()
-    for root, directory_names, file_names in os.walk(directory):
-        directory_names[:] = sorted(name for name in directory_names if name not in SKIPPED_DIRECTORY_NAMES)
-        for file_name in sorted(file_names):
-            if not file_name.startswith("."):
-                sha.update((Path(root) / file_name).read_bytes())
+    for file in files:
+        if file.is_file() and not file.name.startswith("."):
+            sha.update(file.read_bytes())
     return sha.hexdigest()
 
 
@@ -102,6 +102,8 @@ if __name__ not in ("__main__", "__mp_main__"):
     )
 
 INTERNAL_SERVER_ERROR = "500 Internal Server Error"
+
+SKIP_PATH_REGEXPS = [".*/node_modules.*", ".*/.pnpm-store.*"]
 
 
 def compile_assets(provider_name: str):
@@ -115,7 +117,7 @@ def compile_assets(provider_name: str):
     provider_paths["hash"].parent.mkdir(exist_ok=True, parents=True)
     if dist_directory.exists():
         old_hash = provider_paths["hash"].read_text().strip() if provider_paths["hash"].exists() else ""
-        new_hash = get_directory_hash(www_directory)
+        new_hash = get_directory_hash(www_directory, skip_path_regexps=SKIP_PATH_REGEXPS)
         if new_hash == old_hash:
             print(f"The '{www_directory}' directory has not changed! Skip regeneration.")
             return
@@ -141,7 +143,7 @@ def compile_assets(provider_name: str):
             print(result.stdout + "\n" + result.stderr)
             sys.exit(result.returncode)
     subprocess.check_call(["pnpm", "build"], cwd=os.fspath(www_directory), env=env)
-    new_hash = get_directory_hash(www_directory)
+    new_hash = get_directory_hash(www_directory, skip_path_regexps=SKIP_PATH_REGEXPS)
     provider_paths["hash"].write_text(new_hash + "\n")
     print(f"Assets compiled successfully. New hash: {new_hash}")
 

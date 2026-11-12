@@ -41,7 +41,7 @@ class LocalFilesystemToWasbOperator(BaseOperator):
         `WasbHook.load_file()` takes.
     """
 
-    template_fields: Sequence[str] = ("file_path", "container_name", "blob_name", "wasb_conn_id")
+    template_fields: Sequence[str] = ("file_path", "container_name", "blob_name")
 
     def __init__(
         self,

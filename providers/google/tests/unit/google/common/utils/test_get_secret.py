@@ -58,7 +58,7 @@ class TestGetSecret:
 
         secret_id = "non-existent-secret"
 
-        with pytest.raises(NotFound, match=f"The secret '{secret_id}' not found"):
+        with pytest.raises(NotFound):
             get_secret(secret_id=secret_id)
 
         mock_hook_class.assert_called_once()

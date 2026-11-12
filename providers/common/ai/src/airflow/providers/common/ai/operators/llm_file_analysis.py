@@ -19,15 +19,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
 from airflow.providers.common.ai.operators.llm import LLMOperator
 from airflow.providers.common.ai.utils.file_analysis import build_file_analysis_request
-from airflow.providers.common.ai.utils.usage import coerce_usage_limits
+from airflow.providers.common.ai.utils.logging import log_run_summary
 
 if TYPE_CHECKING:
+    from pydantic_ai import Agent
+
     from airflow.sdk import Context
 
 
@@ -42,21 +44,6 @@ class LLMFileAnalysisOperator(LLMOperator):
 
     :param prompt: The analysis prompt for the LLM.
     :param llm_conn_id: Connection ID for the LLM provider.
-    :param model_id: Model identifier (e.g. ``"openai:gpt-5"``).
-        Overrides the model stored in the connection's extra field.
-    :param fallback_conn_ids: Connection IDs to fail over to, in order, when
-        the primary provider is unavailable. Overrides the ``fallback_conn_ids``
-        set in the connection's extra field. ``None`` (default) reads the
-        connection's own extra field; an explicit ``[]`` disables a chain
-        configured there. See
-        :class:`~airflow.providers.common.ai.hooks.pydantic_ai.PydanticAIHook`
-        for how blank entries in the list are dropped.
-    :param system_prompt: Additional instructions appended to the built-in
-        file-analysis system prompt.
-    :param model_settings: Pydantic AI ``ModelSettings`` for the model call, such as
-        ``temperature`` or ``max_tokens``. See :class:`~airflow.providers.common.ai.operators.llm.LLMOperator`.
-    :param output_retries: How many times the model is asked again when its output
-        fails validation. See :class:`~airflow.providers.common.ai.operators.llm.LLMOperator`.
     :param file_path: File or prefix to analyze.
     :param file_conn_id: Optional connection ID for the storage backend.
         Overrides a connection embedded in ``file_path``.
@@ -75,17 +62,6 @@ class LLMFileAnalysisOperator(LLMOperator):
         while ``max_file_size_bytes`` and ``max_total_size_bytes`` limit bytes
         read from storage and ``max_text_chars`` limits the final prompt text
         budget. Default ``10``.
-
-    ``usage_limits`` is inherited from
-    :class:`~airflow.providers.common.ai.operators.llm.LLMOperator`.
-
-    Human-in-the-Loop approval parameters are inherited from
-    :class:`~airflow.providers.common.ai.operators.llm.LLMOperator`
-    (``require_approval``, ``approval_timeout``, ``on_approval_timeout``,
-    ``allow_modifications``, ``approval_notifiers``, ``approval_assigned_users``,
-    ``fail_on_reject``, ``ignore_downstream_trigger_rules``).
-    The task pauses after the file analysis and only returns the result once a
-    reviewer approves.
     """
 
     template_fields: Sequence[str] = (
@@ -93,9 +69,6 @@ class LLMFileAnalysisOperator(LLMOperator):
         "file_path",
         "file_conn_id",
     )
-
-    # Runs its own execute() without the confidence gate; a decision_policy is rejected at construction.
-    supports_decision_policy: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -132,14 +105,6 @@ class LLMFileAnalysisOperator(LLMOperator):
         self.sample_rows = sample_rows
 
     def execute(self, context: Context) -> Any:
-        # Coerced first so a bad rendered value fails before the expensive setup below.
-        usage_limits = coerce_usage_limits(self.usage_limits)
-        if not isinstance(self.prompt, str):
-            raise TypeError(
-                f"{type(self).__name__} requires a string prompt (got {type(self.prompt).__name__}). "
-                "Supply images or PDFs via file_path with multi_modal=True instead."
-            )
-
         request = build_file_analysis_request(
             file_path=self.file_path,
             file_conn_id=self.file_conn_id,
@@ -164,24 +129,28 @@ class LLMFileAnalysisOperator(LLMOperator):
             self.sample_rows,
         )
         self.log.debug("Resolved file analysis paths: %s", request.resolved_paths)
-        agent = self._create_agent(
+        agent: Agent[None, Any] = self.llm_hook.create_agent(
             output_type=self.output_type,
             instructions=self._build_system_prompt(),
+            **self.agent_params,
         )
-        result = self._run_llm(context, agent, request.user_content, usage_limits=usage_limits)
+        result = agent.run_sync(request.user_content, usage_limits=self.usage_limits)
+        log_run_summary(self.log, result)
         output = result.output
 
         if self.require_approval:
             self.defer_for_approval(context, output)  # type: ignore[misc]
 
-        if self._serialize_model_output and isinstance(output, BaseModel):
-            # Honour ``serialize_output=True`` and the older-Airflow fallback,
-            # matching ``LLMOperator.execute``. ``LLMFileAnalysisOperator``
-            # overrides ``execute`` rather than calling ``super().execute()``,
-            # so the dump step has to be repeated here.
+        if isinstance(output, BaseModel):
             output = output.model_dump()
 
-        self._clear_usage_budget(context)
+        return output
+
+    def execute_complete(self, context: Context, generated_output: str, event: dict[str, Any]) -> Any:
+        """Resume after human review, restoring structured outputs for XCom consumers."""
+        output = super().execute_complete(context, generated_output, event)
+        if isinstance(self.output_type, type) and issubclass(self.output_type, BaseModel):
+            return self.output_type.model_validate_json(output).model_dump()
         return output
 
     def _build_system_prompt(self) -> str:

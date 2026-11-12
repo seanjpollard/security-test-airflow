@@ -67,11 +67,7 @@ CLUSTER_CONFIG = {
 }
 
 with DAG(
-    DAG_ID,
-    schedule="@once",
-    start_date=datetime(2024, 1, 1),
-    catchup=False,
-    tags=["managed-spark", "example"],
+    DAG_ID, schedule="@once", start_date=datetime(2024, 1, 1), catchup=False, tags=["dataproc", "example"]
 ) as dag:
     create_cluster = DataprocCreateClusterOperator(
         task_id="create_cluster",

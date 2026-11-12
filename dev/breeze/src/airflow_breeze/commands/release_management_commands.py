@@ -18,9 +18,6 @@ from __future__ import annotations
 
 import ast
 import glob
-import hashlib
-import itertools
-import json
 import operator
 import os
 import random
@@ -37,7 +34,7 @@ from copy import deepcopy
 from datetime import datetime
 from enum import Enum
 from functools import partial
-from multiprocessing import get_context
+from multiprocessing import Pool
 from pathlib import Path
 from subprocess import DEVNULL
 from typing import IO, TYPE_CHECKING, Any, Literal, NamedTuple
@@ -47,7 +44,7 @@ from rich.progress import Progress
 from rich.syntax import Syntax
 
 from airflow_breeze.branch_defaults import AIRFLOW_BRANCH
-from airflow_breeze.commands.ci_image_commands import build_ci_image_if_needed
+from airflow_breeze.commands.ci_image_commands import rebuild_or_pull_ci_image_if_needed
 from airflow_breeze.commands.common_options import (
     argument_doc_packages,
     option_airflow_extras,
@@ -58,7 +55,6 @@ from airflow_breeze.commands.common_options import (
     option_commit_sha,
     option_debug_resources,
     option_dry_run,
-    option_fail_on_pending_provider_candidates,
     option_github_repository,
     option_github_token,
     option_include_not_ready_providers,
@@ -93,42 +89,23 @@ from airflow_breeze.commands.common_package_installation_options import (
 )
 from airflow_breeze.commands.release_management_group import release_management_group
 from airflow_breeze.global_constants import (
-    ALL_PYTHON_MAJOR_MINOR_VERSIONS,
     ALL_PYTHON_VERSION_TO_PATCHLEVEL_VERSION,
     ALLOWED_DEBIAN_VERSIONS,
     ALLOWED_DISTRIBUTION_FORMATS,
     ALLOWED_PLATFORMS,
     APACHE_AIRFLOW_GITHUB_REPOSITORY,
     CONSTRAINTS,
-    CONSTRAINTS_NO_PROVIDERS,
     CURRENT_PYTHON_MAJOR_MINOR_VERSIONS,
-    DEBIAN_VERSION_TO_HARDENED_IMAGE_DISTRO,
     DEFAULT_PYTHON_MAJOR_MINOR_VERSION,
     DEFAULT_PYTHON_MAJOR_MINOR_VERSION_FOR_IMAGES,
     DESTINATION_LOCATIONS,
-    HARDENED_OS_DEPS_IMAGE_REPOSITORY,
-    HARDENED_PYTHON_IMAGE_DIGESTS,
-    HARDENED_PYTHON_IMAGE_MIRROR,
-    HARDENED_PYTHON_IMAGE_SOURCE,
     MULTI_PLATFORM,
-    OS_DEPS_IMAGE_DEBIAN_VERSION,
-    OS_DEPS_IMAGE_TYPES,
-    SCHEMA_DESTINATION_LOCATIONS,
     UV_VERSION,
-    OsDepsImageType,
-    get_airflow_mypy_version,
     get_airflow_version,
     get_airflowctl_version,
-    get_hardened_python_base_image,
-    get_hardened_python_image_retention_tag,
-    get_hardened_python_image_tag,
-    get_os_deps_image_python_tag,
-    get_pinned_os_deps_image,
     get_task_sdk_version,
-    get_ts_sdk_version,
 )
 from airflow_breeze.params.build_ci_params import BuildCiParams
-from airflow_breeze.params.build_prod_params import BuildProdParams
 from airflow_breeze.params.shell_params import ShellParams
 from airflow_breeze.prepare_providers.provider_distributions import (
     PrepareReleasePackageErrorBuildingPackageException,
@@ -160,7 +137,6 @@ from airflow_breeze.utils.docker_command_utils import (
     fix_ownership_using_docker,
     perform_environment_checks,
 )
-from airflow_breeze.utils.git_remotes import get_github_repo
 from airflow_breeze.utils.github import retrieve_github_token
 from airflow_breeze.utils.helm_chart_utils import chart_version
 from airflow_breeze.utils.packages import (
@@ -221,12 +197,7 @@ from airflow_breeze.utils.versions import is_pre_release
 from airflow_breeze.utils.virtualenv_utils import create_venv
 
 if TYPE_CHECKING:
-    from typing import TypeAlias
-
-    from github import Issue, PullRequest
     from packaging.version import Version
-
-    PullRequestOrIssue: TypeAlias = PullRequest.PullRequest | Issue.Issue
 
 argument_provider_distributions = click.argument(
     "provider_distributions",
@@ -270,26 +241,11 @@ option_use_local_hatch = click.option(
 )
 
 MY_DIR_PATH = os.path.dirname(__file__)
-# Derive the repository root from AIRFLOW_ROOT_PATH (the canonical root resolved by breeze)
-# rather than walking parents of this module's file. When breeze runs from the uvx cache
-# (the standard execution mode, see ADR 0017), this file lives under the uv archive, so the
-# parent-walking approach resolved to the cache dir instead of the repo - breaking dist
-# discovery in tag-providers and the airflow-ctl release-notes path. AIRFLOW_ROOT_PATH is
-# always correct regardless of how breeze is launched.
-SOURCE_DIR_PATH = str(AIRFLOW_ROOT_PATH)
-PR_PATTERN = re.compile(r".*\(#([0-9]+)\)")
-PR_REFERENCE_PATTERN = re.compile(r"#([0-9]+)")
-ISSUE_MATCH_IN_BODY = re.compile(r" #([0-9]+)(?![0-9])")
-# Release-management commits (provider documentation / release preparation) are pure
-# release-process noise: they are not user-facing changes and existing providers already
-# exclude them (the release tooling parks them in the changelog's excluded section). Match
-# only the release-manager titles, not every commit starting with "Prepare" (real provider
-# PRs such as "Prepare bteq command ..." must not be filtered out).
-RELEASE_MANAGEMENT_COMMIT_PATTERN = re.compile(
-    r"^Prepare\s+(?:provider|providers|provider's|ad-hoc)\b.*\b(?:release|documentation)\b"
-    r"|^Prepare\s+documentation\s+for\s+next\s+release\b",
-    re.IGNORECASE,
+SOURCE_DIR_PATH = os.path.abspath(
+    os.path.join(MY_DIR_PATH, os.pardir, os.pardir, os.pardir, os.pardir, os.pardir)
 )
+PR_PATTERN = re.compile(r".*\(#([0-9]+)\)")
+ISSUE_MATCH_IN_BODY = re.compile(r" #([0-9]+)[^0-9]")
 
 
 def remove_code_blocks(text: str) -> str:
@@ -308,13 +264,13 @@ class VersionedFile(NamedTuple):
     file_name: str
 
 
-AIRFLOW_PIP_VERSION = "26.3"
-AIRFLOW_UV_VERSION = "0.13.7"
+AIRFLOW_PIP_VERSION = "26.1.1"
+AIRFLOW_UV_VERSION = "0.11.9"
 AIRFLOW_USE_UV = False
-GITPYTHON_VERSION = "3.2.1"
+GITPYTHON_VERSION = "3.1.49"
 RICH_VERSION = "15.0.0"
-PREK_VERSION = "0.5.10"
-HATCH_VERSION = "1.18.2"
+PREK_VERSION = "0.3.13"
+HATCH_VERSION = "1.16.5"
 PYYAML_VERSION = "6.0.3"
 
 # prek environment and this is done with node, no python installation is needed.
@@ -847,115 +803,6 @@ def provider_action_summary(description: str, message_type: MessageType, package
 
 
 @release_management_group.command(
-    name="classify-provider-changes",
-    help="Classify each provider's unreleased changes with hard-coded, high-confidence rules, "
-    "flagging ambiguous commits as 'needs_llm' for an agent/skill to assess. Outputs JSON - a "
-    "deterministic alternative to the random '--non-interactive' run used purely for discovery.",
-)
-@click.option(
-    "--base-branch",
-    type=str,
-    default="main",
-    help="Base branch to diff the provider changes against.",
-)
-@click.option(
-    "--skip-git-fetch",
-    is_flag=True,
-    help="Skip recreating/fetching the 'apache-https-for-providers' remote; use the local state as-is.",
-)
-@click.option(
-    "--output-file",
-    type=click.Path(dir_okay=False, writable=True, path_type=Path),
-    help="Write the JSON result here instead of stdout (keeps stdout free of progress output).",
-)
-@option_github_repository
-@option_include_not_ready_providers
-@option_include_removed_providers
-@argument_provider_distributions
-@option_verbose
-@option_dry_run
-def classify_provider_changes(
-    base_branch: str,
-    skip_git_fetch: bool,
-    output_file: Path | None,
-    github_repository: str,
-    include_not_ready_providers: bool,
-    include_removed_providers: bool,
-    provider_distributions: tuple[str, ...],
-):
-    import json
-
-    from airflow_breeze.prepare_providers.provider_documentation import (
-        NEEDS_LLM_CLASSIFICATION,
-        _get_all_changes_for_package,
-        classify_change_deterministically,
-    )
-
-    perform_environment_checks()
-    cleanup_python_generated_files()
-    if not provider_distributions:
-        provider_distributions = get_available_distributions(
-            include_removed=include_removed_providers, include_not_ready=include_not_ready_providers
-        )
-    if not skip_git_fetch:
-        run_command(["git", "remote", "rm", "apache-https-for-providers"], check=False, stderr=DEVNULL)
-        make_sure_remote_apache_exists_and_fetch(github_repository=github_repository)
-
-    result: dict[str, Any] = {"base_branch": base_branch, "providers": {}}
-    needs_llm_total = 0
-    for provider_id in provider_distributions:
-        try:
-            basic_provider_checks(provider_id)
-            _, list_of_list_of_changes, _ = _get_all_changes_for_package(
-                provider_id,
-                base_branch,
-                reapply_templates_only=False,
-                only_min_version_update=False,
-            )
-        except Exception as e:
-            # Typically a brand-new provider with no prior release tag, or a suspended provider.
-            result["providers"][provider_id] = {
-                "pending": True,
-                "needs_llm": True,
-                "note": f"could not compute diff (new provider or missing release tag): {e}",
-            }
-            continue
-        changes = list_of_list_of_changes[0] if list_of_list_of_changes else []
-        if not changes:
-            continue
-        commits = []
-        for change in changes:
-            classification, reason = classify_change_deterministically(provider_id, change)
-            if classification == NEEDS_LLM_CLASSIFICATION:
-                needs_llm_total += 1
-            commits.append(
-                {
-                    "hash": change.short_hash,
-                    "pr": change.pr,
-                    "subject": change.message_without_backticks,
-                    "classification": classification,
-                    "reason": reason,
-                }
-            )
-        result["providers"][provider_id] = {
-            "current_version": get_provider_details(provider_id).versions[0],
-            "commits": commits,
-        }
-
-    payload = json.dumps(result, indent=2)
-    if output_file:
-        output_file.write_text(payload + "\n")
-        console_print(
-            f"[success]Wrote classification for {len(result['providers'])} provider(s) "
-            f"to {output_file}[/]\n"
-            f"[info]{needs_llm_total} commit(s) flagged 'needs_llm' for LLM assessment.[/]"
-        )
-    else:
-        # Plain stdout (not via the rich console) so the JSON is machine-parsable.
-        print(payload)
-
-
-@release_management_group.command(
     name="prepare-provider-documentation",
     help="Prepare CHANGELOG, README and COMMITS information for providers.",
 )
@@ -1003,13 +850,6 @@ def classify_provider_changes(
     help="Runs incremental update only after rebase of earlier branch to check if there are no changes.",
 )
 @click.option(
-    "--mark-doc-only",
-    is_flag=True,
-    help="Take the named providers back out of the release: restore their version and changelog to the "
-    "released state and record the doc-only marker to commit. Use when review concludes that an "
-    "already-prepared provider has no user-facing changes. Requires an explicit list of providers.",
-)
-@click.option(
     "--skip-readme",
     is_flag=True,
     help="Skip readme generation. This is used in prek that updates build-files only.",
@@ -1039,7 +879,6 @@ def prepare_provider_documentation(
     skip_changelog: bool,
     skip_readme: bool,
     incremental_update: bool,
-    mark_doc_only: bool,
     release_date: str | None,
 ):
     from airflow_breeze.prepare_providers.provider_documentation import (
@@ -1048,7 +887,6 @@ def prepare_provider_documentation(
         PrepareReleaseDocsNoChangesException,
         PrepareReleaseDocsUserQuitException,
         PrepareReleaseDocsUserSkippedException,
-        drop_provider_to_doc_only,
         update_changelog,
         update_index_rst,
         update_min_airflow_version_and_build_files,
@@ -1059,19 +897,10 @@ def prepare_provider_documentation(
         console_print("[error]Release date is required unless --only-min-version-update is used![/]")
         sys.exit(1)
 
-    if mark_doc_only and not provider_distributions:
-        console_print(
-            "[error]--mark-doc-only takes the named providers out of the release, so it needs an "
-            "explicit list of providers rather than defaulting to all of them![/]"
-        )
-        sys.exit(1)
-
     perform_environment_checks()
     fix_ownership_using_docker()
     cleanup_python_generated_files()
-    # Forcing "yes" keeps the incremental pass from re-asking about every provider, which also puts
-    # the reclassify-to-doc-only prompt out of reach - --mark-doc-only is how that decision is applied.
-    if incremental_update and not mark_doc_only:
+    if incremental_update:
         set_forced_answer("yes")
     if not provider_distributions:
         provider_distributions = get_available_distributions(
@@ -1091,9 +920,6 @@ def prepare_provider_documentation(
     for provider_id in provider_distributions:
         try:
             provider_metadata = basic_provider_checks(provider_id)
-            if mark_doc_only:
-                with ci_group(f"Marking '{provider_id}' as doc-only"):
-                    drop_provider_to_doc_only(provider_id, base_branch=base_branch)
             if os.environ.get("GITHUB_ACTIONS", "false") != "true":
                 if not only_min_version_update:
                     console_print("-" * get_console().width)
@@ -1297,14 +1123,6 @@ def _build_provider_distributions(
     help="Skip checking if the tag already exists in the remote repository",
 )
 @click.option(
-    "--skip-git-fetch",
-    default=False,
-    is_flag=True,
-    help="Skip recreating and fetching the 'apache-https-for-providers' remote, and check tags against "
-    "the state already in the local repository. Useful when building several batches in a row - the "
-    "fetch pulls the full history and all tags, which is slow and flaky on an unreliable network.",
-)
-@click.option(
     "--skip-deleting-generated-files",
     default=False,
     is_flag=True,
@@ -1342,7 +1160,6 @@ def prepare_provider_distributions(
     distributions_list_file: IO | None,
     provider_distributions: tuple[str, ...],
     skip_deleting_generated_files: bool,
-    skip_git_fetch: bool,
     skip_tag_check: bool,
     version_suffix: str,
 ):
@@ -1377,7 +1194,7 @@ def prepare_provider_distributions(
         include_removed=include_removed_providers,
         include_not_ready=include_not_ready_providers,
     )
-    if not skip_tag_check and not is_local_package_version(version_suffix) and not skip_git_fetch:
+    if not skip_tag_check and not is_local_package_version(version_suffix):
         run_command(["git", "remote", "rm", "apache-https-for-providers"], check=False, stderr=DEVNULL)
         make_sure_remote_apache_exists_and_fetch(github_repository=github_repository)
     success_packages = []
@@ -1448,7 +1265,7 @@ def run_generate_constraints(
 ) -> tuple[int, str]:
     result = execute_command_in_shell(
         shell_params,
-        project_name=f"breeze-constraints-{shell_params.python.replace('.', '-')}",
+        project_name=f"constraints-{shell_params.python.replace('.', '-')}",
         command="/opt/airflow/scripts/in_container/run_generate_constraints.py",
         output=output,
     )
@@ -1555,11 +1372,8 @@ def tag_providers(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,
-                # Read-only lookup, so run it even in dry-run mode: a dry run returns empty
-                # stdout for every remote, which would make the search below find nothing.
-                dry_run_override=False,
             )
-            if (get_github_repo(result.stdout.strip()) or "").casefold() == APACHE_AIRFLOW_GITHUB_REPOSITORY:
+            if "apache/airflow.git" in result.stdout:
                 found_remote = remote
                 break
         except subprocess.CalledProcessError:
@@ -1572,7 +1386,7 @@ def tag_providers(
     tags = []
     if clean_tags:
         extra_flags.append("--force")
-    for file in os.listdir(AIRFLOW_DIST_PATH):
+    for file in os.listdir(os.path.join(SOURCE_DIR_PATH, "dist")):
         if file.endswith(".whl"):
             match = re.match(r".*airflow_providers_(.*)-(.*)-py3.*", file)
             if match:
@@ -1604,8 +1418,6 @@ def tag_providers(
 @option_debug_resources
 @option_python_versions
 @option_airflow_constraints_mode_ci
-@option_allow_pre_releases
-@option_fail_on_pending_provider_candidates
 @option_github_repository
 @option_use_uv
 @option_verbose
@@ -1613,9 +1425,7 @@ def tag_providers(
 @option_answer
 def generate_constraints(
     airflow_constraints_mode: str,
-    allow_pre_releases: bool,
     debug_resources: bool,
-    fail_on_pending_provider_candidates: bool,
     github_repository: str,
     parallelism: int,
     python: str,
@@ -1659,8 +1469,6 @@ def generate_constraints(
         shell_params_list = [
             ShellParams(
                 airflow_constraints_mode=airflow_constraints_mode,
-                allow_pre_releases=allow_pre_releases,
-                fail_on_pending_provider_candidates=fail_on_pending_provider_candidates,
                 github_repository=github_repository,
                 python=python,
                 use_uv=use_uv,
@@ -1679,8 +1487,6 @@ def generate_constraints(
     else:
         shell_params = ShellParams(
             airflow_constraints_mode=airflow_constraints_mode,
-            allow_pre_releases=allow_pre_releases,
-            fail_on_pending_provider_candidates=fail_on_pending_provider_candidates,
             github_repository=github_repository,
             python=python,
             use_uv=use_uv,
@@ -1748,9 +1554,7 @@ def _run_command_for_providers(
     output: Output | None,
 ) -> tuple[int, str]:
     shell_params.install_selected_providers = " ".join(list_of_providers)
-    result_command = execute_command_in_shell(
-        shell_params, project_name=f"breeze-providers-{index}", output=output
-    )
+    result_command = execute_command_in_shell(shell_params, project_name=f"providers-{index}", output=output)
     return result_command.returncode, f"{list_of_providers}"
 
 
@@ -1837,7 +1641,7 @@ def install_provider_distributions(
         use_airflow_version=use_airflow_version,
         use_distributions_from_dist=use_distributions_from_dist,
     )
-    build_ci_image_if_needed(command_params=shell_params)
+    rebuild_or_pull_ci_image_if_needed(command_params=shell_params)
     if run_in_parallel:
         list_of_all_providers = get_all_providers_in_dist(
             distribution_format=distribution_format, install_selected_providers=install_selected_providers
@@ -1902,7 +1706,7 @@ def install_provider_distributions(
             skip_cleanup=skip_cleanup,
         )
     else:
-        result_command = execute_command_in_shell(shell_params, project_name="breeze-providers")
+        result_command = execute_command_in_shell(shell_params, project_name="providers")
         fix_ownership_using_docker()
         sys.exit(result_command.returncode)
 
@@ -1976,10 +1780,10 @@ def verify_provider_distributions(
         use_airflow_version=use_airflow_version,
         use_distributions_from_dist=use_distributions_from_dist,
     )
-    build_ci_image_if_needed(command_params=shell_params)
+    rebuild_or_pull_ci_image_if_needed(command_params=shell_params)
     result_command = execute_command_in_shell(
         shell_params,
-        project_name="breeze-providers",
+        project_name="providers",
         command="python /opt/airflow/scripts/in_container/verify_providers.py",
     )
     fix_ownership_using_docker()
@@ -2094,20 +1898,13 @@ def get_package_version_possibly_from_stable_txt(package_name: str) -> str | Non
     if package_name == "apache-airflow-ctl":
         return get_airflowctl_version()
 
-    if package_name == "apache-airflow-mypy":
-        return get_airflow_mypy_version()
-
     if package_name == "task-sdk":
         return get_task_sdk_version()
-
-    if package_name == "ts-sdk":
-        return get_ts_sdk_version()
 
     if package_name == "helm-chart":
         return chart_version()
 
-    if package_name in ("docker-stack", "apache-airflow-providers", "java-sdk"):
-        # Non-versioned packages; java-sdk is versioned but only via a staged stable.txt.
+    if package_name in ("docker-stack", "apache-airflow-providers"):
         return None
 
     if package_name.startswith("apache-airflow-providers-"):
@@ -2498,7 +2295,8 @@ def release_prod_images(
         image_type = "regular"
     for python in python_versions:
         build_args = {
-            "BASE_IMAGE": get_hardened_python_base_image(python),
+            "AIRFLOW_CONSTRAINTS": "constraints-no-providers",
+            "BASE_IMAGE": "debian:bookworm-slim",
             "AIRFLOW_PYTHON_VERSION": ALL_PYTHON_VERSION_TO_PATCHLEVEL_VERSION.get(python, python),
             "AIRFLOW_VERSION": airflow_version,
             "INCLUDE_PRE_RELEASE": "true" if include_pre_release else "false",
@@ -2506,15 +2304,10 @@ def release_prod_images(
             "DOCKER_CONTEXT_FILES": "./docker-context-files",
             "AIRFLOW_FALLBACK_NO_CONSTRAINTS_INSTALLATION": "false",
         }
-        for os_deps_image_type in OS_DEPS_IMAGE_TYPES:
-            os_deps_image = get_pinned_os_deps_image(os_deps_image_type.name, python)
-            if os_deps_image_type.dockerfile == "Dockerfile" and os_deps_image:
-                build_args[os_deps_image_type.build_arg] = os_deps_image
         if commit_sha:
             build_args["COMMIT_SHA"] = commit_sha
         if slim_images:
             build_args["AIRFLOW_EXTRAS"] = ""
-            build_args["AIRFLOW_CONSTRAINTS_MODE"] = CONSTRAINTS_NO_PROVIDERS
         console_print(f"[info]Building {image_type} {airflow_version} image for Python {python}[/]")
         python_build_args = deepcopy(build_args)
         image_name = f"{dockerhub_repo}:{image_prefix}{airflow_version}-python{python}"
@@ -2651,17 +2444,12 @@ def merge_prod_images(
 
 
 def is_package_in_dist(dist_files: list[str], package: str) -> bool:
-    """Check if package has been prepared in dist folder.
-
-    The trailing separator after the provider id is required so that a short provider id is
-    not matched as a prefix of a longer one - e.g. ``git`` must not match the ``github``
-    distribution files (``apache_airflow_providers_github-...``).
-    """
+    """Check if package has been prepared in dist folder."""
     return any(
         file.startswith(
             (
-                f"apache_airflow_providers_{package.replace('.', '_')}-",
-                f"apache-airflow-providers-{package.replace('.', '-')}-",
+                f"apache_airflow_providers_{package.replace('.', '_')}",
+                f"apache-airflow-providers-{package.replace('.', '-')}",
             )
         )
         for file in dist_files
@@ -2674,9 +2462,9 @@ VERSION_MATCH = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)(.*)")
 def get_suffix_from_package_in_dist(dist_files: list[str], package: str) -> str | None:
     """Get suffix from package prepared in dist folder."""
     for filename in dist_files:
-        if filename.startswith(
-            f"apache_airflow_providers_{package.replace('.', '_')}-"
-        ) and filename.endswith(".tar.gz"):
+        if filename.startswith(f"apache_airflow_providers_{package.replace('.', '_')}") and filename.endswith(
+            ".tar.gz"
+        ):
             file = filename[: -len(".tar.gz")]
             version = file.split("-")[-1]
             match = VERSION_MATCH.match(version)
@@ -2686,8 +2474,8 @@ def get_suffix_from_package_in_dist(dist_files: list[str], package: str) -> str 
 
 
 def get_prs_for_package(provider_id: str, current_release_version: str | None = None) -> list[int]:
-    prs: list[int] = []
-    seen_prs: set[int] = set()
+    pr_matcher = re.compile(r".*\(#([0-9]*)\)``$")
+    prs = []
     if current_release_version is None:
         provider_yaml_dict = get_provider_distributions_metadata().get(provider_id)
         if not provider_yaml_dict:
@@ -2711,59 +2499,9 @@ def get_prs_for_package(provider_id: str, current_release_version: str | None = 
             if line.startswith(".. Below changes are excluded from the changelog"):
                 # The reminder of PRs is not important skipping it
                 break
-            if line.lstrip().startswith("*"):
-                for pr_match in PR_REFERENCE_PATTERN.findall(line):
-                    pr_number = int(pr_match)
-                    if pr_number not in seen_prs:
-                        seen_prs.add(pr_number)
-                        prs.append(pr_number)
-    return prs
-
-
-def get_prs_from_git_log_for_new_provider(provider_id: str) -> list[int]:
-    """
-    Return PR numbers referenced by every commit that touched a new provider's sources.
-
-    A new provider's changelog only lists changes made *after* its initial release, so for
-    the first release there are no PR references to extract from it. Instead, we collect the
-    related PRs directly from the git history of the provider's directory. The result is
-    ordered from newest to oldest commit. Release-management commits (provider documentation
-    / release preparation) are skipped to match how existing providers behave, but the list
-    may still include other bootstrap and development commits that are not user-facing.
-    """
-    provider_details = get_provider_details(provider_id)
-    git_command = [
-        "git",
-        "log",
-        "--pretty=format:%s",
-        "--",
-        provider_details.root_provider_path.as_posix(),
-    ]
-    result = run_command(
-        git_command,
-        cwd=AIRFLOW_ROOT_PATH,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        console_print(
-            f"[warning]Could not retrieve git history for provider {provider_id}: {result.stderr}[/]"
-        )
-        return []
-    prs: list[int] = []
-    seen: set[int] = set()
-    for line in result.stdout.splitlines():
-        subject = line.strip()
-        if RELEASE_MANAGEMENT_COMMIT_PATTERN.match(subject):
-            # Skip release-preparation / documentation commits (release-process noise).
-            continue
-        match_result = PR_PATTERN.match(subject)
-        if match_result:
-            pr_number = int(match_result.group(1))
-            if pr_number not in seen:
-                seen.add(pr_number)
-                prs.append(pr_number)
+            match_result = pr_matcher.match(line.strip())
+            if match_result:
+                prs.append(int(match_result.group(1)))
     return prs
 
 
@@ -2810,6 +2548,7 @@ def get_commented_out_prs_from_provider_changelogs() -> list[int]:
     Returns list of PRs that are commented out in the changelog.
     :return: list of PR numbers that appear only in comments in changelog.rst files in "providers" dir
     """
+    pr_matcher = re.compile(r".*\(#([0-9]+)\).*")
     commented_prs = set()
 
     # Get all provider distributions
@@ -2847,8 +2586,9 @@ def get_commented_out_prs_from_provider_changelogs() -> list[int]:
 
             # Extract PRs from excluded sections
             if in_excluded_section and line.strip().startswith("*"):
-                for pr_match in PR_REFERENCE_PATTERN.findall(line):
-                    commented_prs.add(int(pr_match))
+                match_result = pr_matcher.search(line)
+                if match_result:
+                    commented_prs.add(int(match_result.group(1)))
 
     return sorted(commented_prs)
 
@@ -2874,24 +2614,16 @@ def get_commented_out_prs_from_provider_changelogs() -> list[int]:
     is_flag=True,
     help="Only consider package ids with packages prepared in the dist folder",
 )
-@click.option(
-    "--output-file",
-    type=click.Path(file_okay=True, dir_okay=False, writable=True, path_type=Path),
-    help="Write the generated issue body to this file (untruncated). If not provided, a "
-    "temporary file is created. Submit it directly with 'gh issue create --body-file <file>'.",
-)
 @argument_provider_distributions
-@option_answer
 def generate_issue_content_providers(
     disable_progress: bool,
     excluded_pr_list: str,
     github_token: str,
     only_available_in_dist: bool,
-    output_file: Path | None,
     provider_distributions: list[str],
 ):
     import jinja2
-    from github import Github, UnknownObjectException
+    from github import Github, Issue, PullRequest, UnknownObjectException
 
     class ProviderPRInfo(NamedTuple):
         provider_id: str
@@ -2930,19 +2662,6 @@ def generate_issue_content_providers(
             if not provider_yaml_dict:
                 raise RuntimeError(f"The provider id {provider_id} does not have provider.yaml file")
             prs = get_prs_for_package(provider_id, current_release_version=provider_yaml_dict["versions"][0])
-            if not prs and _is_initial_provider_release(provider_yaml_dict):
-                # New providers have no PR references in their changelog yet, so collect the
-                # related PRs directly from the git history of the provider's sources.
-                prs = get_prs_from_git_log_for_new_provider(provider_id)
-                if prs:
-                    console_print(
-                        f"[info]Including new provider {provider_id}: collected {len(prs)} related "
-                        "PR(s) from the git history of its sources."
-                    )
-                else:
-                    console_print(
-                        f"[info]Including new provider {provider_id}: no related PRs found in git history."
-                    )
             filtered_prs = [pr for pr in prs if pr not in excluded_prs]
             if not _should_include_provider_in_issue(provider_yaml_dict, prs, filtered_prs):
                 console_print(
@@ -2950,14 +2669,14 @@ def generate_issue_content_providers(
                     "The changelog file does not contain PR references for the release.\n"
                 )
                 continue
+            if not prs and _is_initial_provider_release(provider_yaml_dict):
+                console_print(
+                    f"[info]Including provider {provider_id}: initial release without PR references in changelog."
+                )
             all_prs.update(prs)
             provider_prs[provider_id] = filtered_prs
             all_retrieved_prs.update(provider_prs[provider_id])
-        github_token = retrieve_github_token(
-            github_token,
-            description="airflow-generate-provider-release-issue",
-            scopes="repo:status",
-        )
+        github_token = retrieve_github_token(github_token)
         g = Github(github_token)
         repo = g.get_repo("apache/airflow")
         pull_requests: dict[int, PullRequest.PullRequest | Issue.Issue] = {}
@@ -3050,8 +2769,10 @@ def generate_issue_content_providers(
         )
         console_print()
         console_print()
-        issue_title = f"Status of testing Providers that were prepared on {datetime.now():%B %d, %Y}"
-        console_print(f"Issue title: [warning]{issue_title}[/]")
+        console_print(
+            "Issue title: [warning]Status of testing Providers that were "
+            f"prepared on {datetime.now():%B %d, %Y}[/]"
+        )
         console_print()
         issue_content += "\n"
         users: set[str] = set()
@@ -3060,29 +2781,8 @@ def generate_issue_content_providers(
                 if pr.user.login:
                     users.add("@" + pr.user.login)
         issue_content += f"All users involved in the PRs:\n{' '.join(users)}"
-        # Persist the body to a file and submit with "gh issue create --body-file". Passing the
-        # body inline (or via "--web", which encodes it into the URL) fails with "argument/URL
-        # too long" on large provider waves; a file avoids that and console truncation, and gives
-        # a deterministic artifact that a human or an agent can submit later.
-        if output_file is not None:
-            issue_body_path = output_file
-            if issue_body_path.parent != Path():
-                issue_body_path.parent.mkdir(parents=True, exist_ok=True)
-            issue_body_path.write_text(issue_content)
-        else:
-            with tempfile.NamedTemporaryFile(
-                mode="w", prefix="provider_issue_", suffix=".md", delete=False
-            ) as tmp_file:
-                tmp_file.write(issue_content)
-                issue_body_path = Path(tmp_file.name)
-        console_print(Syntax(issue_content, "markdown", theme="ansi_dark"))
-        console_print()
-        console_print(f"[info]The full issue body has been written to:[/] {issue_body_path}")
-        manual_command = (
-            f'gh issue create --repo apache/airflow --title "{issue_title}" '
-            f'--body-file "{issue_body_path}" --label "testing status,kind:meta"'
-        )
-        console_print(f"[info]You can create (or re-create) the issue at any time with:[/]\n{manual_command}")
+        syntax = Syntax(issue_content, "markdown", theme="ansi_dark")
+        console_print(syntax)
         create_issue = user_confirm("Should I create the issue?")
         if create_issue == Answer.YES:
             res = run_command(
@@ -3090,27 +2790,22 @@ def generate_issue_content_providers(
                     "gh",
                     "issue",
                     "create",
-                    "--repo",
-                    "apache/airflow",
-                    "--title",
-                    issue_title,
-                    "--body-file",
-                    os.fspath(issue_body_path),
-                    "--label",
+                    "-t",
+                    f"Status of testing Providers that were prepared on {datetime.now():%B %d, %Y}",
+                    "-b",
+                    issue_content,
+                    "-l",
                     "testing status,kind:meta",
+                    "-w",
                 ],
                 check=False,
-                capture_output=True,
-                text=True,
             )
             if res.returncode != 0:
                 console_print(
-                    f"[error]Failed to create issue:[/]\n{res.stderr}\n"
-                    f"[info]The full issue body is at {issue_body_path} - create it manually with:[/]\n"
-                    f"{manual_command}"
+                    "Failed to create issue. If the error is about 'too long URL' you have "
+                    "to create the issue manually by copy&pasting the above output"
                 )
                 sys.exit(1)
-            console_print(f"[success]Issue created:[/] {res.stdout.strip()}")
 
 
 def get_git_log_command(
@@ -3567,14 +3262,7 @@ def generate_airflowctl_changelog(
     verbose = get_verbose()
 
     prs = _get_airflowctl_prs(verbose, previous_release, current_release, excluded_pr_list)
-    github_token = (
-        retrieve_github_token(
-            github_token,
-            description="airflow-generate-airflowctl-changelog",
-            scopes="repo:status",
-        )
-        or ""
-    )
+    github_token = retrieve_github_token(github_token) or ""
 
     g = Github(github_token)
     repo = g.get_repo("apache/airflow")
@@ -3687,10 +3375,7 @@ def generate_providers_metadata(
     )
 
     console_print("\n[info]Checking provider.yaml versions[1:] against PyPI for stale entries...[/]\n")
-    # "spawn" (not the platform-default fork): the parent has already used GitPython and
-    # opened network sockets before reaching here, and forking that state into workers
-    # deadlocks. See get_all_constraint_files_and_airflow_releases for the same reasoning.
-    with get_context("spawn").Pool() as pypi_pool:
+    with Pool() as pypi_pool:
         pruned_per_provider = pypi_pool.map(prune_unreleased_versions_from_provider_yaml, package_ids)
     total_pruned = 0
     for pid, pruned in zip(package_ids, pruned_per_provider):
@@ -3715,7 +3400,7 @@ def generate_providers_metadata(
         airflow_release_dates=airflow_release_dates,
         current_metadata=current_metadata,
     )
-    with get_context("spawn").Pool() as pool:
+    with Pool() as pool:
         results = pool.map(
             partial_generate_providers_metadata,
             package_ids,
@@ -4041,7 +3726,7 @@ SOURCE_API_YAML_PATH = (
     AIRFLOW_ROOT_PATH / "airflow-core/src/airflow/api_fastapi/core_api/openapi/v2-rest-api-generated.yaml"
 )
 TARGET_API_YAML_PATH = PYTHON_CLIENT_DIR_PATH / "v2.yaml"
-OPENAPI_GENERATOR_CLI_VER = "7.27.0"
+OPENAPI_GENERATOR_CLI_VER = "7.22.0"
 
 GENERATED_CLIENT_DIRECTORIES_TO_COPY: list[Path] = [
     Path("airflow_client") / "client",
@@ -4208,32 +3893,6 @@ def _build_client_packages_with_docker(source_date_epoch: int, distribution_form
     run_command(["docker", "rm", "--force", container_id], check=False, stdout=DEVNULL, stderr=DEVNULL)
 
 
-def _ensure_default_python_for_reproducible_client() -> None:
-    """Fail fast unless running under the default Python.
-
-    The client generator post-processes ``trigger_dag_run_post_body.py`` with ``ast.unparse``,
-    which re-emits that file using the running interpreter's grammar. Building under any Python
-    other than ``DEFAULT_PYTHON_MAJOR_MINOR_VERSION`` therefore produces a non-reproducible client
-    (and the generation step may not even emit the wheel/sdist). Refuse to continue rather than
-    silently producing a bad package.
-    """
-    current_python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-    if current_python_version == DEFAULT_PYTHON_MAJOR_MINOR_VERSION:
-        return
-    console_print(
-        f"[error]Python version mismatch: current version is {current_python_version}, "
-        f"but the reproducible client must be built with Python {DEFAULT_PYTHON_MAJOR_MINOR_VERSION}.[/]"
-    )
-    console_print(f"[info]Please rerun breeze with Python {DEFAULT_PYTHON_MAJOR_MINOR_VERSION}.[/]")
-    console_print(
-        "\n  - For the recommended uvx-based setup, set UV_PYTHON before invoking breeze:\n"
-        f"        UV_PYTHON={DEFAULT_PYTHON_MAJOR_MINOR_VERSION} breeze ...\n"
-        "  - For a legacy global install, reinstall with the right Python:\n"
-        f"        uv tool install --python {DEFAULT_PYTHON_MAJOR_MINOR_VERSION} -e ./dev/breeze --force\n"
-    )
-    sys.exit(1)
-
-
 @release_management_group.command(name="prepare-python-client", help="Prepares python client packages.")
 @option_distribution_format
 @option_version_suffix
@@ -4267,7 +3926,6 @@ def prepare_python_client(
     only_publish_build_scripts: bool,
     security_schemes: str,
 ):
-    _ensure_default_python_for_reproducible_client()
     shutil.rmtree(PYTHON_CLIENT_TMP_DIR, ignore_errors=True)
     PYTHON_CLIENT_TMP_DIR.mkdir(parents=True, exist_ok=True)
     shutil.copy(src=SOURCE_API_YAML_PATH, dst=TARGET_API_YAML_PATH)
@@ -4341,11 +3999,23 @@ def prepare_python_client(
         This patch:
         - Locates the `_dict = self.model_dump(...)` line in `to_dict()`
         - Inserts a conditional to add `"logical_date": None` if it's missing
-
-        The interpreter is already pinned to ``DEFAULT_PYTHON_MAJOR_MINOR_VERSION`` by
-        ``_ensure_default_python_for_reproducible_client`` at the start of the command, so the
-        ``ast.unparse`` re-emit below is reproducible.
         """
+        current_python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        if current_python_version != DEFAULT_PYTHON_MAJOR_MINOR_VERSION:
+            console_print(
+                f"[error]Python version mismatch: current version is {current_python_version}, "
+                f"but default version is {DEFAULT_PYTHON_MAJOR_MINOR_VERSION} - this might cause "
+                f"reproducibility problems with prepared package.[/]"
+            )
+            console_print(f"[info]Please rerun breeze with Python {DEFAULT_PYTHON_MAJOR_MINOR_VERSION}.[/]")
+            console_print(
+                "\n  - For the recommended uvx-based setup, set UV_PYTHON before invoking breeze:\n"
+                f"        UV_PYTHON={DEFAULT_PYTHON_MAJOR_MINOR_VERSION} breeze ...\n"
+                "  - For a legacy global install, reinstall with the right Python:\n"
+                f"        uv tool install --python {DEFAULT_PYTHON_MAJOR_MINOR_VERSION} -e ./dev/breeze --force\n"
+            )
+            sys.exit(1)
+
         TRIGGER_MODEL_PATH = PYTHON_CLIENT_TMP_DIR / Path(
             "airflow_client/client/models/trigger_dag_run_post_body.py"
         )
@@ -4740,8 +4410,9 @@ def generate_issue_content(
     is_helm_chart: bool,
     is_airflow_ctl: bool = False,
 ):
-    from github import Github, UnknownObjectException
+    from github import Github, Issue, PullRequest, UnknownObjectException
 
+    PullRequestOrIssue = PullRequest.PullRequest | Issue.Issue
     verbose = get_verbose()
 
     previous = previous_release
@@ -4755,18 +4426,11 @@ def generate_issue_content(
         excluded_prs = []
     prs = [pr for pr in change_prs if pr is not None and pr not in excluded_prs]
 
-    github_token = (
-        retrieve_github_token(
-            github_token,
-            description="airflow-generate-release-issue",
-            scopes="repo:status",
-        )
-        or ""
-    )
+    github_token = retrieve_github_token(github_token) or ""
     g = Github(github_token)
     repo = g.get_repo("apache/airflow")
     pull_requests: dict[int, PullRequestOrIssue] = {}
-    linked_issues: dict[int, list[Issue.Issue]] = defaultdict(list)
+    linked_issues: dict[int, list[Issue.Issue]] = defaultdict(lambda: [])
     users: dict[int, set[str]] = defaultdict(lambda: set())
     count_prs = limit_pr_count or len(prs)
 
@@ -4846,9 +4510,8 @@ def generate_issue_content(
 @release_management_group.command(name="publish-docs-to-s3", help="Publishes docs to S3.")
 @click.option(
     "--source-dir-path",
-    help="Path to the directory with the generated documentation. Required unless "
-    "--packages-metadata-only is used.",
-    default="",
+    help="Path to the directory with the generated documentation.",
+    required=True,
 )
 @click.option(
     "--exclude-docs",
@@ -4884,17 +4547,6 @@ def generate_issue_content(
     is_flag=True,
     help="Skip writing stable versions folder.",
 )
-@click.option(
-    "--skip-packages-metadata",
-    is_flag=True,
-    help="Skip regenerating manifest/packages-metadata.json after the sync. "
-    "Run the command again with --packages-metadata-only to regenerate it.",
-)
-@click.option(
-    "--packages-metadata-only",
-    is_flag=True,
-    help="Only regenerate manifest/packages-metadata.json from the docs already in the bucket.",
-)
 @option_parallelism
 def publish_docs_to_s3(
     source_dir_path: str,
@@ -4906,22 +4558,11 @@ def publish_docs_to_s3(
     publish_all_docs: bool,
     stable_versions: bool,
     skip_write_to_stable_folder: bool,
-    skip_packages_metadata: bool,
-    packages_metadata_only: bool,
 ):
     from airflow_breeze.utils.publish_docs_to_s3 import S3DocsPublish
 
     if publish_all_docs and stable_versions:
         console_print("[error]You cannot use --publish-all and --stable-versions together[/]")
-        sys.exit(1)
-    if packages_metadata_only and (publish_all_docs or stable_versions or skip_packages_metadata):
-        console_print(
-            "[error]You cannot use --packages-metadata-only with --publish-all-docs, "
-            "--stable-versions or --skip-packages-metadata[/]"
-        )
-        sys.exit(1)
-    if not packages_metadata_only and not source_dir_path:
-        console_print("[error]--source-dir-path is required unless --packages-metadata-only is used[/]")
         sys.exit(1)
 
     destination_location = destination_location.rstrip("/")
@@ -4940,10 +4581,7 @@ def publish_docs_to_s3(
         destination_location=destination_location,
         parallelism=parallelism,
         skip_write_to_stable_folder=skip_write_to_stable_folder,
-        skip_packages_metadata=skip_packages_metadata,
     )
-    if packages_metadata_only:
-        docs_to_s3.generate_packages_metadata()
     if publish_all_docs:
         docs_to_s3.publish_all_docs()
     if stable_versions:
@@ -4959,92 +4597,11 @@ def publish_docs_to_s3(
 
 
 @release_management_group.command(
-    name="publish-schemas-to-s3",
-    help="Publishes generated JSON schema artifacts (Execution API, Supervisor, YAML Dag) to S3.",
-)
-@click.option(
-    "--execution-api",
-    help="Path to the generated Execution API OpenAPI JSON file.",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-)
-@click.option(
-    "--supervisor",
-    help="Path to the generated Supervisor schema JSON file.",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-)
-@click.option(
-    "--dag",
-    help="Path to the generated YAML Dag schema JSON file.",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-)
-@click.option(
-    "--destination-location",
-    help="S3 location to publish the schemas under, e.g. "
-    "s3://live-docs-airflow-apache-org/schemas/. Each schema is written to "
-    "<location>/<schema-type>/<version>.json.",
-    type=NotVerifiedBetterChoice(SCHEMA_DESTINATION_LOCATIONS),
-    required=True,
-)
-@click.option(
-    "--overwrite",
-    is_flag=True,
-    help="Overwrite the dated schema file if it already exists in S3.",
-)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    help="Dry run - only print what would be done.",
-)
-def publish_schemas_to_s3(
-    execution_api: Path | None,
-    supervisor: Path | None,
-    dag: Path | None,
-    destination_location: str,
-    overwrite: bool,
-    dry_run: bool,
-):
-    from airflow_breeze.utils.publish_docs_to_s3 import publish_schemas_to_s3 as _publish_schemas_to_s3
-
-    if not execution_api and not supervisor and not dag:
-        console_print("[error]Provide at least one of --execution-api, --supervisor or --dag[/]")
-        sys.exit(1)
-
-    console_print("[info]Publishing schemas to S3[/]")
-    console_print(f"[info]Destination bucket location: {destination_location}[/]")
-    if execution_api:
-        console_print(f"[info]Execution API schema: {execution_api}[/]")
-    if supervisor:
-        console_print(f"[info]Supervisor schema: {supervisor}[/]")
-    if dag:
-        console_print(f"[info]YAML Dag schema: {dag}[/]")
-
-    _publish_schemas_to_s3(
-        destination_location=destination_location.rstrip("/"),
-        execution_api_schema=execution_api,
-        supervisor_schema=supervisor,
-        dag_schema=dag,
-        overwrite=overwrite,
-        dry_run=dry_run,
-    )
-
-
-@release_management_group.command(
     name="constraints-version-check", help="Check constraints against released versions of packages."
 )
 @option_builder
 @option_python
 @option_airflow_constraints_mode_ci
-@click.option(
-    "--constraints-file",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Check this saved constraints file instead of downloading the current constraints branch.",
-)
-@click.option(
-    "--save-constraints-to",
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Also save the downloaded constraints and their commit to this directory. "
-    "A failure to save them is reported as a warning and does not fail the check.",
-)
 @click.option(
     "--diff-mode",
     type=click.Choice(["full", "diff-all", "diff-constraints"], case_sensitive=False),
@@ -5076,8 +4633,6 @@ def publish_schemas_to_s3(
 def version_check(
     python: str,
     airflow_constraints_mode: str,
-    constraints_file: Path | None,
-    save_constraints_to: Path | None,
     diff_mode,
     package: tuple[str],
     explain_why: bool,
@@ -5086,11 +4641,6 @@ def version_check(
     github_repository: str,
     builder: str,
 ):
-    if constraints_file and save_constraints_to:
-        console_print(
-            "[error]--save-constraints-to saves downloaded constraints, not a --constraints-file.[/]"
-        )
-        sys.exit(1)
     perform_environment_checks()
     fix_ownership_using_docker()
     cleanup_python_generated_files()
@@ -5099,7 +4649,7 @@ def version_check(
         python=python,
         builder=builder,
     )
-    build_ci_image_if_needed(command_params=build_params)
+    rebuild_or_pull_ci_image_if_needed(command_params=build_params)
     if os.environ.get("CI", "false") == "true":
         # Show output outside the group in CI
         print("::endgroup::")
@@ -5113,8 +4663,6 @@ def version_check(
         github_token=github_token,
         github_repository=github_repository,
         cooldown_days=cooldown_days,
-        constraints_file=constraints_file,
-        save_constraints_to=save_constraints_to,
     )
 
 
@@ -5262,467 +4810,3 @@ def check_release_files(
     else:
         console.print("\n[success]All expected files are present![/]")
         sys.exit(0)
-
-
-HARDENED_PYTHON_CATALOG_URL = (
-    "https://raw.githubusercontent.com/docker-hardened-images/catalog/main/image/python/{catalog_distro}/"
-    "{python}-dev.yaml"
-)
-
-
-def get_latest_hardened_python_patchlevel(
-    python: str, debian_version: str = ALLOWED_DEBIAN_VERSIONS[0]
-) -> str | None:
-    """
-    Return the newest patchlevel Docker publishes for a Python major.minor, or None if unknown.
-
-    Read from the image definition in Docker's public catalog. Mirroring it ahead of the pinned
-    patchlevel is what lets the "upgrade important versions" check bump the pin without the bump
-    pointing at a tag the mirror does not have yet.
-    """
-    import requests
-
-    distro = DEBIAN_VERSION_TO_HARDENED_IMAGE_DISTRO[debian_version]
-    # The catalog directory is "debian-13" for the images tagged "debian13".
-    catalog_distro = distro.replace("debian", "debian-", 1)
-    try:
-        response = requests.get(
-            HARDENED_PYTHON_CATALOG_URL.format(catalog_distro=catalog_distro, python=python), timeout=30
-        )
-        response.raise_for_status()
-    except requests.RequestException as e:
-        console_print(f"[warning]Could not read the hardened Python {python} {distro} definition: {e}[/]")
-        return None
-    versions = re.findall(rf"^\s*-\s*(\d+\.\d+\.\d+)-{distro}-dev\s*$", response.text, re.MULTILINE)
-    if not versions:
-        return None
-    return max(versions, key=lambda version: tuple(int(part) for part in version.split(".")))
-
-
-def get_image_digest(image: str) -> str | None:
-    """Return the digest of an image's (multi-platform) manifest in its registry, or None if absent."""
-    result = run_command(
-        ["docker", "buildx", "imagetools", "inspect", image, "--format", "{{json .Manifest}}"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0 or not result.stdout:
-        return None
-    return json.loads(result.stdout)["digest"]
-
-
-def copy_image(source: str, targets: list[str]) -> bool:
-    console_print(f"[info]Mirroring {source} -> {', '.join(targets)}[/]")
-    # imagetools copies the multi-platform manifest registry-to-registry, so the layers never travel
-    # through the machine running this.
-    tag_flags = [flag for target in targets for flag in ("--tag", target)]
-    result = run_command(["docker", "buildx", "imagetools", "create", *tag_flags, source], check=False)
-    return result.returncode == 0
-
-
-@release_management_group.command(
-    name="mirror-base-images",
-    help="Mirror the hardened Python base images Airflow builds on to Airflow's public registry.",
-)
-@option_python_no_default
-@option_verbose
-@option_dry_run
-def mirror_base_images(python: str | None):
-    # Only main mirrors, so it covers every Python version an active release branch still builds on,
-    # not only the ones main itself uses.
-    python_versions = ALL_PYTHON_MAJOR_MINOR_VERSIONS if python is None else [python]
-    failed: list[str] = []
-    # Tags this run moved to an image other than the one the builds are pinned to. Only a move counts:
-    # a pin that was already behind has had its upgrade triggered by the run that moved the tag.
-    moved: list[str] = []
-    # The digests the OS-dependencies images are built on in the same workflow run - read here rather
-    # than from the moving tags later, which a mirror-only run may move while the images are building.
-    os_deps_base_image_digests: dict[str, str] = {}
-    # Every Debian version is mirrored: the CI image and the default PROD image use the first one, the
-    # others are still available to build PROD images on.
-    for python_version, debian_version in itertools.product(python_versions, ALLOWED_DEBIAN_VERSIONS):
-        tag = get_hardened_python_image_tag(python_version, debian_version)
-        # The floating major/minor tag is what documentation and ad-hoc builds refer to, so that they
-        # do not have to be edited on every Python patch release.
-        floating_tag = tag.replace(
-            ALL_PYTHON_VERSION_TO_PATCHLEVEL_VERSION.get(python_version, python_version), python_version, 1
-        )
-        copies = [(tag, [floating_tag])]
-        pinned = ALL_PYTHON_VERSION_TO_PATCHLEVEL_VERSION.get(python_version, python_version)
-        latest = get_latest_hardened_python_patchlevel(python_version, debian_version)
-        if latest and latest != pinned:
-            copies.append((tag.replace(pinned, latest, 1), []))
-        for copy_tag, extra_tags in copies:
-            mirrored = f"{HARDENED_PYTHON_IMAGE_MIRROR}:{copy_tag}"
-            targets = [mirrored, *(f"{HARDENED_PYTHON_IMAGE_MIRROR}:{extra}" for extra in extra_tags)]
-            previous_digest = get_image_digest(mirrored)
-            if not copy_image(f"{HARDENED_PYTHON_IMAGE_SOURCE}:{copy_tag}", targets):
-                failed.append(copy_tag)
-                continue
-            digest = get_image_digest(mirrored)
-            if digest is None:
-                continue
-            # The newer patchlevel too, so its OS-dependencies images are published before its pin.
-            if debian_version == OS_DEPS_IMAGE_DEBIAN_VERSION:
-                os_deps_base_image_digests[copy_tag] = digest
-            if digest != previous_digest and digest != HARDENED_PYTHON_IMAGE_DIGESTS.get(copy_tag):
-                moved.append(copy_tag)
-            # The moving tag is replaced by the next refresh, which would leave the digest an upgrade
-            # PR is testing untagged.
-            if not copy_image(
-                f"{mirrored}@{digest}",
-                [
-                    f"{HARDENED_PYTHON_IMAGE_MIRROR}:{get_hardened_python_image_retention_tag(copy_tag, digest)}"
-                ],
-            ):
-                failed.append(f"{copy_tag}@{digest}")
-        # The builds keep using the pinned digest after the moving tag has moved on, so it stays tagged
-        # too - also when it was pinned before this command started tagging digests.
-        pinned_digest = HARDENED_PYTHON_IMAGE_DIGESTS.get(tag)
-        if pinned_digest and not copy_image(
-            f"{HARDENED_PYTHON_IMAGE_MIRROR}:{tag}@{pinned_digest}",
-            [f"{HARDENED_PYTHON_IMAGE_MIRROR}:{get_hardened_python_image_retention_tag(tag, pinned_digest)}"],
-        ):
-            failed.append(f"{tag}@{pinned_digest}")
-    if moved:
-        console_print(
-            f"[warning]The mirror moved past the pinned base images for: {', '.join(moved)}. "
-            "Run 'breeze ci upgrade' to move the pins.[/]"
-        )
-    github_output = os.environ.get("GITHUB_OUTPUT")
-    if github_output:
-        with open(github_output, "a") as output_file:
-            output_file.write(f"moved-past-pins={'true' if moved else 'false'}\n")
-            output_file.write(f"os-deps-base-image-digests={json.dumps(os_deps_base_image_digests)}\n")
-    if failed:
-        console_print(f"[error]Failed to mirror: {', '.join(failed)}[/]")
-        sys.exit(1)
-    console_print("[success]All base images mirrored[/]")
-
-
-OS_DEPS_IMAGE_PLATFORMS = ["linux/amd64", "linux/arm64"]
-INSTALL_OS_DEPENDENCIES_SCRIPT_PATH = AIRFLOW_ROOT_PATH / "scripts" / "docker" / "install_os_dependencies.sh"
-
-
-def extract_dockerfile_stage(dockerfile_content: str, target: str) -> str:
-    """Return the text of one stage of a Dockerfile, from its FROM line to the next stage."""
-    match = re.search(
-        rf"^FROM \S+ as {re.escape(target)}\n.*?(?=^FROM |\Z)", dockerfile_content, re.MULTILINE | re.DOTALL
-    )
-    if not match:
-        raise ValueError(f"The Dockerfile has no stage named {target!r}")
-    return match.group(0)
-
-
-def get_os_deps_image_build_args(
-    image_type: OsDepsImageType, python_tag: str, python_digest: str
-) -> dict[str, str]:
-    """
-    Return the build args of an OS-dependencies image built on a mirrored base image tag.
-
-    They must give the installation the same environment the CI and PROD builds give it, or the
-    marker install_os_dependencies.sh writes would not match there and the installation would run again.
-    Those builds pass the Python patchlevel they are pinned to - the one in the base image tag - and
-    the database clients of their default parameters, which the images install too.
-    """
-    build_args = {
-        "BASE_IMAGE": f"{HARDENED_PYTHON_IMAGE_MIRROR}:{python_tag}@{python_digest}",
-        "AIRFLOW_PYTHON_VERSION": python_tag.split("-", 1)[0],
-    }
-    if image_type.dockerfile == "Dockerfile":
-        prod_params = BuildProdParams()
-        build_args.update(
-            {
-                "AIRFLOW_IMAGE_FLAVOR": "hardened",
-                "INSTALL_MYSQL_CLIENT": prod_params.install_mysql_client,
-                "INSTALL_MYSQL_CLIENT_TYPE": prod_params.install_mysql_client_type,
-                "INSTALL_MSSQL_CLIENT": prod_params.install_mssql_client,
-                "INSTALL_POSTGRES_CLIENT": prod_params.install_postgres_client,
-            }
-        )
-    else:
-        build_args["INSTALL_MYSQL_CLIENT_TYPE"] = BuildCiParams().install_mysql_client_type
-    return build_args
-
-
-OS_DEPS_DATABASE_CLIENT_SCRIPTS = ("common.sh", "install_mysql.sh", "install_mssql.sh", "install_postgres.sh")
-
-
-def compute_os_deps_image_inputs_hash(image_type: OsDepsImageType, build_args: dict[str, str]) -> str:
-    """Hash what an OS-dependencies image is built from apart from its base image, whose tag it gets."""
-    inputs = hashlib.sha256()
-    scripts_dir = INSTALL_OS_DEPENDENCIES_SCRIPT_PATH.parent
-    # The same files the marker in install_os_dependencies.sh hashes: a change to any of them must
-    # produce a new image, not only a reinstall on top of the pinned one.
-    for path in [
-        INSTALL_OS_DEPENDENCIES_SCRIPT_PATH,
-        *(scripts_dir / name for name in OS_DEPS_DATABASE_CLIENT_SCRIPTS),
-        *sorted((scripts_dir / "keys").glob("*")),
-    ]:
-        inputs.update(f"{path.relative_to(scripts_dir)}\n".encode())
-        inputs.update(path.read_bytes())
-    dockerfile_content = (AIRFLOW_ROOT_PATH / image_type.dockerfile).read_text()
-    inputs.update(extract_dockerfile_stage(dockerfile_content, image_type.target).encode())
-    for name, value in sorted(build_args.items()):
-        if name != "BASE_IMAGE":
-            inputs.update(f"{name}={value}\n".encode())
-    return inputs.hexdigest()
-
-
-class OsDepsImageBuild(NamedTuple):
-    image_type: OsDepsImageType
-    python: str
-    build_args: dict[str, str]
-    # The tag of the latest published image of this Python patch release - the upgrade check pins the
-    # image it points at, whatever base image digest that was built on.
-    latest_tag: str
-    # Every input of the image is in this tag, so an image is built only once and the tag never moves -
-    # it is what keeps a pinned digest tagged after the latest tag has moved on.
-    content_tag: str
-
-
-DRY_RUN_IMAGE_DIGEST = "sha256:" + "0" * 64
-
-
-def get_os_deps_image_builds(
-    python: str | None, image_types: tuple[str, ...], base_image_digests: dict[str, str] | None = None
-) -> list[OsDepsImageBuild]:
-    """
-    Describe the OS-dependencies images to build on the mirrored base images.
-
-    :param base_image_digests: the base image digest for each mirrored tag - the ones the mirror job of
-        the same workflow run mirrored. The pinned patchlevel missing from it is read from the mirror's
-        moving tag. A newer patchlevel the mirror already copied is built too, so its images are published
-        by the time the upgrade check moves the base image pin to it.
-    """
-    python_versions = CURRENT_PYTHON_MAJOR_MINOR_VERSIONS if python is None else [python]
-    base_image_digests = base_image_digests or {}
-    distro = DEBIAN_VERSION_TO_HARDENED_IMAGE_DISTRO[OS_DEPS_IMAGE_DEBIAN_VERSION]
-    builds = []
-    for python_version in python_versions:
-        pinned_tag = get_hardened_python_image_tag(python_version, OS_DEPS_IMAGE_DEBIAN_VERSION)
-        python_digest = base_image_digests.get(pinned_tag) or get_image_digest(
-            f"{HARDENED_PYTHON_IMAGE_MIRROR}:{pinned_tag}"
-        )
-        if python_digest is None and get_dry_run():
-            # A dry run does not inspect the registry, so the plan is printed for a placeholder digest.
-            python_digest = DRY_RUN_IMAGE_DIGEST
-        if python_digest is None:
-            console_print(f"[error]{HARDENED_PYTHON_IMAGE_MIRROR}:{pinned_tag} is not mirrored[/]")
-            sys.exit(1)
-        python_tag_digests = {pinned_tag: python_digest}
-        for tag, digest in sorted(base_image_digests.items()):
-            if tag != pinned_tag and tag.startswith(f"{python_version}.") and tag.endswith(f"-{distro}-dev"):
-                python_tag_digests[tag] = digest
-        for python_tag, tag_digest in python_tag_digests.items():
-            for image_type in OS_DEPS_IMAGE_TYPES:
-                if image_types and image_type.name not in image_types:
-                    continue
-                build_args = get_os_deps_image_build_args(image_type, python_tag, tag_digest)
-                inputs_hash = compute_os_deps_image_inputs_hash(image_type, build_args)
-                builds.append(
-                    OsDepsImageBuild(
-                        image_type=image_type,
-                        python=python_version,
-                        build_args=build_args,
-                        latest_tag=f"{image_type.name}-{python_tag}",
-                        content_tag=(
-                            f"{get_os_deps_image_python_tag(image_type.name, python_tag, tag_digest)}"
-                            f"-{inputs_hash[:12]}"
-                        ),
-                    )
-                )
-    return builds
-
-
-def get_platform_tag(tag: str, platform: str) -> str:
-    return f"{tag}-{platform.split('/')[-1]}"
-
-
-def parse_base_image_digests(ctx: click.Context, param: click.Parameter, value: str | None) -> dict[str, str]:
-    if not value:
-        return {}
-    try:
-        digests = json.loads(value)
-    except json.JSONDecodeError as e:
-        raise click.BadParameter(f"not valid JSON: {e}") from e
-    if not isinstance(digests, dict):
-        raise click.BadParameter("must be a JSON object mapping base image tags to digests")
-    return digests
-
-
-option_base_image_digests = click.option(
-    "--base-image-digests",
-    callback=parse_base_image_digests,
-    envvar="OS_DEPS_BASE_IMAGE_DIGESTS",
-    help="JSON object with the digest of each mirrored base image tag to build on - the "
-    "'os-deps-base-image-digests' output of mirror-base-images. Tags missing from it are read from the mirror.",
-)
-
-
-def find_built_os_deps_image(build: OsDepsImageBuild, platform: str) -> str | None:
-    """
-    Return an already built OS-dependencies image of a build, for a build of another type to start from.
-
-    The merged image if it is published, the image of the platform otherwise - the one this job has just
-    built, or an earlier run that failed before publishing it.
-    """
-    for tag in (build.content_tag, get_platform_tag(build.content_tag, platform)):
-        image = f"{HARDENED_OS_DEPS_IMAGE_REPOSITORY}:{tag}"
-        if get_image_digest(image):
-            return image
-    return None
-
-
-option_os_deps_image_type = click.option(
-    "--image-type",
-    "image_types",
-    type=BetterChoice([image_type.name for image_type in OS_DEPS_IMAGE_TYPES]),
-    multiple=True,
-    help="Installation type of the OS-dependencies images (if not specified - all of them).",
-)
-
-
-@release_management_group.command(
-    name="build-os-deps-images",
-    help="Build and push the OS-dependencies images for one platform, on the mirrored hardened base images.",
-)
-@option_python_no_default
-@option_os_deps_image_type
-@option_base_image_digests
-@click.option(
-    "--platform",
-    type=BetterChoice(OS_DEPS_IMAGE_PLATFORMS),
-    required=True,
-    help="Platform to build the images for - each one is built natively, on a runner of its own.",
-)
-@option_verbose
-@option_dry_run
-def build_os_deps_images(
-    python: str | None, image_types: tuple[str, ...], base_image_digests: dict[str, str], platform: str
-):
-    failed: list[str] = []
-    # The dev images built - now or before - for each base image, which the runtime builds start from.
-    dev_builds = {
-        build.build_args["BASE_IMAGE"]: build
-        for build in get_os_deps_image_builds(python, ("dev",), base_image_digests)
-    }
-    for build in get_os_deps_image_builds(python, image_types, base_image_digests):
-        image = f"{HARDENED_OS_DEPS_IMAGE_REPOSITORY}:{build.content_tag}"
-        platform_image = (
-            f"{HARDENED_OS_DEPS_IMAGE_REPOSITORY}:{get_platform_tag(build.content_tag, platform)}"
-        )
-        if get_image_digest(image) or get_image_digest(platform_image):
-            console_print(f"[info]{platform_image} is already built[/]")
-            continue
-        console_print(f"[info]Building {platform_image}[/]")
-        # Not part of the content tag: the runtime stage only copies the legacy flavor's Python from the
-        # dev stage, which is empty for the hardened flavor, so the runtime image does not change.
-        extra_build_args = {}
-        dev_build = dev_builds.get(build.build_args["BASE_IMAGE"])
-        if build.image_type.name == "runtime" and dev_build:
-            dev_image = find_built_os_deps_image(dev_build, platform)
-            if dev_image:
-                extra_build_args["DEV_OS_DEPS_IMAGE"] = dev_image
-        result = run_command(
-            [
-                "docker",
-                "buildx",
-                "build",
-                "--file",
-                build.image_type.dockerfile,
-                "--target",
-                build.image_type.target,
-                "--platform",
-                platform,
-                # The point of the image is a fresh installation from the apt repositories - but only of
-                # the target stage: the runtime stage copies from one built on the dev OS dependencies,
-                # which starts from the dev image built before, so it does not install them a second time.
-                "--no-cache-filter",
-                build.image_type.target,
-                "--pull",
-                # A plain image manifest per platform, for publish-os-deps-images to merge.
-                "--provenance=false",
-                *convert_build_args_dict_to_array_of_args(
-                    build_args={**build.build_args, **extra_build_args}
-                ),
-                "--tag",
-                platform_image,
-                "--push",
-                ".",
-            ],
-            check=False,
-            cwd=AIRFLOW_ROOT_PATH,
-        )
-        if result.returncode != 0:
-            failed.append(platform_image)
-    if failed:
-        console_print(f"[error]Failed to build: {', '.join(failed)}[/]")
-        sys.exit(1)
-    console_print(f"[success]All OS-dependencies images for {platform} built[/]")
-
-
-@release_management_group.command(
-    name="publish-os-deps-images",
-    help="Merge the per-platform OS-dependencies images and move the tags the upgrade check pins.",
-)
-@option_python_no_default
-@option_os_deps_image_type
-@option_base_image_digests
-@option_verbose
-@option_dry_run
-def publish_os_deps_images(
-    python: str | None, image_types: tuple[str, ...], base_image_digests: dict[str, str]
-):
-    failed: list[str] = []
-    moved: list[str] = []
-    # A dry run does not inspect the registry, so it takes every image as built to print the plan.
-    dry_run = get_dry_run()
-    for build in get_os_deps_image_builds(python, image_types, base_image_digests):
-        image = f"{HARDENED_OS_DEPS_IMAGE_REPOSITORY}:{build.content_tag}"
-        if get_image_digest(image) is None:
-            platform_images = [
-                f"{HARDENED_OS_DEPS_IMAGE_REPOSITORY}:{get_platform_tag(build.content_tag, platform)}"
-                for platform in OS_DEPS_IMAGE_PLATFORMS
-            ]
-            missing = [
-                platform_image
-                for platform_image in platform_images
-                if not dry_run and not get_image_digest(platform_image)
-            ]
-            if missing:
-                console_print(f"[error]Not built: {', '.join(missing)}[/]")
-                failed.append(image)
-                continue
-            console_print(f"[info]Merging {', '.join(platform_images)} -> {image}[/]")
-            result = run_command(
-                ["docker", "buildx", "imagetools", "create", "--tag", image, *platform_images], check=False
-            )
-            if result.returncode != 0:
-                failed.append(image)
-                continue
-        digest = get_image_digest(image) or (DRY_RUN_IMAGE_DIGEST if dry_run else None)
-        if digest is None:
-            failed.append(image)
-            continue
-        latest_image = f"{HARDENED_OS_DEPS_IMAGE_REPOSITORY}:{build.latest_tag}"
-        if get_image_digest(latest_image) == digest:
-            continue
-        if copy_image(f"{image}@{digest}", [latest_image]):
-            moved.append(build.latest_tag)
-        else:
-            failed.append(latest_image)
-    if moved:
-        console_print(
-            f"[warning]New OS-dependencies images for: {', '.join(moved)}. "
-            "Run 'breeze ci upgrade' to move the pins.[/]"
-        )
-    github_output = os.environ.get("GITHUB_OUTPUT")
-    if github_output:
-        with open(github_output, "a") as output_file:
-            output_file.write(f"moved-os-deps-images={'true' if moved else 'false'}\n")
-    if failed:
-        console_print(f"[error]Failed to publish: {', '.join(failed)}[/]")
-        sys.exit(1)
-    console_print("[success]All OS-dependencies images published[/]")

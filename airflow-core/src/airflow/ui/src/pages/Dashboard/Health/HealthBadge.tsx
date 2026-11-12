@@ -16,100 +16,52 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Heading, Skeleton, Text } from "@chakra-ui/react";
+import { Skeleton, Text } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
 
-import { Popover, Tooltip } from "src/system-components";
-
+import { StateBadge } from "src/components/StateBadge";
 import Time from "src/components/Time";
-
-import { type HealthInstance, HealthInstances } from "./HealthInstances";
-import { HealthStateBadge } from "./HealthStateBadge";
-import { DEGRADED, healthTranslationKey } from "./healthStatus";
-
-type Props = {
-  /** Why this component reports "degraded"; components that can never report it omit it. */
-  readonly degradedHint?: string;
-  readonly instances?: Array<HealthInstance> | null;
-  readonly isLoading: boolean;
-  readonly latestHeartbeat?: string | null;
-  readonly status?: string | null;
-  readonly title: string;
-};
+import { Tooltip } from "src/components/ui";
 
 export const HealthBadge = ({
-  degradedHint,
-  instances,
   isLoading,
   latestHeartbeat,
   status,
   title,
-}: Props) => {
+}: {
+  readonly isLoading: boolean;
+  readonly latestHeartbeat?: string | null;
+  readonly status?: string | null;
+  readonly title: string;
+}) => {
   const { t: translate } = useTranslation("dashboard");
 
   if (isLoading) {
     return <Skeleton borderRadius="full" height={8} width={24} />;
   }
 
-  const hasInstances = instances !== null && instances !== undefined && instances.length > 0;
-
-  // A tooltip trigger cannot double as the popover trigger: both are ``asChild`` and the tooltip
-  // wins the merge of ``id`` and the ``data-scope``/``data-part`` pair, which leaves the popover
-  // positioner without an anchor and drops the panel in the corner of the viewport. Components
-  // that report instances therefore rely on the popover alone, which repeats the status and gives
-  // a per-instance heartbeat, so nothing the tooltip showed is lost.
-  if (!hasInstances) {
-    return (
-      <Tooltip
-        content={
-          <div>
-            <Text>
-              {translate("health.status")}
-              {": "}
-              {translate(healthTranslationKey(status))}
-            </Text>
-            <Text hidden={latestHeartbeat === undefined}>
-              {translate("health.lastHeartbeat")}
-              {": "}
-              <Time datetime={latestHeartbeat} />
-            </Text>
-          </div>
-        }
-      >
-        <HealthStateBadge size="lg" status={status}>
-          {title}
-        </HealthStateBadge>
-      </Tooltip>
-    );
-  }
+  const state = status === "healthy" ? "success" : "failed";
 
   return (
-    <Popover.Root lazyMount unmountOnExit>
-      <Popover.Trigger asChild>
-        <HealthStateBadge as="button" cursor="pointer" size="lg" status={status}>
-          {title}
-        </HealthStateBadge>
-      </Popover.Trigger>
-      <Popover.Content css={{ "--popover-bg": "colors.bg.emphasized" }} width="fit-content">
-        <Popover.Arrow />
-        <Popover.Body>
-          <Heading mb={2} size="xs">
-            {translate("health.instances.title", {
-              count: instances.length,
-              status: translate(healthTranslationKey(status)),
-              title,
-            })}
-          </Heading>
-          {/* Every listed replica is running, so a degraded badge is otherwise unexplained: the
-              missing coverage is work no replica has picked up rather than a replica that is down. */}
-          {status === DEGRADED && degradedHint !== undefined ? (
-            <Text color="fg.muted" maxWidth="xs" mb={2}>
-              {degradedHint}
-            </Text>
-          ) : undefined}
-          <HealthInstances instances={instances} />
-        </Popover.Body>
-      </Popover.Content>
-    </Popover.Root>
+    <Tooltip
+      content={
+        <div>
+          <Text>
+            {translate("health.status")}
+            {": "}
+            {translate(`health.${status}`)}
+          </Text>
+          <Text hidden={latestHeartbeat === undefined}>
+            {translate("health.lastHeartbeat")}
+            {": "}
+            <Time datetime={latestHeartbeat} />
+          </Text>
+        </div>
+      }
+    >
+      <StateBadge size="lg" state={state}>
+        {title}
+      </StateBadge>
+    </Tooltip>
   );
 };

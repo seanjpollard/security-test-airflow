@@ -132,14 +132,11 @@ class AwaitMessageTrigger(BaseEventTrigger):
             elif message.error():
                 raise AirflowException(f"Error: {message.error()}")
             else:
-                if async_message_process:
-                    event = await async_message_process(message)
-                else:
-                    value = message.value()
-                    # A tombstone (null value, e.g. from a log-compacted topic) carries no
-                    # payload to emit, so treat it like a non-matching message and keep polling
-                    # instead of raising AttributeError on ``None.decode()``.
-                    event = value.decode("utf-8") if value is not None else None
+                event = (
+                    await async_message_process(message)
+                    if async_message_process
+                    else message.value().decode("utf-8")
+                )
                 if event:
                     if self.commit_offset:
                         await async_commit(message=message, asynchronous=False)

@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # /// script
-# requires-python = ">=3.11,<3.12"
+# requires-python = ">=3.10, <3.11"
 # dependencies = []
 # ///
 """
@@ -47,10 +47,4 @@ for notice_file in sys.argv[1:]:
         print(f"❌ {notice_file}: Missing expected string: {expected!r}")
         errors += 1
 
-if errors:
-    print()
-    print("To fix, run: prek run update-notice-year --all-files")
-    print("Then commit the changes.")
-    sys.exit(1)
-
-sys.exit(0)
+sys.exit(1 if errors else 0)

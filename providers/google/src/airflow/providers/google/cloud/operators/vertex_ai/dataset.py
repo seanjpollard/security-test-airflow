@@ -60,7 +60,7 @@ class CreateDatasetOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = ("region", "project_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("region", "project_id", "impersonation_chain")
     operator_extra_links = (VertexAIDatasetLink(),)
 
     def __init__(
@@ -140,13 +140,7 @@ class GetDatasetOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = (
-        "region",
-        "dataset_id",
-        "project_id",
-        "impersonation_chain",
-        "gcp_conn_id",
-    )
+    template_fields = ("region", "dataset_id", "project_id", "impersonation_chain")
     operator_extra_links = (VertexAIDatasetLink(),)
 
     def __init__(
@@ -226,13 +220,7 @@ class DeleteDatasetOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = (
-        "region",
-        "dataset_id",
-        "project_id",
-        "impersonation_chain",
-        "gcp_conn_id",
-    )
+    template_fields = ("region", "dataset_id", "project_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -301,13 +289,7 @@ class ExportDataOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = (
-        "region",
-        "dataset_id",
-        "project_id",
-        "impersonation_chain",
-        "gcp_conn_id",
-    )
+    template_fields = ("region", "dataset_id", "project_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -392,13 +374,7 @@ class ImportDataOperator(GoogleCloudBaseOperator, DatasetImportDataResultsCheckH
     :param raise_for_empty_result: Raise an error if no additional data has been populated after the import.
     """
 
-    template_fields: Sequence[str] = (
-        "region",
-        "dataset_id",
-        "project_id",
-        "impersonation_chain",
-        "gcp_conn_id",
-    )
+    template_fields = ("region", "dataset_id", "project_id", "impersonation_chain")
 
     def __init__(
         self,
@@ -497,7 +473,7 @@ class ListDatasetsOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = ("region", "project_id", "impersonation_chain", "gcp_conn_id")
+    template_fields = ("region", "project_id", "impersonation_chain")
     operator_extra_links = (VertexAIDatasetListLink(),)
 
     def __init__(
@@ -581,13 +557,7 @@ class UpdateDatasetOperator(GoogleCloudBaseOperator):
         account from the list granting this role to the originating account (templated).
     """
 
-    template_fields: Sequence[str] = (
-        "region",
-        "dataset_id",
-        "project_id",
-        "impersonation_chain",
-        "gcp_conn_id",
-    )
+    template_fields = ("region", "dataset_id", "project_id", "impersonation_chain")
 
     def __init__(
         self,

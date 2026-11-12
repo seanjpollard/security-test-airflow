@@ -47,21 +47,6 @@ class BaseTimetable:
 
     asset_condition: BaseAsset | None = None
 
-    # TODO (GH-52141): Find a way to keep these and the ones in Core in sync.
-    asset_triggered: bool = False
-    """Whether this timetable creates runs triggered by asset events."""
-
-    asset_gated: bool = False
-    """Whether this timetable's scheduled runs are gated on an asset condition."""
-
-    partitioned_at_runtime: bool = False
-    """
-    Whether this timetable defers partition selection to task runtime.
-
-    *True* for :class:`~airflow.sdk.PartitionedAtRuntime`; downstream code can
-    branch on this flag instead of using ``isinstance``.
-    """
-
     def validate(self) -> None:
         """
         Validate the timetable is correctly specified.

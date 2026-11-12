@@ -17,9 +17,7 @@
  * under the License.
  */
 import { expect, type Locator, type Page } from "@playwright/test";
-
 import { BasePage } from "tests/e2e/pages/BasePage";
-import { DATA_ROWS } from "tests/e2e/utils/ui/selectors";
 
 export class DagRunsTabPage extends BasePage {
   public readonly markRunAsButton: Locator;
@@ -31,7 +29,7 @@ export class DagRunsTabPage extends BasePage {
     super(page);
     this.markRunAsButton = page.getByTestId("mark-run-as-button").first();
     this.runsTable = page.getByTestId("table-list");
-    this.tableRows = this.runsTable.locator(DATA_ROWS);
+    this.tableRows = this.runsTable.locator("tbody").getByRole("row");
     this.triggerButton = page.getByTestId("trigger-dag-button");
   }
 
@@ -57,6 +55,58 @@ export class DagRunsTabPage extends BasePage {
     await this.waitForRunsTableToLoad();
   }
 
+  public async filterByState(state: string): Promise<void> {
+    const currentUrl = new URL(this.page.url());
+
+    currentUrl.searchParams.set("state", state.toLowerCase());
+
+    await expect(async () => {
+      await this.navigateTo(currentUrl.pathname + currentUrl.search);
+      await expect(this.page).toHaveURL(/.*state=.*/);
+      await this.waitForRunsTableToLoad();
+    }).toPass({ intervals: [2000], timeout: 30_000 });
+  }
+
+  public async markRunAs(state: "failed" | "success"): Promise<void> {
+    const stateBadge = this.page.getByTestId("state-badge").first();
+
+    await expect(stateBadge).toBeVisible();
+    const currentState = await stateBadge.textContent();
+
+    if (currentState?.toLowerCase().includes(state)) {
+      return;
+    }
+
+    await expect(this.markRunAsButton).toBeVisible();
+    await this.markRunAsButton.click();
+
+    const stateOption = this.page.getByTestId(`mark-run-as-${state}`);
+
+    await expect(stateOption).toBeVisible({ timeout: 5000 });
+
+    if (await stateOption.isDisabled()) {
+      await this.page.keyboard.press("Escape");
+
+      return;
+    }
+
+    await stateOption.click();
+
+    const confirmButton = this.page.getByRole("button", { name: "Confirm" });
+
+    await expect(confirmButton).toBeVisible({ timeout: 5000 });
+
+    const responsePromise = this.page.waitForResponse(
+      (response) => response.url().includes("dagRuns") && response.request().method() === "PATCH",
+      { timeout: 10_000 },
+    );
+
+    await confirmButton.click();
+    await responsePromise;
+
+    await expect(confirmButton).toBeHidden();
+  }
+
   public async navigateToDag(dagId: string): Promise<void> {
     await expect(async () => {
       await this.navigateTo(`/dags/${dagId}`);
@@ -64,6 +114,17 @@ export class DagRunsTabPage extends BasePage {
         timeout: 5000,
       });
       await expect(this.triggerButton).toBeVisible({ timeout: 5000 });
+    }).toPass({ intervals: [2000], timeout: 60_000 });
+  }
+
+  public async navigateToRunDetails(dagId: string, runId: string): Promise<void> {
+    await expect(async () => {
+      await this.navigateTo(`/dags/${dagId}/runs/${runId}`);
+      await expect(this.page).toHaveURL(
+        new RegExp(`/dags/${DagRunsTabPage.escapeRegExp(dagId)}/runs/${DagRunsTabPage.escapeRegExp(runId)}`),
+        { timeout: 15_000 },
+      );
+      await expect(this.markRunAsButton).toBeVisible({ timeout: 15_000 });
     }).toPass({ intervals: [2000], timeout: 60_000 });
   }
 
@@ -111,6 +172,20 @@ export class DagRunsTabPage extends BasePage {
     return responseJson.dag_run_id;
   }
 
+  public async verifyFilteredByState(expectedState: string): Promise<void> {
+    await this.waitForRunsTableToLoad();
+
+    const rows = this.tableRows;
+
+    await expect(rows).not.toHaveCount(0);
+
+    const nonMatchingRows = rows.filter({
+      hasNot: this.page.getByTestId("state-badge").getByText(new RegExp(expectedState, "i")),
+    });
+
+    await expect(nonMatchingRows).toHaveCount(0);
+  }
+
   public async verifyRunDetailsDisplay(): Promise<void> {
     const firstRow = this.tableRows.first();
 
@@ -128,6 +203,13 @@ export class DagRunsTabPage extends BasePage {
     const timeElements = firstRow.locator("time");
 
     await expect(timeElements.first()).toBeVisible();
+  }
+
+  public async verifyRunsExist(): Promise<void> {
+    const firstRow = this.tableRows.first();
+
+    await expect(firstRow).toBeVisible({ timeout: 30_000 });
+    await expect(this.tableRows).not.toHaveCount(0);
   }
 
   public async verifySearchResults(pattern: string): Promise<void> {

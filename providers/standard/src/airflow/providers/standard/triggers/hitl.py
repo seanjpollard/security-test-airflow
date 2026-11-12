@@ -41,9 +41,6 @@ from airflow.sdk.execution_time.hitl import (
 from airflow.sdk.timezone import utcnow
 from airflow.triggers.base import BaseTrigger, TriggerEvent
 
-if TYPE_CHECKING:
-    from airflow.sdk.api.datamodels._generated import HITLDetailResponse
-
 
 class HITLTriggerEventSuccessPayload(TypedDict, total=False):
     """Minimum required keys for a success Human-in-the-loop TriggerEvent."""
@@ -117,12 +114,6 @@ class HITLTrigger(BaseTrigger):
             },
         )
 
-    @staticmethod
-    def _get_responder(resp: HITLDetailResponse) -> HITLUser | None:
-        if resp.responded_by_user is None:
-            return None
-        return HITLUser(id=resp.responded_by_user.id, name=resp.responded_by_user.name)
-
     async def _handle_timeout(self) -> TriggerEvent:
         """Handle HITL timeout logic and yield appropriate event."""
         resp = await sync_to_async(get_hitl_detail_content_detail)(ti_id=self.ti_id)
@@ -130,32 +121,27 @@ class HITLTrigger(BaseTrigger):
         # Case 1: Response arrived just before timeout
         if resp.response_received and resp.chosen_options:
             if TYPE_CHECKING:
+                assert resp.responded_by_user is not None
                 assert resp.responded_at is not None
 
             chosen_options_list = list(resp.chosen_options or [])
-            responded_by_user = self._get_responder(resp)
-            if responded_by_user is None:
-                self.log.info(
-                    "[HITL] resuming with the timeout default %s recorded at %s "
-                    "(applied by an earlier run of this trigger)",
-                    chosen_options_list,
-                    resp.responded_at,
-                )
-            else:
-                self.log.info(
-                    "[HITL] responded_by=%s (id=%s) options=%s at %s (timeout fallback skipped)",
-                    responded_by_user["name"],
-                    responded_by_user["id"],
-                    chosen_options_list,
-                    resp.responded_at,
-                )
+            self.log.info(
+                "[HITL] responded_by=%s (id=%s) options=%s at %s (timeout fallback skipped)",
+                resp.responded_by_user.name,
+                resp.responded_by_user.id,
+                chosen_options_list,
+                resp.responded_at,
+            )
             return TriggerEvent(
                 HITLTriggerEventSuccessPayload(
                     chosen_options=chosen_options_list,
                     params_input=resp.params_input or {},
                     responded_at=resp.responded_at,
-                    responded_by_user=responded_by_user,
-                    timedout=responded_by_user is None,
+                    responded_by_user=HITLUser(
+                        id=resp.responded_by_user.id,
+                        name=resp.responded_by_user.name,
+                    ),
+                    timedout=False,
                 )
             )
 
@@ -195,6 +181,7 @@ class HITLTrigger(BaseTrigger):
         """Check if HITL response is ready and yield success if so."""
         resp = await sync_to_async(get_hitl_detail_content_detail)(ti_id=self.ti_id)
         if TYPE_CHECKING:
+            assert resp.responded_by_user is not None
             assert resp.responded_at is not None
 
         if not (resp.response_received and resp.chosen_options):
@@ -214,29 +201,23 @@ class HITLTrigger(BaseTrigger):
                 )
 
         chosen_options_list = list(resp.chosen_options or [])
-        responded_by_user = self._get_responder(resp)
-        if responded_by_user is None:
-            self.log.info(
-                "[HITL] resuming with the timeout default %s recorded at %s "
-                "(applied by an earlier run of this trigger)",
-                chosen_options_list,
-                resp.responded_at,
-            )
-        else:
-            self.log.info(
-                "[HITL] responded_by=%s (id=%s) options=%s at %s",
-                responded_by_user["name"],
-                responded_by_user["id"],
-                chosen_options_list,
-                resp.responded_at,
-            )
+        self.log.info(
+            "[HITL] responded_by=%s (id=%s) options=%s at %s",
+            resp.responded_by_user.name,
+            resp.responded_by_user.id,
+            chosen_options_list,
+            resp.responded_at,
+        )
         return TriggerEvent(
             HITLTriggerEventSuccessPayload(
                 chosen_options=chosen_options_list,
                 params_input=params_input or {},
                 responded_at=resp.responded_at,
-                responded_by_user=responded_by_user,
-                timedout=responded_by_user is None,
+                responded_by_user=HITLUser(
+                    id=resp.responded_by_user.id,
+                    name=resp.responded_by_user.name,
+                ),
+                timedout=False,
             )
         )
 

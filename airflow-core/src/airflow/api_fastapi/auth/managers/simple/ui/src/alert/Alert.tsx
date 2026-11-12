@@ -17,15 +17,15 @@
  * under the License.
  */
 import { Alert as ChakraAlert, IconButton } from "@chakra-ui/react";
-import { forwardRef, type ReactNode, type ReactElement } from "react";
+import { forwardRef } from "react";
 
 export type AlertProps = {
   readonly closable?: boolean;
-  readonly endElement?: ReactNode;
-  readonly icon?: ReactElement;
+  readonly endElement?: React.ReactNode;
+  readonly icon?: React.ReactElement;
   readonly onClose?: () => void;
-  readonly startElement?: ReactNode;
-  readonly title?: ReactNode;
+  readonly startElement?: React.ReactNode;
+  readonly title?: React.ReactNode;
 } & Omit<ChakraAlert.RootProps, "title">;
 
 export const Alert = forwardRef<HTMLDivElement, AlertProps>((props, ref) => {

@@ -9,7 +9,8 @@
   "config": {
     "columns": {
       "section": "Szakasz"
-    }
+    },
+    "title": "Airflow konfiguráció"
   },
   "connections": {
     "add": "Kapcsolat hozzáadása",
@@ -23,7 +24,7 @@
     "connection_other": "Kapcsolatok",
     "delete": {
       "deleteConnection_one": "1 kapcsolat törlése",
-      "deleteConnection_other": "{{count, number}} kapcsolat törlése",
+      "deleteConnection_other": "{{count}} kapcsolat törlése",
       "firstConfirmMessage_one": "A következő kapcsolat törlésére készül:",
       "firstConfirmMessage_other": "A következő kapcsolatok törlésére készül:",
       "title": "Kapcsolat törlése"
@@ -33,6 +34,7 @@
       "connectionIdRequired": "Kapcsolat azonosító szükséges",
       "connectionIdRequirement": "Kapcsolat azonosító nem tartalmazhat szóközöket",
       "connectionTypeRequired": "Kapcsolat típus szükséges",
+      "extraFields": "Extra mezők",
       "extraFieldsJson": "Extra mezők JSON",
       "helperText": "Hiányzó kapcsolat típus? Győződjön meg róla, hogy a megfelelő Airflow Providers Package telepítésre került.",
       "helperTextForRedactedFields": "A kitakart mezők ('***') változatlanok maradnak, ha nem módosítja őket.",
@@ -93,15 +95,15 @@
       "allTypes": "Minden típus",
       "dagProcessorJob": "DAG-feldolgozó feladat",
       "schedulerJob": "Ütemező feladat",
-      "triggererJob": "Indító feladat"
+      "triggererJob": "Triggerelő feladat"
     }
   },
   "plugins": {
     "columns": {
       "source": "Forrás"
     },
-    "importError_one": "Bővítmény importálási hiba",
-    "importError_other": "Bővítmény importálási hibák",
+    "importError_one": "Plugin importálási hiba",
+    "importError_other": "Plugin importálási hibák",
     "searchPlaceholder": "Keresés fájl szerint"
   },
   "pools": {
@@ -118,8 +120,7 @@
       "includeDeferred": "Várakozó feladatok belefoglalása",
       "nameMaxLength": "A név maximum 256 karakter hosszú lehet",
       "nameRequired": "Név megadása kötelező",
-      "slots": "Slotok",
-      "slotsHelperText": "Korátlan számú slot-hoz adjon meg -1 értéket"
+      "slots": "Slotok"
     },
     "noPoolsFound": "Nem található pool",
     "pool_one": "Pool",
@@ -144,7 +145,7 @@
     },
     "delete": {
       "deleteVariable_one": "1 változó törlése",
-      "deleteVariable_other": "{{count, number}} változó törlése",
+      "deleteVariable_other": "{{count}} változó törlése",
       "firstConfirmMessage_one": "A következő változó törlésére készül:",
       "firstConfirmMessage_other": "A következő változók törlésére készül:",
       "title": "Változó törlése",

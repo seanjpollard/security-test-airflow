@@ -40,31 +40,6 @@ Both flows share the same underlying JWT infrastructure (``JWTGenerator`` and ``
 classes in ``airflow.api_fastapi.auth.tokens``) but differ in audience, token lifetime, subject
 claims, and scope semantics.
 
-.. mermaid::
-
-    flowchart LR
-        subgraph Clients
-            UI[UI / browser]
-            CLI[CLI]
-            EXT[External REST clients]
-        end
-        subgraph Internal["Internal Airflow components"]
-            WORKER[Worker / Task]
-            DFP[Dag File Processor]
-            TRG[Triggerer]
-        end
-        APISVR[API Server]
-        EXECAPI[Execution API]
-        UI -->|JWT cookie / Bearer| APISVR
-        CLI -->|Bearer| APISVR
-        EXT -->|Bearer| APISVR
-        WORKER -->|Bearer<br/>workload &rarr; execution| EXECAPI
-        DFP -. in-process<br/>JWT bypassed .-> EXECAPI
-        TRG -. in-process<br/>JWT bypassed .-> EXECAPI
-
-        classDef internal fill:#bbdefb,stroke:#1565c0,stroke-width:2px,color:#000
-        class WORKER,DFP,TRG internal
-
 
 Signing and Cryptography
 ------------------------
@@ -90,39 +65,6 @@ Airflow supports two mutually exclusive signing modes:
      (local file or remote HTTP/HTTPS URL, polled periodically for updates).
    - The public key derived from the configured private key (automatic fallback when
      ``trusted_jwks_url`` is not set).
-
-.. mermaid::
-
-    flowchart TB
-        subgraph Sym["Symmetric (HS512)"]
-            direction LR
-            S1[Scheduler / API Server]
-            S2[Shared secret<br/>jwt_secret]
-            S3[Token validator]
-            S1 -->|sign| S2 -->|same secret<br/>also validates| S3
-        end
-        subgraph Asym["Asymmetric (RS256 / EdDSA)"]
-            direction LR
-            A1[Scheduler / API Server]
-            A2[Private key<br/>jwt_private_key_path]
-            A3[Public key /<br/>JWKS endpoint]
-            A4[Token validator]
-            A1 -->|sign| A2
-            A2 -. derives or<br/>publishes .-> A3
-            A3 -->|verify only| A4
-        end
-
-        classDef secret fill:#ffcdd2,stroke:#c62828,stroke-width:2px,color:#000
-        classDef pub fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px,color:#000
-        class S2 secret
-        class A2 secret
-        class A3 pub
-
-In asymmetric mode, validators (workers, downstream services) need only the public key — the
-private signing key can be tightly scoped to the issuing components (API Server, Scheduler).
-In symmetric mode, any component that can validate tokens can also forge them, because there
-is only one key. See :ref:`jwt-authentication-and-workload-isolation` for the deployment
-implications.
 
 REST API Authentication Flow
 -----------------------------
@@ -189,14 +131,6 @@ Revoked tokens are tracked in the ``revoked_token`` database table by their ``jt
 On logout or explicit revocation, the token's ``jti`` and ``exp`` are inserted into this
 table. Expired entries are automatically cleaned up at a cadence of ``2× jwt_expiration_time``.
 
-The ``/auth/logout`` endpoint always invokes ``auth_manager.revoke_token()`` before any
-redirect or cookie deletion. This includes deployments where the configured auth manager
-(for example ``FabAuthManager`` or ``KeycloakAuthManager``) redirects the user to an external
-logout URL — the JWT is invalidated in Airflow's ``revoked_token`` table regardless of what
-the external Identity Provider does with its own session. The ``revoke_token`` call is
-unconditional; auth managers that do not implement server-side revocation can keep the
-default no-op implementation.
-
 Token refresh (REST API)
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -254,21 +188,20 @@ Token structure (Execution API)
    * - ``aud``
      - Audience (from ``[execution_api] jwt_audience``, default: ``urn:airflow.apache.org:task``).
    * - ``sub``
-     - UUID identifying the task instance, callback, processor session, or parsing attempt, depending on the scope.
+     - Task instance UUID — the identity of the workload.
    * - ``scope``
-     - Token scope: ``"execution"``, ``"workload"``, ``"callback"``, ``"dag_processor_session"``,
-       ``"dag_processor"``, or ``"dag_parse"``.
+     - Token scope: ``"execution"`` or ``"workload"``.
    * - ``iat``
      - Issued-at timestamp.
    * - ``nbf``
      - Not-before timestamp.
    * - ``exp``
-     - Expiration timestamp, determined by the scope's lifetime and any parent credential's expiry.
+     - Expiration timestamp (``iat + [execution_api] jwt_expiration_time``).
 
 Token scopes (Execution API)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The Execution API uses the following token scopes. Each endpoint accepts only its declared scopes:
+The Execution API defines two token scopes with different lifetimes:
 
 **workload**
    A token embedded in the workload JSON payload when the Scheduler
@@ -282,27 +215,11 @@ The Execution API uses the following token scopes. Each endpoint accepts only it
    backed-up queue before its workload token expires.
 
 **execution**
-   A short-lived token (default 10 minutes) accepted by endpoints that allow task or callback execution.
+   A short-lived token (default 10 minutes) accepted by all Execution API endpoints.
    This is the standard scope for worker communication during task execution. Issued
    by the server when the worker transitions to running via the ``/run`` endpoint.
    The ``JWTReissueMiddleware`` refreshes ``execution`` tokens transparently,
    so the worker maintains access for the duration of the task.
-
-**callback**
-   A single-use token exchanged at ``/callbacks/{callback_id}/run`` for an ``execution``
-   token when a queued callback starts.
-
-**dag_processor_session**
-   A provisioned credential accepted only by ``POST /jobs`` for Job registration and renewal.
-
-**dag_processor**
-   A Job credential for heartbeats, completion, Connection and Variable reads for granted bundles,
-   and parsing-token exchange.
-
-**dag_parse**
-   A credential for one parsing attempt, granting parse-time access within its signed bundle.
-
-See `Dag processor HTTP client credentials`_ for provisioning, lifetime limits, and authorization details.
 
 Tokens without a ``scope`` claim default to ``"execution"`` for backwards compatibility.
 
@@ -317,44 +234,13 @@ The token flows through the execution stack as follows:
 2. The workload JSON is passed to the worker process (via the executor-specific mechanism:
    Celery message, Kubernetes Pod spec, local subprocess arguments, etc.).
 3. The worker's ``execute_workload()`` function reads the workload JSON and extracts the token.
-4. The ``supervise_task()`` function receives the token and creates an ``httpx2.Client`` instance
+4. The ``supervise_task()`` function receives the token and creates an ``httpx.Client`` instance
    with ``BearerAuth(token)`` for all Execution API HTTP requests.
 5. The worker calls the ``/run`` endpoint with the ``workload``-scoped token to mark the task
    as running. The server responds with a fresh ``execution``-scoped token in the
    ``Refreshed-API-Token`` header.
 6. The client's ``_update_auth()`` hook detects the header and transparently updates
    the ``BearerAuth`` instance to use the new ``execution`` token for all subsequent requests.
-
-.. mermaid::
-
-    sequenceDiagram
-        autonumber
-        participant SCH as Scheduler
-        participant EXE as Executor<br/>(Celery / K8s / Local)
-        participant WRK as Worker
-        participant API as Execution API
-
-        Note over SCH: Task ready to dispatch
-        SCH->>SCH: generate workload token<br/>scope=workload<br/>exp = task_queued_timeout
-        SCH->>EXE: workload JSON<br/>(includes token)
-        Note over EXE: Task waits in queue<br/>(can be minutes)
-        EXE->>WRK: dispatch (workload JSON)
-        WRK->>API: PATCH /run<br/>Bearer: workload token
-        Note over API: validates workload scope<br/>checks TI in QUEUED/RESTARTING<br/>409 if not
-        API-->>WRK: 200 OK<br/>Refreshed-API-Token: execution token<br/>(scope=execution, ~10 min)
-        WRK->>WRK: BearerAuth swaps to<br/>execution token
-        loop For all subsequent calls (heartbeats, XComs, ...)
-            WRK->>API: Bearer: execution token
-            alt token expiring (less than 20% left)
-                API-->>WRK: 200 OK<br/>Refreshed-API-Token: new execution token
-                WRK->>WRK: BearerAuth swaps again
-            end
-        end
-
-Even if a workload token is intercepted in transit, it can only call ``/run``. That endpoint
-rejects re-runs (``409 Conflict`` unless the task instance is in ``QUEUED`` or ``RESTARTING``),
-so the attack surface for the longer-lived token is bounded to "start a task that is already
-queued". Every other endpoint rejects workload tokens.
 
 Token validation (Execution API)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -365,18 +251,8 @@ The ``JWTBearer`` security dependency validates the token once per request:
 2. Performs cryptographic signature validation via ``JWTValidator``.
 3. Verifies standard claims (``exp``, ``iat``, ``aud`` — ``nbf`` and ``iss`` if configured).
 4. Defaults the ``scope`` claim to ``"execution"`` if absent.
-5. **Validates the identity and its scope-specific claims against typed Pydantic schemas.**
-   ``ExecutionToken`` (in ``airflow.api_fastapi.execution_api.datamodels.token``) parses ``sub``
-   as a UUID. Its claims form a discriminated union selected by ``scope``: ``TIClaims`` for
-   ``"execution"``, ``"workload"``, and ``"callback"``; ``DagProcessorSessionClaims`` for
-   provisioning; ``DagProcessorClaims`` for a registered Job; and ``DagParseClaims`` for a
-   parsing attempt. Each processor claim type requires expiry and its scope-specific grants
-   and identity fields. Unknown scopes, invalid subjects, or missing required claims return
-   ``403 Forbidden`` even when cryptographic validation succeeds. All claim types allow extra
-   fields so auth managers can attach deployment-specific claims.
-6. Constructs the corresponding token object: ``TIToken``, ``DagProcessorSessionToken``,
-   ``DagProcessorToken``, or ``DagParseToken``.
-7. Caches the validated token on the ASGI request scope for the duration of the request.
+5. Creates a ``TIToken`` object with the task instance ID and claims.
+6. Caches the validated token on the ASGI request scope for the duration of the request.
 
 Route-level enforcement is handled by ``require_auth``:
 
@@ -385,38 +261,6 @@ Route-level enforcement is handled by ``require_auth``:
 - Enforces ``ti:self`` scope — verifies that the token's ``sub`` claim matches the
   ``{task_instance_id}`` path parameter, preventing a worker from accessing another task's
   endpoints.
-
-The task-only, processor-session, and processor-Job dependencies additionally reject tokens of
-the wrong principal type. Endpoints shared by tasks and parsing attempts use the general
-``CurrentExecutionToken`` dependency with their declared route scopes.
-
-.. mermaid::
-
-    flowchart TD
-        REQ([Incoming request<br/>Authorization: Bearer ...])
-        REQ --> CACHE{Cached on<br/>request.scope?}
-        CACHE -->|yes| RET([Return cached token])
-        CACHE -->|no| SIG[JWTValidator:<br/>verify signature]
-        SIG -->|fail| F1([403 Forbidden])
-        SIG -->|ok| STD[Verify exp / iat / nbf<br/>aud / iss]
-        STD -->|fail| F1
-        STD -->|ok| SCOPE[Default scope to<br/>'execution' if absent]
-        SCOPE --> SCHEMA[ExecutionToken:<br/>UUID identity and<br/>scope-discriminated claims]
-        SCHEMA -->|ValidationError| F1
-        SCHEMA -->|ok| TYP{require_auth:<br/>scope in<br/>route.allowed_token_types?}
-        TYP -->|no| F1
-        TYP -->|yes| SELF{ti:self scope<br/>declared?}
-        SELF -->|no| PRINCIPAL{Typed dependency:<br/>principal type matches?}
-        SELF -->|yes| MATCH{token.sub ==<br/>task_instance_id?}
-        MATCH -->|no| F1
-        MATCH -->|yes| PRINCIPAL
-        PRINCIPAL -->|no| F1
-        PRINCIPAL -->|yes or general dependency| OK([Return validated token])
-
-        classDef fail fill:#ffcdd2,stroke:#c62828,stroke-width:2px,color:#000
-        classDef pass fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px,color:#000
-        class F1 fail
-        class OK,RET pass
 
 Token refresh (Execution API)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -437,14 +281,14 @@ they are designed to survive executor queue wait times without needing refresh. 
 ensures long-running tasks do not lose API access without requiring the worker to
 re-authenticate.
 
-Task-token revocation (Execution API)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+No token revocation (Execution API)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Task Execution API tokens are not subject to revocation. ``execution``-scoped tokens are short-lived
+Execution API tokens are not subject to revocation. ``execution``-scoped tokens are short-lived
 (default 10 minutes) and automatically refreshed by the ``JWTReissueMiddleware``.
 ``workload``-scoped tokens (tracking ``[scheduler] task_queued_timeout``) are not refreshed —
-they expire naturally after their validity period. Processor and parsing credentials additionally
-require an open, owning Job, as described under "Dag processor HTTP client credentials" below.
+they expire naturally after their validity period. Revocation is not part of the Execution API
+security model.
 
 
 
@@ -509,62 +353,6 @@ processes as a different, low-privilege user) or network-level restrictions.
 
 See :doc:`/security/security_model` for the full security implications, deployment hardening
 guidance, and the planned strategic and tactical improvements.
-
-
-Dag processor HTTP client credentials
--------------------------------------
-
-The core ``DagProcessorAPIClient`` lets processor integrations authenticate to the Execution
-API without holding its signing key. The standard ``airflow dag-processor`` command does
-not yet use this client. Provisioning a token file alone does not switch that command to
-HTTP or remove its need for database access.
-
-On a trusted host with the API signing key, provision a session token for the bundles
-the client may access::
-
-    airflow dag-processor-token --token-file /run/airflow/processor.jwt \
-        --bundle-name dags-folder --rotate
-
-The command writes the token atomically. A new file is readable only by its owner, and replacing
-an existing file keeps its mode and group, so grant the processor read access once. ACLs are not
-carried over. Keep the provisioner running and mount its directory rather than a single file so
-token replacement stays visible. Each processor process needs its own session. Restarting the
-provisioner with the same token file and bundles keeps that session, so running processors keep
-their Jobs.
-
-The three credentials have different issuers and permissions:
-
-- ``dag_processor_session`` is issued by trusted provisioning. It can only register a
-  Job or renew that Job's credential through ``POST /jobs``.
-- ``dag_processor`` is returned by Job registration. It can heartbeat and complete that
-  Job, read Connections and Variables for a granted bundle, and exchange a parsing
-  credential through ``POST /jobs/{job_id}/parse-token``. It cannot outlive the session
-  token used to obtain it.
-- ``dag_parse`` is returned by the parsing-token exchange for one attempt, bundle, and
-  relative file location. It permits parse-time requests, including callback-context reads,
-  but cannot manage Jobs or exchange tokens. It cannot outlive its parent Job credential.
-
-Registration retries keep the same registration UUID. A new process uses a new UUID;
-it cannot replace a session's Job while that Job is alive. Ending or replacing the Job
-invalidates its runtime credentials.
-
-The client selects the bundle with ``use_bundle`` and a parsing attempt with ``use_parse``.
-A request header cannot override the parsing token's signed bundle.
-Connection and Variable access uses the bundle's current team. A registered Job's teams come from
-``[dag_processor] dag_bundle_config_list`` on the API server, so it needs the same bundle-to-team
-configuration as the processor. A ``dag_parse`` token can also write and delete Variables, as a
-parsing subprocess can without this client. ``Variable.set`` upserts on the key alone, so in
-multi-team mode a write can overwrite another team's Variable with the same key, as it can with task
-tokens.
-
-The client attempts renewal at 80% of token lifetime. Transient early-renewal failures leave
-the existing token usable until expiry. A retired registration signals that its owner must
-restart. Completion retains its original identity and outcome across retries.
-
-File and attempt identity are carried in the token but are not currently used for access
-checks or request attribution. Archives retain one file identity under the current processor
-model. These credentials do not isolate hostile code from other credentials accessible on
-the processor host; the process and deployment limitations above still apply.
 
 
 Workload Isolation and Current Limitations

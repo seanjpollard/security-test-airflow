@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING
 
@@ -38,10 +37,7 @@ class ChimeNotifier(BaseNotifier):
 
     """
 
-    template_fields: Sequence[str] = (
-        "message",
-        "chime_conn_id",
-    )
+    template_fields = ("message",)
 
     def __init__(self, *, chime_conn_id: str, message: str = "This is the default chime notifier message"):
         super().__init__()

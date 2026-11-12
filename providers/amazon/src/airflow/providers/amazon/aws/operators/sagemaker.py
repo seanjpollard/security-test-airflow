@@ -38,7 +38,6 @@ from airflow.providers.amazon.aws.triggers.sagemaker import (
     SageMakerTrigger,
 )
 from airflow.providers.amazon.aws.utils import trim_none_values, validate_execute_complete_event
-from airflow.providers.amazon.aws.utils.deferral import should_defer
 from airflow.providers.amazon.aws.utils.mixins import aws_template_fields
 from airflow.providers.amazon.aws.utils.sagemaker import ApprovalStatus
 from airflow.providers.amazon.aws.utils.tags import format_tags
@@ -259,31 +258,8 @@ class SageMakerProcessingOperator(SageMakerBaseOperator):
         (default) and "fail".
     :param deferrable: Run operator in the deferrable mode. This is only effective if wait_for_completion is
         set to True.
-    :param output_files_to_xcom: Read small JSON output files from S3 after the job completes and push
-        their parsed contents to XCom useful for feeding metrics into downstream tasks. Each entry is a dict with:
-        ``output_name`` (matches an output you declared in ``ProcessingOutputConfig.Outputs`` - the
-        operator uses it to locate that output's S3 URI), ``file_name`` (the file your processing script
-        wrote inside that output, and ``result_name`` (a label
-        you choose for the parsed contents in the returned ``OutputFiles`` dict). Intended for small JSON
-        summary files (metrics, evaluation reports), not large datasets. Optional; if omitted, no post-job
-        S3 reading occurs. Example::
-
-            output_files_to_xcom=[
-                {"output_name": "evaluation", "file_name": "metrics.json", "result_name": "EvaluationReport"}
-            ]
-            # Downstream: ti.xcom_pull("this_task")["OutputFiles"]["EvaluationReport"]["mse"]
-    :param cancel_on_kill: If True, the processing job is stopped when the task is killed.
-        Without it the job keeps running, and billing, after the task is gone. A deferred task is
-        stopped from the Triggerer, which needs Airflow 3.3 or later; below that the flag only
-        applies while the task holds a worker slot. It does not cover a deferral that expires on
-        its own ``timeout``: the Triggerer kills the trigger without calling ``on_kill``, and no
-        event reaches the task, so nothing runs to stop the job.
-    :return: Dict with a ``Processing`` key (the job description) and, when ``output_files_to_xcom``
-        is configured, an ``OutputFiles`` key containing the parsed JSON contents of the configured
-        output files (keyed by their ``result_name``).
+    :return Dict: Returns The ARN of the processing job created in Amazon SageMaker.
     """
-
-    template_fields: Sequence[str] = (*SageMakerBaseOperator.template_fields, "output_files_to_xcom")
 
     def __init__(
         self,
@@ -296,12 +272,9 @@ class SageMakerProcessingOperator(SageMakerBaseOperator):
         max_ingestion_time: int | None = None,
         action_if_job_exists: str = "timestamp",
         deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
-        output_files_to_xcom: list[dict] | None = None,
-        cancel_on_kill: bool = False,
         **kwargs,
     ):
         super().__init__(config=config, **kwargs)
-        self.output_files_to_xcom = output_files_to_xcom
         if action_if_job_exists not in ("fail", "timestamp"):
             raise AirflowException(
                 f"Argument action_if_job_exists accepts only 'timestamp' and 'fail'. \
@@ -314,9 +287,7 @@ class SageMakerProcessingOperator(SageMakerBaseOperator):
         self.max_attempts = max_attempts or 60
         self.max_ingestion_time = max_ingestion_time
         self.deferrable = deferrable
-        self.cancel_on_kill = cancel_on_kill
         self.serialized_job: dict
-        self._processing_job_name: str | None = None
 
     def _create_integer_fields(self) -> None:
         """Set fields which should be cast to integers."""
@@ -334,11 +305,6 @@ class SageMakerProcessingOperator(SageMakerBaseOperator):
             self.config["RoleArn"] = hook.expand_role(self.config["RoleArn"])
 
     def execute(self, context: Context) -> dict:
-        if self.output_files_to_xcom and not self.wait_for_completion:
-            raise ValueError(
-                "output_files_to_xcom requires wait_for_completion=True. "
-                "Output files cannot be read before the job completes."
-            )
         self.preprocess_config()
 
         self.config["ProcessingJobName"] = self._get_unique_job_name(
@@ -346,9 +312,6 @@ class SageMakerProcessingOperator(SageMakerBaseOperator):
             self.action_if_job_exists == "fail",
             self.hook.describe_processing_job,
         )
-
-        # Recorded before the submit call so a kill in that window still has a name to stop.
-        self._processing_job_name = self.config["ProcessingJobName"]
 
         if self.deferrable and not self.wait_for_completion:
             self.log.warning(
@@ -372,13 +335,11 @@ class SageMakerProcessingOperator(SageMakerBaseOperator):
         if self.deferrable and self.wait_for_completion:
             response = self.hook.describe_processing_job(self.config["ProcessingJobName"])
             status = response["ProcessingJobStatus"]
-            if status in self.hook.processing_job_failed_states:
+            if status in self.hook.failed_states:
                 raise AirflowException(f"SageMaker job failed because {response['FailureReason']}")
             if status == "Completed":
                 self.log.info("%s completed successfully.", self.task_id)
-                result = {"Processing": serialize(response)}
-                result.update(self._read_output_files())
-                return result
+                return {"Processing": serialize(response)}
 
             timeout = self.execution_timeout
             if self.max_ingestion_time:
@@ -389,107 +350,26 @@ class SageMakerProcessingOperator(SageMakerBaseOperator):
                 trigger=SageMakerTrigger(
                     job_name=self.config["ProcessingJobName"],
                     job_type="Processing",
-                    waiter_delay=self.check_interval,
-                    waiter_max_attempts=self.max_attempts,
+                    poke_interval=self.check_interval,
+                    max_attempts=self.max_attempts,
                     aws_conn_id=self.aws_conn_id,
-                    region_name=self.region_name,
-                    verify=self.verify,
-                    botocore_config=self.botocore_config,
-                    cancel_on_kill=self.cancel_on_kill,
                 ),
                 method_name="execute_complete",
             )
 
         self.serialized_job = serialize(self.hook.describe_processing_job(self.config["ProcessingJobName"]))
-        result = {"Processing": self.serialized_job}
-        result.update(self._read_output_files())
-        return result
+        return {"Processing": self.serialized_job}
 
     def execute_complete(self, context: Context, event: dict[str, Any] | None = None) -> dict[str, dict]:
         validated_event = validate_execute_complete_event(event)
 
         if validated_event["status"] != "success":
-            # A "timeout" event means the waiter gave up while the job was still running; "failed"
-            # and "stopped" are already terminal.
-            if self.cancel_on_kill and validated_event["status"] == "timeout":
-                self.log.info("Stopping SageMaker processing job %s.", validated_event["job_name"])
-                self.hook.stop_processing_job(validated_event["job_name"])
             raise AirflowException(f"Error while running job: {validated_event}")
 
-        self.log.info("SageMaker job %s completed.", validated_event["job_name"])
+        self.log.info(validated_event["message"])
         self.serialized_job = serialize(self.hook.describe_processing_job(validated_event["job_name"]))
         self.log.info("%s completed successfully.", self.task_id)
-        result = {"Processing": self.serialized_job}
-        result.update(self._read_output_files())
-        return result
-
-    def on_kill(self) -> None:
-        """Stop the SageMaker processing job if ``cancel_on_kill`` is set."""
-        if self.cancel_on_kill and self._processing_job_name:
-            self.log.info("Stopping SageMaker processing job %s.", self._processing_job_name)
-            self.hook.stop_processing_job(self._processing_job_name)
-
-    def _read_output_files(self) -> dict:
-        """Read configured output files from S3 after job completion and return them for XCom."""
-        if not self.output_files_to_xcom:
-            return {}
-
-        s3_client = self.hook.get_session().client("s3")
-        processing_outputs = self.config.get("ProcessingOutputConfig", {}).get("Outputs", [])
-        output_files_data: dict = {}
-
-        for output_file in self.output_files_to_xcom:
-            missing_keys = {"result_name", "output_name", "file_name"} - output_file.keys()
-            if missing_keys:
-                raise ValueError(
-                    f"output_files_to_xcom entry missing required keys: {missing_keys}. "
-                    f"Each entry requires 'result_name', 'output_name', and 'file_name'."
-                )
-            result_name = output_file["result_name"]
-            output_name = output_file["output_name"]
-            file_name = output_file["file_name"]
-
-            matching_output = next(
-                (output for output in processing_outputs if output["OutputName"] == output_name),
-                None,
-            )
-            if not matching_output:
-                self.log.warning(
-                    "output_files_to_xcom '%s': no matching output '%s' found.",
-                    result_name,
-                    output_name,
-                )
-                continue
-
-            s3_output_uri = matching_output["S3Output"]["S3Uri"].rstrip("/")
-            s3_full_path = f"{s3_output_uri}/{file_name}"
-            bucket_name, object_key = s3_full_path.replace("s3://", "").split("/", 1)
-            self.log.debug("Attempting to read output file: s3://%s/%s", bucket_name, object_key)
-
-            try:
-                s3_response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
-                file_content = s3_response["Body"].read().decode("utf-8")
-                output_files_data[result_name] = json.loads(file_content)
-                self.log.info("Output file '%s' loaded from %s", result_name, s3_full_path)
-            except ClientError as error:
-                if error.response.get("Error", {}).get("Code") == "NoSuchKey":
-                    self.log.warning("Output file '%s' not found at %s", result_name, s3_full_path)
-                    output_files_data[result_name] = {"_error": f"File not found: {s3_full_path}"}
-                else:
-                    self.log.exception("Failed to read output file '%s' from %s", result_name, s3_full_path)
-                    output_files_data[result_name] = {"_error": f"Failed to read from {s3_full_path}"}
-            except json.JSONDecodeError as error:
-                self.log.exception(
-                    "Output file '%s' at %s is not valid JSON: %s", result_name, s3_full_path, error
-                )
-                output_files_data[result_name] = {"_error": f"Invalid JSON at {s3_full_path}"}
-            except Exception:
-                self.log.exception("Failed to read output file '%s' from %s", result_name, s3_full_path)
-                output_files_data[result_name] = {"_error": f"Failed to read from {s3_full_path}"}
-
-        if output_files_data:
-            return {"OutputFiles": output_files_data}
-        return {}
+        return {"Processing": self.serialized_job}
 
     def get_openlineage_facets_on_complete(self, task_instance) -> OperatorLineage:
         """Return OpenLineage data gathered from SageMaker's API response saved by processing job."""
@@ -625,9 +505,7 @@ class SageMakerEndpointOperator(SageMakerBaseOperator):
     :param region_name: AWS region_name. If not specified then the default boto3 behaviour is used.
     :param verify: Whether or not to verify SSL certificates. See:
         https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
-    :param deferrable: Will wait asynchronously for completion.
-        Deferring when ``wait_for_completion`` is False is deprecated; from the next major release
-        this has no effect when ``wait_for_completion`` is False.
+    :param deferrable:  Will wait asynchronously for completion.
     :return Dict: Returns The ARN of the endpoint created in Amazon SageMaker.
     """
 
@@ -719,16 +597,13 @@ class SageMakerEndpointOperator(SageMakerBaseOperator):
         if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
             raise AirflowException(f"Sagemaker endpoint creation failed: {response}")
 
-        if should_defer(deferrable=self.deferrable, wait_for_completion=self.wait_for_completion):
+        if self.deferrable:
             self.defer(
                 trigger=SageMakerTrigger(
                     job_name=endpoint_info["EndpointName"],
                     job_type="endpoint",
-                    waiter_delay=self.check_interval,
+                    poke_interval=self.check_interval,
                     aws_conn_id=self.aws_conn_id,
-                    region_name=self.region_name,
-                    verify=self.verify,
-                    botocore_config=self.botocore_config,
                 ),
                 method_name="execute_complete",
                 timeout=datetime.timedelta(seconds=self.max_ingestion_time),
@@ -954,12 +829,9 @@ class SageMakerTransformOperator(SageMakerBaseOperator):
                 trigger=SageMakerTrigger(
                     job_name=transform_config["TransformJobName"],
                     job_type="Transform",
-                    waiter_delay=self.check_interval,
-                    waiter_max_attempts=self.max_attempts,
+                    poke_interval=self.check_interval,
+                    max_attempts=self.max_attempts,
                     aws_conn_id=self.aws_conn_id,
-                    region_name=self.region_name,
-                    verify=self.verify,
-                    botocore_config=self.botocore_config,
                 ),
                 method_name="execute_complete",
             )
@@ -980,10 +852,7 @@ class SageMakerTransformOperator(SageMakerBaseOperator):
     def execute_complete(self, context: Context, event: dict[str, Any] | None = None) -> dict[str, dict]:
         validated_event = validate_execute_complete_event(event)
 
-        if validated_event["status"] != "success":
-            raise RuntimeError(f"Error while running transform job: {validated_event}")
-
-        self.log.info("SageMaker job %s completed.", validated_event["job_name"])
+        self.log.info(validated_event["message"])
         return self.serialize_result(validated_event["job_name"])
 
     def serialize_result(self, job_name: str) -> dict[str, dict]:
@@ -1077,8 +946,6 @@ class SageMakerTuningOperator(SageMakerBaseOperator):
         if the tuning job doesn't finish within max_ingestion_time seconds. If you
         set this parameter to None, the operation does not timeout.
     :param deferrable: Will wait asynchronously for completion.
-        Deferring when ``wait_for_completion`` is False is deprecated; from the next major release
-        this has no effect when ``wait_for_completion`` is False.
     :return Dict: Returns The ARN of the tuning job created in Amazon SageMaker.
     """
 
@@ -1131,16 +998,13 @@ class SageMakerTuningOperator(SageMakerBaseOperator):
         if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
             raise AirflowException(f"Sagemaker Tuning Job creation failed: {response}")
         description: dict = {}
-        if should_defer(deferrable=self.deferrable, wait_for_completion=self.wait_for_completion):
+        if self.deferrable:
             self.defer(
                 trigger=SageMakerTrigger(
                     job_name=self.config["HyperParameterTuningJobName"],
                     job_type="tuning",
-                    waiter_delay=self.check_interval,
+                    poke_interval=self.check_interval,
                     aws_conn_id=self.aws_conn_id,
-                    region_name=self.region_name,
-                    verify=self.verify,
-                    botocore_config=self.botocore_config,
                 ),
                 method_name="execute_complete",
                 timeout=(
@@ -1247,10 +1111,6 @@ class SageMakerTrainingOperator(SageMakerBaseOperator):
         This is only relevant if check_if_job_exists is True.
     :param deferrable: Run operator in the deferrable mode. This is only effective if wait_for_completion is
         set to True.
-    :param cancel_on_kill: If True, the training job is stopped when the task is killed.
-        Without it the job keeps running, and billing, after the task is gone. A deferred task is
-        stopped from the Triggerer, which needs Airflow 3.3 or later; below that the flag only
-        applies while the task holds a worker slot.
     :return Dict: Returns The ARN of the training job created in Amazon SageMaker.
     """
 
@@ -1266,7 +1126,6 @@ class SageMakerTrainingOperator(SageMakerBaseOperator):
         check_if_job_exists: bool = True,
         action_if_job_exists: str = "timestamp",
         deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
-        cancel_on_kill: bool = False,
         **kwargs,
     ):
         super().__init__(config=config, **kwargs)
@@ -1284,9 +1143,7 @@ class SageMakerTrainingOperator(SageMakerBaseOperator):
                 Provided value: '{action_if_job_exists}'."
             )
         self.deferrable = deferrable
-        self.cancel_on_kill = cancel_on_kill
         self.serialized_training_data: dict
-        self._training_job_name: str | None = None
 
     def expand_role(self) -> None:
         """Expand an IAM role name into an ARN."""
@@ -1312,10 +1169,7 @@ class SageMakerTrainingOperator(SageMakerBaseOperator):
                 self.hook.describe_training_job,
             )
 
-        # Recorded before the submit call so a kill in that window still has a name to stop.
-        self._training_job_name = self.config["TrainingJobName"]
-
-        self.log.info("Creating SageMaker training job %s.", self._training_job_name)
+        self.log.info("Creating SageMaker training job %s.", self.config["TrainingJobName"])
 
         if self.deferrable and not self.wait_for_completion:
             self.log.warning(
@@ -1380,13 +1234,9 @@ class SageMakerTrainingOperator(SageMakerBaseOperator):
                 trigger=SageMakerTrigger(
                     job_name=self.config["TrainingJobName"],
                     job_type="Training",
-                    waiter_delay=self.check_interval,
-                    waiter_max_attempts=self.max_attempts,
+                    poke_interval=self.check_interval,
+                    max_attempts=self.max_attempts,
                     aws_conn_id=self.aws_conn_id,
-                    region_name=self.region_name,
-                    verify=self.verify,
-                    botocore_config=self.botocore_config,
-                    cancel_on_kill=self.cancel_on_kill,
                 ),
                 method_name="execute_complete",
             )
@@ -1399,18 +1249,12 @@ class SageMakerTrainingOperator(SageMakerBaseOperator):
         if validated_event["status"] != "success":
             raise AirflowException(f"Error while running job: {validated_event}")
 
-        self.log.info("SageMaker job %s completed.", validated_event["job_name"])
+        self.log.info(validated_event["message"])
         return self.serialize_result(validated_event["job_name"])
 
     def serialize_result(self, job_name: str) -> dict[str, dict]:
         self.serialized_training_data = serialize(self.hook.describe_training_job(job_name))
         return {"Training": self.serialized_training_data}
-
-    def on_kill(self) -> None:
-        """Stop the SageMaker training job if ``cancel_on_kill`` is set."""
-        if self.cancel_on_kill and self._training_job_name:
-            self.log.info("Stopping SageMaker training job %s.", self._training_job_name)
-            self.hook.stop_training_job(self._training_job_name)
 
     def get_openlineage_facets_on_complete(self, task_instance) -> OperatorLineage:
         """Return OpenLineage data gathered from SageMaker's API response saved by training job."""
@@ -1489,8 +1333,6 @@ class SageMakerStartPipelineOperator(SageMakerBaseOperator):
     :param verbose: Whether to print steps details when waiting for completion.
         Defaults to true, consider turning off for pipelines that have thousands of steps.
     :param deferrable: Run operator in the deferrable mode.
-        Deferring when ``wait_for_completion`` is False is deprecated; from the next major release
-        this has no effect when ``wait_for_completion`` is False.
 
     :return str: Returns The ARN of the pipeline execution created in Amazon SageMaker.
     """
@@ -1533,7 +1375,7 @@ class SageMakerStartPipelineOperator(SageMakerBaseOperator):
         self.log.info(
             "Starting a new execution for pipeline %s, running with ARN %s", self.pipeline_name, arn
         )
-        if should_defer(deferrable=self.deferrable, wait_for_completion=self.wait_for_completion):
+        if self.deferrable:
             self.defer(
                 trigger=SageMakerPipelineTrigger(
                     waiter_type=SageMakerPipelineTrigger.Type.COMPLETE,
@@ -1541,9 +1383,6 @@ class SageMakerStartPipelineOperator(SageMakerBaseOperator):
                     waiter_delay=self.check_interval,
                     waiter_max_attempts=self.waiter_max_attempts,
                     aws_conn_id=self.aws_conn_id,
-                    region_name=self.region_name,
-                    verify=self.verify,
-                    botocore_config=self.botocore_config,
                 ),
                 method_name="execute_complete",
             )
@@ -1590,8 +1429,6 @@ class SageMakerStopPipelineOperator(SageMakerBaseOperator):
         Defaults to true, consider turning off for pipelines that have thousands of steps.
     :param fail_if_not_running: raises an exception if the pipeline stopped or succeeded before this was run
     :param deferrable: Run operator in the deferrable mode.
-        Deferring when ``wait_for_completion`` is False is deprecated; from the next major release
-        this has no effect when ``wait_for_completion`` is False.
 
     :return str: Returns the status of the pipeline execution after the operation has been done.
     """
@@ -1637,7 +1474,7 @@ class SageMakerStopPipelineOperator(SageMakerBaseOperator):
             return status
 
         # else, eventually wait for completion
-        if should_defer(deferrable=self.deferrable, wait_for_completion=self.wait_for_completion):
+        if self.deferrable:
             self.defer(
                 trigger=SageMakerPipelineTrigger(
                     waiter_type=SageMakerPipelineTrigger.Type.STOPPED,
@@ -1645,9 +1482,6 @@ class SageMakerStopPipelineOperator(SageMakerBaseOperator):
                     waiter_delay=self.check_interval,
                     waiter_max_attempts=self.waiter_max_attempts,
                     aws_conn_id=self.aws_conn_id,
-                    region_name=self.region_name,
-                    verify=self.verify,
-                    botocore_config=self.botocore_config,
                 ),
                 method_name="execute_complete",
             )
@@ -1997,6 +1831,9 @@ class SageMakerCreateNotebookOperator(AwsBaseOperator[SageMakerHook]):
         self.wait_for_completion = wait_for_completion
         self.create_instance_kwargs = create_instance_kwargs or {}
 
+        if self.create_instance_kwargs.get("tags") is not None:
+            self.create_instance_kwargs["tags"] = format_tags(self.create_instance_kwargs["tags"])
+
     def execute(self, context: Context):
         create_notebook_instance_kwargs = {
             "NotebookInstanceName": self.instance_name,
@@ -2009,10 +1846,7 @@ class SageMakerCreateNotebookOperator(AwsBaseOperator[SageMakerHook]):
             "RootAccess": self.root_access,
         }
         if self.create_instance_kwargs:
-            create_instance_kwargs = dict(self.create_instance_kwargs)
-            if create_instance_kwargs.get("tags") is not None:
-                create_instance_kwargs["tags"] = format_tags(create_instance_kwargs["tags"])
-            create_notebook_instance_kwargs.update(create_instance_kwargs)
+            create_notebook_instance_kwargs.update(self.create_instance_kwargs)
 
         self.log.info("Creating SageMaker notebook %s.", self.instance_name)
         response = self.hook.conn.create_notebook_instance(**prune_dict(create_notebook_instance_kwargs))

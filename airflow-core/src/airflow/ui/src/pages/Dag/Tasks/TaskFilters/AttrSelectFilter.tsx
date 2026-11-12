@@ -18,7 +18,7 @@
  */
 import { type CollectionItem, createListCollection, type SelectValueChangeDetails } from "@chakra-ui/react";
 
-import { Select } from "src/system-components";
+import { Select } from "src/components/ui";
 
 type Props = {
   readonly handleSelect: (value: CollectionItem) => void;
@@ -43,7 +43,7 @@ export const AttrSelectFilter = ({ handleSelect, placeholderText, selectedValue,
       onValueChange={handleValueChange}
       value={selectedValue === undefined ? [] : [selectedValue]}
     >
-      <Select.Trigger minW="max-content">
+      <Select.Trigger colorPalette="brand" minW="max-content">
         <Select.ValueText placeholder={placeholderText} width="auto">
           {() => selectedDisplay?.label}
         </Select.ValueText>

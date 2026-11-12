@@ -28,13 +28,9 @@ if TYPE_CHECKING:
 
 
 class RedisKeySensor(BaseSensorOperator):
-    """
-    Checks for the existence of a key in a Redis.
+    """Checks for the existence of a key in a Redis."""
 
-    :param redis_conn_id: the redis connection id (templated)
-    """
-
-    template_fields: Sequence[str] = ("key", "redis_conn_id")
+    template_fields: Sequence[str] = ("key",)
     ui_color = "#f0eee4"
 
     def __init__(self, *, key: str, redis_conn_id: str, **kwargs) -> None:

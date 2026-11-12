@@ -38,12 +38,7 @@ def send_email(
     custom_headers: dict[str, Any] | None = None,
     **kwargs,
 ) -> None:
-    """
-    Email backend for SES.
-
-    .. note::
-        For more information, see :ref:`email-configuration-ses`
-    """
+    """Email backend for SES."""
     if from_email is None:
         raise RuntimeError("The `from_email' configuration has to be set for the SES emailer.")
     hook = SesHook(aws_conn_id=conn_id)

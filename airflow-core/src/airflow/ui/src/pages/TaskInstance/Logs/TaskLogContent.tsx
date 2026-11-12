@@ -16,46 +16,19 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useLayoutEffect, useRef, useCallback, useEffect } from "react";
-
 import { Box, Code, VStack } from "@chakra-ui/react";
-import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
-import type { Range as VirtualizerRange } from "@tanstack/react-virtual";
-import dayjs from "dayjs";
-import tz from "dayjs/plugin/timezone";
-import utc from "dayjs/plugin/utc";
-
-import { ProgressBar } from "src/system-components";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useLayoutEffect, useRef, useCallback, useEffect } from "react";
+import { useHotkeys } from "react-hotkeys-hook";
 
 import { ErrorAlert } from "src/components/ErrorAlert";
-
-import { SHORTCUTS } from "src/context/keyboardShortcuts";
-import { useTimezone } from "src/context/timezone";
-import { useShortcut } from "src/hooks/useShortcut";
+import { ProgressBar } from "src/components/ui";
 import type { ParsedLogEntry } from "src/queries/useLogs";
-import { DEFAULT_DATETIME_FORMAT } from "src/utils/datetimeUtils";
 
 import { HighlightedText } from "./HighlightedText";
 import { ScrollToButton } from "./ScrollToButton";
-import {
-  getBottomDragBoundary,
-  getBottomDragClampTarget,
-  extractSelectedLogText,
-  getEntryText,
-  getSelectionPinnedRows,
-  mergePinnedIndexes,
-} from "./logSelection";
 import { useLogGroups } from "./useLogGroups";
-import {
-  getGroupHeaderMarker,
-  getHighlightColor,
-  isSelectionWithin,
-  scrollToBottom,
-  scrollToTop,
-} from "./utils";
-
-dayjs.extend(utc);
-dayjs.extend(tz);
+import { getHighlightColor, scrollToBottom, scrollToTop } from "./utils";
 
 export type TaskLogContentProps = {
   readonly currentMatchLineIndex?: number;
@@ -69,10 +42,8 @@ export type TaskLogContentProps = {
   readonly wrap: boolean;
 };
 
-// How close to the very end (in px) the user must be for the log to keep
-// following new lines. Small so that scrolling up even a little to read
-// stops the follow; returning to the end resumes it.
-const SCROLL_BOTTOM_THRESHOLD = 40;
+// How close to the bottom (in px) before we consider the user "at the bottom"
+const SCROLL_BOTTOM_THRESHOLD = 100;
 
 export const TaskLogContent = ({
   currentMatchLineIndex,
@@ -85,38 +56,26 @@ export const TaskLogContent = ({
   searchQuery,
   wrap,
 }: TaskLogContentProps) => {
-  const { selectedTimezone } = useTimezone();
   const hash = location.hash.replace("#", "");
   const parentRef = useRef<HTMLDivElement | null>(null);
 
   const {
     expandedGroups,
-    lineNumberToVisibleIndex,
+    originalToVisibleIndex,
     toggleGroup,
     visibleCurrentMatchIndex,
     visibleItems,
     visibleSearchMatchIndices,
   } = useLogGroups({ currentMatchLineIndex, expanded, parsedLogs, searchMatchIndices });
 
-  const hashVisibleIndex = hash === "" ? undefined : lineNumberToVisibleIndex.get(Number(hash));
-
   const isAtBottomRef = useRef<boolean>(true);
   const prevVisibleCountRef = useRef<number>(0);
-  const pinnedRowsRef = useRef<Array<number>>([]);
-  const isSelectingRef = useRef<boolean>(false);
-  // NaN disables clamping between drags.
-  const lastPointerYRef = useRef<number>(Number.NaN);
-  const dragClampRafRef = useRef<number>(0);
-
-  const rangeExtractor = (range: VirtualizerRange) =>
-    mergePinnedIndexes(defaultRangeExtractor(range), pinnedRowsRef.current, range.count);
 
   const rowVirtualizer = useVirtualizer({
     count: visibleItems.length,
     estimateSize: () => 20,
     getScrollElement: () => parentRef.current,
     overscan: 10,
-    rangeExtractor,
   });
 
   const contentHeight = rowVirtualizer.getTotalSize();
@@ -140,163 +99,29 @@ export const TaskLogContent = ({
     return () => el?.removeEventListener("scroll", handleScroll);
   }, [handleScroll]);
 
-  useEffect(() => {
-    const container = parentRef.current;
-
-    if (!container) {
-      return undefined;
-    }
-    const clampSelectionToBottom = () => {
-      dragClampRafRef.current = 0;
-
-      if (!isSelectingRef.current) {
-        return;
-      }
-      const selection = document.getSelection();
-
-      if (!selection) {
-        return;
-      }
-      const clampTarget = getBottomDragClampTarget({
-        container,
-        pointerY: lastPointerYRef.current,
-        selection,
-      });
-
-      if (clampTarget) {
-        selection.extend(clampTarget.node, clampTarget.offset);
-      }
-    };
-    const scheduleBottomClamp = () => {
-      if (!isSelectingRef.current || dragClampRafRef.current !== 0) {
-        return;
-      }
-      const boundary = getBottomDragBoundary(container);
-
-      if (boundary === undefined || lastPointerYRef.current < boundary.y) {
-        return;
-      }
-      dragClampRafRef.current = requestAnimationFrame(clampSelectionToBottom);
-    };
-    const handleSelectionChange = () => {
-      const selection = document.getSelection();
-
-      pinnedRowsRef.current = getSelectionPinnedRows(selection, container);
-      scheduleBottomClamp();
-    };
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target instanceof Element ? event.target.closest("[data-index]") : null;
-
-      if (event.button !== 0 || event.pointerType !== "mouse" || !target || !container.contains(target)) {
-        return;
-      }
-      isSelectingRef.current = true;
-      lastPointerYRef.current = event.clientY;
-    };
-    const stopSelecting = () => {
-      isSelectingRef.current = false;
-      lastPointerYRef.current = Number.NaN;
-      cancelAnimationFrame(dragClampRafRef.current);
-      dragClampRafRef.current = 0;
-    };
-    const handlePointerMove = (event: PointerEvent) => {
-      if (!isSelectingRef.current) {
-        return;
-      }
-      lastPointerYRef.current = event.clientY;
-      scheduleBottomClamp();
-    };
-
-    container.addEventListener("pointerdown", handlePointerDown);
-    container.addEventListener("scroll", scheduleBottomClamp, { passive: true });
-    document.addEventListener("selectionchange", handleSelectionChange);
-    document.addEventListener("pointermove", handlePointerMove, { passive: true });
-    document.addEventListener("pointerup", stopSelecting);
-    document.addEventListener("pointercancel", stopSelecting);
-    globalThis.addEventListener("blur", stopSelecting);
-
-    return () => {
-      container.removeEventListener("pointerdown", handlePointerDown);
-      container.removeEventListener("scroll", scheduleBottomClamp);
-      document.removeEventListener("selectionchange", handleSelectionChange);
-      document.removeEventListener("pointermove", handlePointerMove);
-      document.removeEventListener("pointerup", stopSelecting);
-      document.removeEventListener("pointercancel", stopSelecting);
-      globalThis.removeEventListener("blur", stopSelecting);
-      cancelAnimationFrame(dragClampRafRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleCopy = (event: ClipboardEvent) => {
-      const container = parentRef.current;
-      const selection = document.getSelection();
-
-      if (!container || !selection || !event.clipboardData) {
-        return;
-      }
-      const text = extractSelectedLogText({
-        container,
-        getRowText: (index) => {
-          const entry = visibleItems[index]?.entry;
-
-          if (!entry) {
-            return "";
-          }
-          const entryText = getEntryText(entry, expandedGroups);
-
-          if (entry.timestamp === undefined || entry.timestamp === "") {
-            return entryText;
-          }
-          const rawTimestampPrefix = `[${entry.timestamp}] `;
-
-          if (!entryText.startsWith(rawTimestampPrefix)) {
-            return entryText;
-          }
-          const timestamp = dayjs(entry.timestamp);
-          const formattedTimestamp = timestamp.isValid()
-            ? timestamp.tz(selectedTimezone).format(DEFAULT_DATETIME_FORMAT)
-            : entry.timestamp;
-
-          return `[${formattedTimestamp}] ${entryText.slice(rawTimestampPrefix.length)}`;
-        },
-        selection,
-      });
-
-      if (text === undefined) {
-        return;
-      }
-      event.preventDefault();
-      event.clipboardData.setData("text/plain", text);
-    };
-
-    document.addEventListener("copy", handleCopy);
-
-    return () => document.removeEventListener("copy", handleCopy);
-  }, [visibleItems, expandedGroups, selectedTimezone]);
-
   useLayoutEffect(() => {
     if (visibleItems.length === 0) {
       return;
     }
     const isFirstLoad = prevVisibleCountRef.current === 0;
     const hasNewLines = visibleItems.length > prevVisibleCountRef.current;
-    // Pause following while the user is selecting text in the log — scrolling
-    // would move the text out from under the cursor and clear the selection.
-    const isSelecting = isSelectionWithin(document.getSelection(), parentRef.current);
 
-    if ((isFirstLoad || (hasNewLines && isAtBottomRef.current && !isSelecting)) && !location.hash) {
+    if ((isFirstLoad || (hasNewLines && isAtBottomRef.current)) && !location.hash) {
       rowVirtualizer.scrollToIndex(visibleItems.length - 1, { align: "end" });
     }
     prevVisibleCountRef.current = visibleItems.length;
   }, [visibleItems.length, rowVirtualizer]);
 
   useLayoutEffect(() => {
-    if (location.hash && !isLoading && hashVisibleIndex !== undefined) {
-      rowVirtualizer.scrollToIndex(Math.min(hashVisibleIndex + 5, visibleItems.length - 1));
+    if (location.hash && !isLoading) {
+      const hashVisibleIndex = originalToVisibleIndex.get(Number(hash) - 1);
+
+      if (hashVisibleIndex !== undefined) {
+        rowVirtualizer.scrollToIndex(Math.min(hashVisibleIndex + 5, visibleItems.length - 1));
+      }
     }
     // React Compiler auto-memoizes; safe to include in deps
-  }, [isLoading, rowVirtualizer, visibleItems, hashVisibleIndex]);
+  }, [isLoading, rowVirtualizer, hash, visibleItems, originalToVisibleIndex]);
 
   useLayoutEffect(() => {
     if (visibleCurrentMatchIndex !== undefined && !isLoading) {
@@ -323,16 +148,8 @@ export const TaskLogContent = ({
     }
   };
 
-  useShortcut({
-    ...SHORTCUTS.logs.scrollBottom,
-    callback: () => handleScrollTo("bottom"),
-    options: { enabled: !isLoading },
-  });
-  useShortcut({
-    ...SHORTCUTS.logs.scrollTop,
-    callback: () => handleScrollTo("top"),
-    options: { enabled: !isLoading },
-  });
+  useHotkeys("mod+ArrowDown", () => handleScrollTo("bottom"), { enabled: !isLoading });
+  useHotkeys("mod+ArrowUp", () => handleScrollTo("top"), { enabled: !isLoading });
 
   return (
     <Box display="flex" flexDirection="column" flexGrow={1} h="100%" minHeight={0} position="relative">
@@ -353,7 +170,6 @@ export const TaskLogContent = ({
           data-testid="virtualized-list"
           display="block"
           overflowX="auto"
-          pb={2}
           textWrap={wrap ? "pre" : "nowrap"}
           width="100%"
         >
@@ -384,7 +200,7 @@ export const TaskLogContent = ({
                     _rtl={{ left: "auto", right: 0 }}
                     bgColor={getHighlightColor({
                       currentMatchLineIndex: visibleCurrentMatchIndex,
-                      hashIndex: hashVisibleIndex,
+                      hash,
                       index: virtualRow.index,
                       searchMatchIndices: visibleSearchMatchIndices,
                     })}
@@ -396,8 +212,8 @@ export const TaskLogContent = ({
                     pl={indent}
                     position="absolute"
                     ref={rowVirtualizer.measureElement}
-                    // Must position with top, translateY breaks text selection across rows on Firefox (#55879, #56238)
-                    top={`${virtualRow.start}px`}
+                    top={0}
+                    transform={`translateY(${virtualRow.start}px)`}
                     width={wrap ? "100%" : "max-content"}
                   >
                     <Box
@@ -405,7 +221,15 @@ export const TaskLogContent = ({
                       color="fg.info"
                       data-testid={`summary-${typeof entry.element === "string" ? entry.element : ""}`}
                     >
-                      {getGroupHeaderMarker(isExpanded)}{" "}
+                      <Box
+                        as="span"
+                        display="inline-block"
+                        mr={1}
+                        transform={isExpanded ? "rotate(90deg)" : "rotate(0deg)"}
+                        transition="transform 0.15s"
+                      >
+                        {"\u25B6"}
+                      </Box>
                       {visibleSearchMatchIndices?.has(virtualRow.index) ? (
                         <HighlightedText query={searchQuery}>
                           {typeof entry.element === "string" ? entry.element : undefined}
@@ -424,7 +248,7 @@ export const TaskLogContent = ({
                   _rtl={{ left: "auto", right: 0 }}
                   bgColor={getHighlightColor({
                     currentMatchLineIndex: visibleCurrentMatchIndex,
-                    hashIndex: hashVisibleIndex,
+                    hash,
                     index: virtualRow.index,
                     searchMatchIndices: visibleSearchMatchIndices,
                   })}
@@ -435,8 +259,8 @@ export const TaskLogContent = ({
                   pl={indent}
                   position="absolute"
                   ref={rowVirtualizer.measureElement}
-                  // Must position with top, translateY breaks text selection across rows on Firefox (#55879, #56238)
-                  top={`${virtualRow.start}px`}
+                  top={0}
+                  transform={`translateY(${virtualRow.start}px)`}
                   width={wrap ? "100%" : "max-content"}
                 >
                   {visibleSearchMatchIndices?.has(virtualRow.index) ? (

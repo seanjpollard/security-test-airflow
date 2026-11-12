@@ -24,7 +24,6 @@ from airflow.providers.amazon.aws.hooks.glue_databrew import GlueDataBrewHook
 from airflow.providers.amazon.aws.operators.base_aws import AwsBaseOperator
 from airflow.providers.amazon.aws.triggers.glue_databrew import GlueDataBrewJobCompleteTrigger
 from airflow.providers.amazon.aws.utils import validate_execute_complete_event
-from airflow.providers.amazon.aws.utils.deferral import should_defer
 from airflow.providers.amazon.aws.utils.mixins import aws_template_fields
 from airflow.providers.common.compat.sdk import AirflowException, conf
 
@@ -47,9 +46,8 @@ class GlueDataBrewStartJobOperator(AwsBaseOperator[GlueDataBrewHook]):
     :param job_name: unique job name per AWS Account
     :param wait_for_completion: Whether to wait for job run completion. (default: True)
     :param deferrable: If True, the operator will wait asynchronously for the job to complete.
-        This mode requires aiobotocore module to be installed. (default: False)
-        Deferring when ``wait_for_completion`` is False is deprecated; from the next major release
-        this has no effect when ``wait_for_completion`` is False.
+        This implies waiting for completion. This mode requires aiobotocore module to be installed.
+        (default: False)
     :param waiter_delay: Time in seconds to wait between status checks. Default is 30.
     :param waiter_max_attempts: Maximum number of attempts to check for job completion. (default: 60)
     :return: dictionary with key run_id and value of the resulting job's run_id.
@@ -99,7 +97,7 @@ class GlueDataBrewStartJobOperator(AwsBaseOperator[GlueDataBrewHook]):
 
         self.log.info("AWS Glue DataBrew Job: %s. Run Id: %s submitted.", self.job_name, run_id)
 
-        if should_defer(deferrable=self.deferrable, wait_for_completion=self.wait_for_completion):
+        if self.deferrable:
             self.log.info("Deferring job %s with run_id %s", self.job_name, run_id)
             self.defer(
                 trigger=GlueDataBrewJobCompleteTrigger(

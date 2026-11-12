@@ -16,44 +16,7 @@
 # under the License.
 from __future__ import annotations
 
-import inspect
 from abc import ABC
-from collections.abc import Callable
-
-
-def accepts_kwarg(method: Callable, name: str) -> bool:
-    """
-    Return whether a secrets-backend method accepts the keyword *name*.
-
-    Backends override ``get_conn_value`` / ``get_variable`` / ``get_connection`` with
-    whatever signature was current when they were written, so a keyword added later cannot
-    be forwarded blindly: it raises ``TypeError`` inside the backend, which callers swallow
-    per-backend and report as a missing secret.  ``team_name`` (added by AIP-67 in 3.2) is
-    one example.  A method is considered to accept *name* if it explicitly declares the
-    parameter or has a ``**kwargs`` catch-all.
-    """
-    try:
-        parameters = inspect.signature(method).parameters
-    except (TypeError, ValueError):
-        # Un-introspectable callable (e.g. C-implemented): assume the current signature.
-        return True
-    return name in parameters or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values())
-
-
-def call_secrets_backend_method(method: Callable, *, team_name: str | None, **kwargs):
-    """
-    Call a secrets-backend lookup ``method``, forwarding ``team_name`` only when supported.
-
-    Forward ``team_name`` to backends that accept it (3.2+ overrides) and omit it for
-    pre-3.2 overrides, so older bundled providers and custom backends keep working --
-    in both single-team and multi-team deployments -- without being forced to add the
-    parameter. A ``TypeError`` raised inside an accepting backend is left to propagate
-    rather than retried without ``team_name``, which could mask the error and resolve a
-    team-scoped lookup against the global scope.
-    """
-    if accepts_kwarg(method, "team_name"):
-        return method(team_name=team_name, **kwargs)
-    return method(**kwargs)
 
 
 class BaseSecretsBackend(ABC):
@@ -121,13 +84,6 @@ class BaseSecretsBackend(ABC):
     def _deserialize_connection_value(conn_class: type, conn_id: str, value: str):
         value = value.strip()
         if value[0] == "{":
-            # JSON secrets stored by Airflow 2 backends may lack both "conn_type"
-            # and "uri" (e.g. {"host": ..., "login": ..., "password": ...}). This is
-            # valid: conn_type is intentionally optional on the SDK Connection model
-            # for Airflow 2 -> 3 migration compatibility.
-            # Check: https://github.com/apache/airflow/pull/61728
-            # TODO: Remove this compatibility once the minimum supported Airflow
-            #   version in providers is 3.0.
             return conn_class.from_json(value=value, conn_id=conn_id)  # type: ignore[attr-defined]
 
         # TODO: Only sdk has from_uri defined on it. Is it worthwhile developing the core path or not?
@@ -157,7 +113,7 @@ class BaseSecretsBackend(ABC):
         :param team_name: Team name associated to the task trying to access the connection (if any)
         :return: Connection object or None
         """
-        value = call_secrets_backend_method(self.get_conn_value, team_name=team_name, conn_id=conn_id)
+        value = self.get_conn_value(conn_id=conn_id, team_name=team_name)
         if value:
             return self.deserialize_connection(conn_id=conn_id, value=value)
         return None

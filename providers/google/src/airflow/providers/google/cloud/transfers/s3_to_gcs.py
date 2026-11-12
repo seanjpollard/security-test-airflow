@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Any
 
@@ -147,8 +147,6 @@ class S3ToGCSOperator(S3ListOperator):
         "delimiter",
         "dest_gcs",
         "google_impersonation_chain",
-        "gcp_conn_id",
-        "aws_conn_id",
     )
     ui_color = "#e09411"
     transfer_job_max_files_number = 1000
@@ -167,7 +165,7 @@ class S3ToGCSOperator(S3ListOperator):
         replace=False,
         gzip=False,
         google_impersonation_chain: str | Sequence[str] | None = None,
-        deferrable: bool = conf.getboolean("operators", "default_deferrable", fallback=False),
+        deferrable=conf.getboolean("operators", "default_deferrable", fallback=False),
         poll_interval: int = 10,
         return_gcs_uris: bool = False,
         **kwargs,
@@ -208,41 +206,9 @@ class S3ToGCSOperator(S3ListOperator):
         gcs_bucket, _ = _parse_gcs_url(self.dest_gcs)
         return [f"gs://{gcs_bucket}/{self.s3_to_gcs_object(s3_object=k)}" for k in s3_keys]
 
-    @staticmethod
-    def _strip_overlapping_folder_markers(keys: list[str]) -> tuple[list[str], list[str]]:
-        """
-        Drop trailing-slash keys that are strict prefixes of other listed keys.
-
-        Treated as S3 directory markers. A lone trailing-slash key with no overlap
-        (e.g. ``lonely/``) is preserved, and a non-slash key that happens to be a
-        strict prefix of another (e.g. ``abc`` of ``abcdef``) is also preserved.
-        Returns ``(kept, dropped)``.
-        """
-        if not keys:
-            return [], []
-        ordered = sorted(set(keys))
-        kept: list[str] = []
-        dropped: list[str] = []
-        for current, nxt in zip(ordered, ordered[1:]):
-            if current.endswith("/") and nxt.startswith(current):
-                dropped.append(current)
-            else:
-                kept.append(current)
-        kept.append(ordered[-1])
-        return kept, dropped
-
     def _get_files(self, context: Context, gcs_hook: GCSHook) -> list[str]:
         # use the super method to list all the files in an S3 bucket/key
         s3_objects = super().execute(context)
-
-        s3_objects, dropped_overlap_keys = self._strip_overlapping_folder_markers(s3_objects)
-        if dropped_overlap_keys:
-            self.log.info(
-                "Skipping %s S3 folder-marker key(s) overlapping listed objects "
-                "(omitted from transfer and XCom output): %s",
-                len(dropped_overlap_keys),
-                dropped_overlap_keys,
-            )
 
         if not self.replace:
             s3_objects = self.exclude_existing_objects(s3_objects=s3_objects, gcs_hook=gcs_hook)
@@ -346,7 +312,7 @@ class S3ToGCSOperator(S3ListOperator):
         )
 
     def submit_transfer_jobs(self, files: list[str], gcs_hook: GCSHook, s3_hook: S3Hook) -> list[str]:
-        now = datetime.now(tz=UTC)
+        now = datetime.now(tz=timezone.utc)
         one_time_schedule = {"day": now.day, "month": now.month, "year": now.year}
 
         gcs_bucket, gcs_prefix = _parse_gcs_url(self.dest_gcs)

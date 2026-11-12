@@ -22,18 +22,20 @@ from __future__ import annotations
 import os
 from collections import Counter
 from datetime import date, timedelta
+from typing import TYPE_CHECKING
 from unittest import mock
 
 import pendulum
 import pytest
-from sqlalchemy import insert, select
+from sqlalchemy import select
 
 from airflow import settings
 from airflow._shared.template_rendering import truncate_rendered_value
 from airflow._shared.timezones.timezone import datetime
 from airflow.configuration import conf
-from airflow.models import DagRun, TaskInstance
+from airflow.models import DagRun
 from airflow.models.renderedtifields import RenderedTaskInstanceFields as RTIF
+from airflow.models.taskmap import TaskMap
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.sdk import task as task_decorator
@@ -42,7 +44,9 @@ from airflow.utils.state import TaskInstanceState
 
 from tests_common.test_utils.asserts import assert_queries_count
 from tests_common.test_utils.db import clear_db_dags, clear_db_runs, clear_rendered_ti_fields
-from tests_common.test_utils.mapping import expand_mapped_task_instances
+
+if TYPE_CHECKING:
+    from airflow.models.taskinstance import TaskInstance
 
 pytestmark = pytest.mark.db_test
 
@@ -85,21 +89,9 @@ class LargeStrObject:
 max_length = conf.getint("core", "max_templated_field_length")
 
 
-def select_rtifs(*columns, dag_id, task_id=None):
-    query = (
-        select(*columns)
-        .select_from(RTIF)
-        .join(TaskInstance, TaskInstance.id == RTIF.task_instance_id)
-        .where(TaskInstance.dag_id == dag_id)
-    )
-    if task_id is not None:
-        query = query.where(TaskInstance.task_id == task_id)
-    return query
-
-
 def _get_mysql_margin(session) -> int:
-    """Return extra query margin for MySQL: it fetches run_ids separately (LIMIT in a subquery) and has no DELETE RETURNING."""
-    return 2 if get_dialect_name(session) == "mysql" else 0
+    """Return extra query margin for MySQL (which fetches run_ids separately due to LIMIT subquery limitation)."""
+    return 1 if get_dialect_name(session) == "mysql" else 0
 
 
 class TestRenderedTaskInstanceFields:
@@ -124,11 +116,11 @@ class TestRenderedTaskInstanceFields:
             pytest.param([], [], id="list"),
             pytest.param({}, {}, id="empty_dict"),
             pytest.param((), [], id="empty_tuple"),
-            pytest.param(set(), [], id="empty_set"),
+            pytest.param(set(), "set()", id="empty_set"),
             pytest.param("test-string", "test-string", id="string"),
             pytest.param({"foo": "bar"}, {"foo": "bar"}, id="dict"),
             pytest.param(("foo", "bar"), ["foo", "bar"], id="tuple"),
-            pytest.param({"foo"}, ["foo"], id="set"),
+            pytest.param({"foo"}, "{'foo'}", id="set"),
             (date(2018, 12, 6), "2018-12-06"),
             pytest.param(datetime(2018, 12, 6, 10, 55), "2018-12-06 10:55:00+00:00", id="datetime"),
             pytest.param(
@@ -162,7 +154,9 @@ class TestRenderedTaskInstanceFields:
         ti2.task = task_2
         rtif = RTIF(ti=ti, render_templates=False)
 
-        assert ti.id == rtif.task_instance_id
+        assert ti.dag_id == rtif.dag_id
+        assert ti.task_id == rtif.task_id
+        assert ti.run_id == rtif.run_id
         assert expected_rendered_field == rtif.rendered_fields.get("bash_command")
 
         session.add(rtif)
@@ -204,12 +198,12 @@ class TestRenderedTaskInstanceFields:
     @pytest.mark.parametrize(
         ("rtif_num", "num_to_keep", "remaining_rtifs", "expected_query_count"),
         [
-            (0, 1, 0, 2),
-            (1, 1, 1, 2),
+            (0, 1, 0, 1),
+            (1, 1, 1, 1),
             (1, 0, 1, 0),
-            (3, 1, 1, 2),
-            (4, 2, 2, 2),
-            (5, 2, 2, 2),
+            (3, 1, 1, 1),
+            (4, 2, 2, 1),
+            (5, 2, 2, 1),
         ],
     )
     def test_delete_old_records(
@@ -231,7 +225,9 @@ class TestRenderedTaskInstanceFields:
         session.add_all(rtif_list)
         session.flush()
 
-        result = session.scalars(select_rtifs(RTIF, dag_id=dag.dag_id, task_id=task.task_id)).all()
+        result = session.scalars(
+            select(RTIF).where(RTIF.dag_id == dag.dag_id, RTIF.task_id == task.task_id)
+        ).all()
 
         for rtif in rtif_list:
             assert rtif in result
@@ -240,15 +236,17 @@ class TestRenderedTaskInstanceFields:
 
         with assert_queries_count(expected_query_count, margin=_get_mysql_margin(session)):
             RTIF.delete_old_records(task_id=task.task_id, dag_id=task.dag_id, num_to_keep=num_to_keep)
-        result = session.scalars(select_rtifs(RTIF, dag_id=dag.dag_id, task_id=task.task_id)).all()
+        result = session.scalars(
+            select(RTIF).where(RTIF.dag_id == dag.dag_id, RTIF.task_id == task.task_id)
+        ).all()
         assert remaining_rtifs == len(result)
 
     @pytest.mark.parametrize(
         ("num_runs", "num_to_keep", "remaining_rtifs", "expected_query_count"),
         [
-            (3, 1, 1, 2),
-            (4, 2, 2, 2),
-            (5, 2, 2, 2),
+            (3, 1, 1, 1),
+            (4, 2, 2, 1),
+            (5, 2, 2, 1),
         ],
     )
     def test_delete_old_records_mapped(
@@ -265,27 +263,27 @@ class TestRenderedTaskInstanceFields:
                 run_id=f"run_{num}", logical_date=dag.start_date + timedelta(days=num)
             )
 
-            expand_mapped_task_instances(dag.task_dict[mapped.task_id], dr.run_id, session=dag_maker.session)
+            TaskMap.expand_mapped_task(dag.task_dict[mapped.task_id], dr.run_id, session=dag_maker.session)
             session.refresh(dr)
             for ti in dr.task_instances:
                 ti.task = dag_maker.serialized_dag.get_task(ti.task_id)
                 session.add(RTIF(ti, render_templates=False))
         session.flush()
 
-        result = session.scalars(select_rtifs(RTIF, dag_id=dag.dag_id)).all()
+        result = session.scalars(select(RTIF).where(RTIF.dag_id == dag.dag_id)).all()
         assert len(result) == num_runs * 2
 
         with assert_queries_count(expected_query_count, margin=_get_mysql_margin(session)):
             RTIF.delete_old_records(
                 task_id=mapped.task_id, dag_id=dr.dag_id, num_to_keep=num_to_keep, session=session
             )
-        run_ids = session.scalars(
-            select_rtifs(TaskInstance.run_id, dag_id=dag.dag_id, task_id=mapped.task_id)
+        result = session.scalars(
+            select(RTIF).where(RTIF.dag_id == dag.dag_id, RTIF.task_id == mapped.task_id)
         ).all()
-        rtif_num_runs = Counter(run_ids)
+        rtif_num_runs = Counter(rtif.run_id for rtif in result)
         assert len(rtif_num_runs) == remaining_rtifs
         # Check that we have _all_ the data for each row
-        assert len(run_ids) == remaining_rtifs * 2
+        assert len(result) == remaining_rtifs * 2
 
     def test_delete_old_records_sparse_task(self, dag_maker, session):
         """
@@ -311,16 +309,19 @@ class TestRenderedTaskInstanceFields:
         session.flush()
 
         # Verify we have 4 RTIF records
-        result = session.scalars(select_rtifs(RTIF, dag_id=dag.dag_id, task_id=task.task_id)).all()
+        result = session.scalars(
+            select(RTIF).where(RTIF.dag_id == dag.dag_id, RTIF.task_id == task.task_id)
+        ).all()
         assert len(result) == 4
 
         # With num_to_keep=5, we keep runs 5-9 (the 5 most recent dag runs).
         # Only runs 6 and 9 have RTIF records, so 2 should remain.
         RTIF.delete_old_records(task_id=task.task_id, dag_id=dag.dag_id, num_to_keep=5, session=session)
-        run_ids = session.scalars(
-            select_rtifs(TaskInstance.run_id, dag_id=dag.dag_id, task_id=task.task_id)
+        result = session.scalars(
+            select(RTIF).where(RTIF.dag_id == dag.dag_id, RTIF.task_id == task.task_id)
         ).all()
-        assert set(run_ids) == {"run_6", "run_9"}
+        assert len(result) == 2
+        assert {r.run_id for r in result} == {"run_6", "run_9"}
 
     def test_write(self, dag_maker):
         """
@@ -340,7 +341,11 @@ class TestRenderedTaskInstanceFields:
         rtif = RTIF(ti, render_templates=False)
         rtif.write()
         result = session.execute(
-            select_rtifs(TaskInstance.dag_id, TaskInstance.task_id, RTIF.rendered_fields, dag_id="test_write")
+            select(RTIF.dag_id, RTIF.task_id, RTIF.rendered_fields).where(
+                RTIF.dag_id == rtif.dag_id,
+                RTIF.task_id == rtif.task_id,
+                RTIF.run_id == rtif.run_id,
+            )
         ).first()
         assert result == ("test_write", "test", {"bash_command": "echo test_val", "env": None, "cwd": None})
 
@@ -355,56 +360,17 @@ class TestRenderedTaskInstanceFields:
         rtif_updated.write()
 
         result_updated = session.execute(
-            select_rtifs(TaskInstance.dag_id, TaskInstance.task_id, RTIF.rendered_fields, dag_id="test_write")
+            select(RTIF.dag_id, RTIF.task_id, RTIF.rendered_fields).where(
+                RTIF.dag_id == rtif_updated.dag_id,
+                RTIF.task_id == rtif_updated.task_id,
+                RTIF.run_id == rtif_updated.run_id,
+            )
         ).first()
         assert result_updated == (
             "test_write",
             "test",
             {"bash_command": "echo test_val_updated", "env": None, "cwd": None},
         )
-
-    def test_write_upsert_existing_record(self, dag_maker, session):
-        """
-        Verify that write() updates an existing row instead of failing on its primary key.
-
-        A row is seeded via a direct INSERT (bypassing write()) to represent a record
-        already present for this task instance. Calling write() with different values
-        must update that row via the upsert's DO UPDATE branch.
-
-        This exercises the upsert's update path within a single transaction; it does not
-        reproduce the concurrent-transaction race from #61705, which needs two separate
-        uncommitted transactions and cannot be triggered reliably in a unit test. The
-        atomic single-statement upsert is what closes that race in production.
-        """
-        with dag_maker("test_write_upsert", session=session):
-            task = BashOperator(task_id="test", bash_command="echo original")
-        dr = dag_maker.create_dagrun()
-        ti = dr.task_instances[0]
-        ti.task = task
-
-        # Seed the row via a direct INSERT to simulate a row already committed by
-        # the first request. Using write() here would mask whether write() itself
-        # correctly handles conflicts, since merge() also handles existing rows.
-        session.execute(
-            insert(RTIF).values(
-                task_instance_id=ti.id,
-                rendered_fields={"bash_command": "echo original"},
-                k8s_pod_yaml=None,
-            )
-        )
-        session.flush()
-
-        result = session.scalar(select(RTIF).where(RTIF.task_instance_id == ti.id))
-        assert result.rendered_fields == {"bash_command": "echo original"}
-
-        # write() must not raise IntegrityError even though the row already exists.
-        rtif = RTIF(ti=ti, render_templates=False, rendered_fields={"bash_command": "echo updated"})
-        rtif.write(session=session)
-        session.flush()
-        session.expire_all()
-
-        result = session.scalar(select(RTIF).where(RTIF.task_instance_id == ti.id))
-        assert result.rendered_fields == {"bash_command": "echo updated"}
 
     @mock.patch.dict(os.environ, {"AIRFLOW_VAR_API_KEY": "secret"})
     def test_redact(self, dag_maker):
@@ -463,13 +429,7 @@ class TestRenderedTaskInstanceFields:
         session.expunge_all()
 
         # find oldest dag run
-        dr = session.scalar(
-            select(DagRun)
-            .join(DagRun.task_instances)
-            .join(RTIF, RTIF.task_instance_id == TaskInstance.id)
-            .order_by(DagRun.run_after)
-            .limit(1)
-        )
+        dr = session.scalar(select(DagRun).join(RTIF.dag_run).order_by(DagRun.run_after).limit(1))
         assert dr
         ti: TaskInstance = dr.task_instances[0]
         ti.state = None

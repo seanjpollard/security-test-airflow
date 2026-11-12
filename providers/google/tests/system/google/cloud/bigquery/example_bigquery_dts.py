@@ -22,6 +22,7 @@ Example Airflow DAG that creates and deletes Bigquery data transfer configuratio
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -135,7 +136,7 @@ with DAG(
         task_id="gcp_bigquery_start_transfer",
         project_id=PROJECT_ID,
         transfer_config_id=transfer_config_id,
-        requested_run_time={"seconds": "{{ (macros.datetime.now().timestamp() | int) + 60 }}"},
+        requested_run_time={"seconds": int(time.time() + 60)},
     )
     # [END howto_bigquery_start_transfer]
 

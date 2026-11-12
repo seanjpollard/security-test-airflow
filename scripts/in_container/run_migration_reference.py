@@ -22,7 +22,6 @@ Module to update db migration information in Airflow
 
 from __future__ import annotations
 
-import argparse
 import os
 import re
 import textwrap
@@ -54,9 +53,7 @@ def replace_text_between(file: Path, start: str, end: str, replacement_text: str
     original_text = file.read_text()
     leading_text = original_text.split(start)[0]
     trailing_text = original_text.split(end)[1]
-    new_text = leading_text + start + replacement_text + end + trailing_text
-    if new_text != original_text:
-        file.write_text(new_text)
+    file.write_text(leading_text + start + replacement_text + end + trailing_text)
 
 
 def wrap_backticks(val):
@@ -278,21 +275,11 @@ def correct_mismatching_revision_nums(revisions: Iterable[Script]):
             if revises_id_match is None:
                 raise RuntimeError(f"Revises: not found in {file}")
             new_content = new_content.replace(revises_id_match.group(1), down_revision_match.group(1), 1)
-        if new_content != content:
-            file.write_text(new_content)
+        file.write_text(new_content)
 
 
 if __name__ == "__main__":
-    all_apps = ["airflow", "fab", "edge3"]
-    parser = argparse.ArgumentParser(description="Update migration references and docs.")
-    parser.add_argument(
-        "--app",
-        choices=all_apps,
-        default=None,
-        help="Only process this app (default: all apps).",
-    )
-    args = parser.parse_args()
-    apps = [args.app] if args.app else all_apps
+    apps = ["airflow", "fab", "edge3"]
     for app in apps:
         console.print(f"[bright_blue]Updating migration reference for {app}")
         revisions = list(reversed(list(get_revisions(app))))

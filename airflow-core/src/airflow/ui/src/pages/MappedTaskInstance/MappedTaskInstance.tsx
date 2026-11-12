@@ -18,34 +18,18 @@
  */
 import { ReactFlowProvider } from "@xyflow/react";
 import { useTranslation } from "react-i18next";
-import { MdDetails, MdOutlineTask } from "react-icons/md";
+import { MdOutlineTask } from "react-icons/md";
 import { useParams } from "react-router-dom";
 
-import { useDagRunServiceGetDagRun } from "openapi/queries";
-
 import { DetailsLayout } from "src/layouts/Details/DetailsLayout";
-
 import { useGridTiSummariesStream } from "src/queries/useGridTISummaries.ts";
-import { formatNumber, useDocumentTitle } from "src/utils";
 
 import { Header } from "./Header";
 
 export const MappedTaskInstance = () => {
   const { dagId = "", runId = "", taskId = "" } = useParams();
-  const { i18n, t: translate } = useTranslation("dag");
-
-  useDocumentTitle(taskId);
-
-  // Pass the run state so the summaries stream keeps auto-refreshing while the run is running;
-  // without it the Header and Details tab would freeze on the first fetch.
-  const { data: dagRun } = useDagRunServiceGetDagRun({ dagId, dagRunId: runId }, undefined, {
-    enabled: Boolean(runId),
-  });
-  const { summariesByRunId } = useGridTiSummariesStream({
-    dagId,
-    runIds: runId ? [runId] : [],
-    states: dagRun ? [dagRun.state] : undefined,
-  });
+  const { t: translate } = useTranslation("dag");
+  const { summariesByRunId } = useGridTiSummariesStream({ dagId, runIds: runId ? [runId] : [] });
   const gridTISummaries = summariesByRunId.get(runId);
 
   const taskInstance = gridTISummaries?.task_instances.find((ti) => ti.task_id === taskId);
@@ -56,17 +40,12 @@ export const MappedTaskInstance = () => {
   });
 
   const tabs = [
-    {
-      icon: <MdOutlineTask />,
-      label: `${translate("tabs.taskInstances")} [${formatNumber(taskCount, i18n.language)}]`,
-      value: "",
-    },
-    { icon: <MdDetails />, label: translate("tabs.details"), value: "details" },
+    { icon: <MdOutlineTask />, label: `${translate("tabs.taskInstances")} [${taskCount}]`, value: "" },
   ];
 
   return (
     <ReactFlowProvider>
-      <DetailsLayout outletContext={taskInstance} tabs={tabs}>
+      <DetailsLayout tabs={tabs}>
         {taskInstance === undefined ? undefined : <Header taskInstance={taskInstance} />}
       </DetailsLayout>
     </ReactFlowProvider>

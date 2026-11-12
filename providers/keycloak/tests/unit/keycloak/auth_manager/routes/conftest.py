@@ -69,4 +69,4 @@ def client():
                     )
                 ),
             )
-        yield TestClient(app, headers={"Authorization": f"Bearer {token}"})
+        yield TestClient(create_app(), headers={"Authorization": f"Bearer {token}"})

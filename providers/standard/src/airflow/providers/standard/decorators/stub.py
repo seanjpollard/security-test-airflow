@@ -34,9 +34,6 @@ if TYPE_CHECKING:
 class _StubOperator(DecoratedOperator):
     custom_operator_name: str = "@task.stub"
 
-    # Read by core Dag serialization to materialize the TaskFlow arg-binding spec.
-    is_stub: bool = True
-
     def __init__(
         self,
         *,
@@ -49,16 +46,6 @@ class _StubOperator(DecoratedOperator):
             task_id=task_id,
             **kwargs,
         )
-        # A retry_policy is user Python evaluated in-process by the task runner. Stub tasks
-        # execute on a remote/native worker via the Task Execution Interface and never run the
-        # Python task runner, so the policy would silently never fire. Reject it up front.
-        # (retries is fine -- the server computes retry eligibility regardless of runtime.)
-        if getattr(self, "retry_policy", None) is not None:
-            raise ValueError(
-                "@task.stub does not support `retry_policy`: it runs Python in-process, but stub "
-                "tasks execute on a lang-sdk runtime and never evaluate the policy. Use `retries` "
-                "instead."
-            )
         # Validate python callable
         module = ast.parse(self.get_python_source())
 

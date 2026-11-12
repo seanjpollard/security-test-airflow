@@ -20,39 +20,32 @@ from __future__ import annotations
 import contextlib
 import copy
 import datetime
-import json
 import logging
 from collections.abc import Generator
-from typing import TYPE_CHECKING, Any
-from uuid import UUID
+from typing import TYPE_CHECKING
 
-from sqlalchemy import TIMESTAMP, PickleType, String, Uuid, event, nullsfirst, text
+from sqlalchemy import TIMESTAMP, PickleType, String, event, nullsfirst
 from sqlalchemy.dialects import mysql
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.sql.expression import ColumnElement
 from sqlalchemy.sql.functions import FunctionElement
-from sqlalchemy.types import JSON, NullType, Text, TypeDecorator
+from sqlalchemy.types import JSON, Text, TypeDecorator
 
 from airflow._shared.timezones.timezone import make_naive, utc
 from airflow.configuration import conf
 from airflow.serialization.enums import Encoding
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from kubernetes.client.models.v1_pod import V1Pod
-    from sqlalchemy.dialects.mysql.dml import Insert as MySQLInsert
-    from sqlalchemy.dialects.postgresql.dml import Insert as PostgreSQLInsert
-    from sqlalchemy.dialects.sqlite.dml import Insert as SQLiteInsert
     from sqlalchemy.exc import OperationalError
     from sqlalchemy.orm import Session
     from sqlalchemy.sql import Select
+    from sqlalchemy.sql.elements import ColumnElement
     from sqlalchemy.types import TypeEngine
 
     from airflow.typing_compat import Self
-
-    # TODO: use Select[UUID] once the minimum SQLAlchemy is 2.1; 2.0 uses Select[tuple[UUID]].
-    UUIDSelect = Select
 
 
 log = logging.getLogger(__name__)
@@ -63,103 +56,6 @@ def get_dialect_name(session: Session) -> str | None:
     if (bind := session.get_bind()) is None:
         raise ValueError("No bind/engine is associated with the provided Session")
     return getattr(bind.dialect, "name", None)
-
-
-@contextlib.contextmanager
-def apply_regex_query_timeout(session: Session) -> Generator[None, None, None]:
-    """
-    Bound the runtime of a user-supplied regex filter, scoped to the wrapped query.
-
-    Reads the ``[api] regexp_query_timeout`` config (in seconds, fractional values allowed) and sets
-    a database-side timeout for the duration of the ``with`` block, then restores the previous value
-    so it does not affect any other statement running later in the same transaction/session:
-
-    * PostgreSQL: transaction-local ``statement_timeout`` (via ``set_config(..., is_local=True)``).
-    * MySQL: session ``max_execution_time`` (applies to read-only ``SELECT`` statements).
-
-    The previous value is captured and restored (rather than reset to ``0``) so a server- or
-    role-level global timeout is preserved instead of being cleared. This is a ReDoS safeguard: a
-    malicious pattern is aborted instead of pinning a database backend. No-op on other backends
-    (e.g. SQLite) and when the configured timeout is ``0`` (which also means regexp filtering is
-    disabled).
-    """
-    timeout_seconds = conf.getfloat("api", "regexp_query_timeout")
-    if timeout_seconds <= 0:
-        yield
-        return
-    # ``timeout_ms`` is derived from the (operator-controlled) config, not from user input.
-    timeout_ms = int(timeout_seconds * 1000)
-    dialect_name = get_dialect_name(session)
-    if dialect_name == "postgresql":
-        previous = session.execute(text("SELECT current_setting('statement_timeout')")).scalar()
-        session.execute(
-            text("SELECT set_config('statement_timeout', :timeout, true)").bindparams(timeout=str(timeout_ms))
-        )
-        try:
-            yield
-        finally:
-            # Restore the previous value (e.g. a global statement_timeout) instead of clearing it, so
-            # the bound only applies to the regexp query and not later statements in the transaction.
-            session.execute(
-                text("SELECT set_config('statement_timeout', :timeout, true)").bindparams(
-                    timeout=str(previous) if previous is not None else "0"
-                )
-            )
-    elif dialect_name == "mysql":
-        previous = session.execute(text("SELECT @@SESSION.max_execution_time")).scalar()
-        session.execute(text(f"SET SESSION max_execution_time = {timeout_ms}"))
-        try:
-            yield
-        finally:
-            # Restore the previous value so a global max_execution_time is preserved.
-            session.execute(text(f"SET SESSION max_execution_time = {int(previous or 0)}"))
-    else:
-        yield
-
-
-def build_upsert_stmt(
-    dialect: str | None,
-    model: Any,
-    conflict_cols: list[str],
-    values: dict[str, Any],
-    update_fields: dict[str, Any],
-) -> MySQLInsert | PostgreSQLInsert | SQLiteInsert:
-    """
-    Build a dialect-specific ``INSERT ... ON CONFLICT DO UPDATE`` (upsert) statement.
-
-    A single-statement upsert is atomic at the database level, which avoids the
-    race conditions that arise from the non-atomic SELECT-then-INSERT performed by
-    ``session.merge()`` when concurrent transactions target the same primary key.
-
-    :param dialect: dialect name as returned by :func:`get_dialect_name`
-    :param model: the SQLAlchemy model (or table) to insert into
-    :param conflict_cols: columns that make up the conflict target (PostgreSQL/SQLite)
-    :param values: column values to insert
-    :param update_fields: column values to set when a conflicting row already exists
-    :raises ValueError: if the dialect does not support a known upsert syntax
-    """
-    stmt: MySQLInsert | PostgreSQLInsert | SQLiteInsert
-    if dialect == "postgresql":
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-        stmt = pg_insert(model).values(**values)
-        stmt = stmt.on_conflict_do_update(index_elements=conflict_cols, set_=update_fields)
-    elif dialect == "mysql":
-        from sqlalchemy.dialects.mysql import insert as mysql_insert
-
-        stmt = mysql_insert(model).values(**values)
-        stmt = stmt.on_duplicate_key_update(**update_fields)
-    elif dialect == "sqlite":
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
-        stmt = sqlite_insert(model).values(**values)
-        stmt = stmt.on_conflict_do_update(index_elements=conflict_cols, set_=update_fields)
-    else:
-        raise ValueError(
-            f"Unsupported database dialect '{dialect}' for upsert. "
-            "Supported dialects are: postgresql, mysql, sqlite."
-        )
-    return stmt
 
 
 class random_db_uuid(FunctionElement):
@@ -187,58 +83,6 @@ def _random_db_uuid_mysql(element, compiler, **kw):
 @compiles(random_db_uuid, "sqlite")
 def _random_db_uuid_sqlite(element, compiler, **kw):
     return "uuid4()"
-
-
-class JsonContains(ColumnElement):
-    """
-    Dialect-aware JSON containment check.
-
-    Compiles to ``@>`` on PostgreSQL (GIN-indexable), ``JSON_CONTAINS`` on
-    MySQL, and per-key ``json_extract`` comparisons on SQLite.
-
-    All dialects use bound parameters to avoid SQL injection.
-    """
-
-    inherit_cache = False
-    type = NullType()
-
-    def __init__(self, column, kv_dict: dict[str, str]):
-        self.column = column
-        self.kv_dict = kv_dict
-
-
-@compiles(JsonContains, "postgresql")
-def _pg_json_contains(element, compiler, **kw):
-    from sqlalchemy import cast, literal
-
-    col = cast(element.column, JSONB)
-    param = literal(json.dumps(element.kv_dict)).cast(JSONB)
-    expr = col.contains(param)
-    return compiler.process(expr, **kw)
-
-
-@compiles(JsonContains, "mysql")
-def _mysql_json_contains(element, compiler, **kw):
-    from sqlalchemy import bindparam, func
-
-    param = bindparam(None, json.dumps(element.kv_dict), expanding=False)
-    expr = func.JSON_CONTAINS(element.column, param)
-    return compiler.process(expr == 1, **kw)
-
-
-@compiles(JsonContains)
-def _default_json_contains(element, compiler, **kw):
-    from sqlalchemy import and_, func, literal
-
-    clauses = []
-    for k, v in element.kv_dict.items():
-        # Quote the key (json.dumps also covers embedded quotes/backslashes) so metacharacters
-        # like "." match literally, as PostgreSQL ``@>`` and MySQL ``JSON_CONTAINS`` do.
-        path = f"$.{json.dumps(k, ensure_ascii=False)}"
-        clauses.append(func.json_extract(element.column, literal(path)) == literal(v))
-    if len(clauses) == 1:
-        return compiler.process(clauses[0], **kw)
-    return compiler.process(and_(*clauses), **kw)
 
 
 class UtcDateTime(TypeDecorator):
@@ -292,60 +136,6 @@ class UtcDateTime(TypeDecorator):
         if dialect.name == "mysql":
             return mysql.TIMESTAMP(fsp=6)
         return super().load_dialect_impl(dialect)
-
-
-_MYSQL_DIALECT_NAMES = ("mysql", "mariadb")
-
-
-class CompactUUID(TypeDecorator):
-    """
-    A UUID that MySQL stores as ``BINARY(16)``; other dialects use SQLAlchemy's :class:`~sqlalchemy.types.Uuid`.
-
-    The default MySQL form, ``CHAR(32)``, takes 128 bytes in an index key under a utf8mb4 collation.
-    Keys that already approach InnoDB's 3072-byte limit, such as those holding several ``StringID`` columns,
-    overflow with it.
-    """
-
-    impl = Uuid
-    cache_ok = True
-
-    def load_dialect_impl(self, dialect):
-        if dialect.name in _MYSQL_DIALECT_NAMES:
-            return dialect.type_descriptor(mysql.BINARY(16))
-        return dialect.type_descriptor(Uuid())
-
-    def process_bind_param(self, value, dialect):
-        if value is None or dialect.name not in _MYSQL_DIALECT_NAMES:
-            return value
-        return (UUID(value) if isinstance(value, str) else value).bytes
-
-    def process_result_value(self, value, dialect):
-        if value is None or dialect.name not in _MYSQL_DIALECT_NAMES:
-            return value
-        return UUID(bytes=bytes(value))
-
-
-class compact_uuid_default(ColumnElement):
-    """Server default for a :class:`CompactUUID` column, rendered in the form each dialect stores."""
-
-    inherit_cache = True
-    type = NullType()
-
-    def __init__(self, value: UUID):
-        self.value = value
-
-
-@compiles(compact_uuid_default)
-def _compact_uuid_default(element, compiler, **kw):
-    return compiler.render_literal_value(element.value.hex, String())
-
-
-@compiles(compact_uuid_default, "mysql")
-@compiles(compact_uuid_default, "mariadb")
-def _compact_uuid_default_mysql(element, compiler, **kw):
-    # SQLAlchemy only parenthesizes expression defaults when it knows the server version, which offline SQL
-    # generation (--show-sql-only) does not; MySQL rejects an unparenthesized expression default.
-    return f"(UNHEX({compiler.render_literal_value(element.value.hex, String())}))"
 
 
 class ExtendedJSON(TypeDecorator):
@@ -433,27 +223,6 @@ def sanitize_for_serialization(obj: V1Pod):
     return {key: sanitize_for_serialization(val) for key, val in obj_dict.items()}
 
 
-def deserialize_pod_dict(pod_dict: dict) -> V1Pod:
-    """
-    Deserialize a serialized pod dict back into a ``V1Pod``.
-
-    kubernetes-client exposes no public dict->model API; see
-    https://github.com/kubernetes-client/python/issues/977.
-
-    A fresh ``Configuration`` is passed so that neither the pod nor any nested model captures the
-    process-global in-cluster ``Configuration``. In-cluster, that global carries a
-    ``refresh_api_key_hook`` local closure which ``pickle`` cannot serialize, and which would
-    otherwise break pickling a ``pod_override`` onto the KubernetesExecutor multiprocessing queue.
-
-    :meta private:
-    """
-    from kubernetes.client import Configuration
-    from kubernetes.client.api_client import ApiClient
-    from kubernetes.client.models.v1_pod import V1Pod
-
-    return ApiClient(configuration=Configuration())._ApiClient__deserialize_model(pod_dict, V1Pod)
-
-
 def ensure_pod_is_valid_after_unpickling(pod: V1Pod) -> V1Pod | None:
     """
     Convert pod to json and back so that pod is safe.
@@ -482,9 +251,11 @@ def ensure_pod_is_valid_after_unpickling(pod: V1Pod) -> V1Pod | None:
     if not isinstance(pod, V1Pod):
         return None
     try:
+        from airflow.providers.cncf.kubernetes.pod_generator import PodGenerator
+
         # now we actually reserialize / deserialize the pod
         pod_dict = sanitize_for_serialization(pod)
-        return deserialize_pod_dict(pod_dict)
+        return PodGenerator.deserialize_model_dict(pod_dict)
     except Exception:
         return None
 
@@ -642,51 +413,6 @@ def lock_rows(query: Select, session: Session) -> Generator[None, None, None]:
     del locked_rows
 
 
-@contextlib.contextmanager
-def with_db_lock_timeout(session: Session, lock_timeout: int = 30) -> Generator[None, None, None]:
-    """
-    Context manager to set the database lock timeout for the current session.
-
-    This prevents long-running operations from blocking indefinitely if they encounter
-    lock contention. Only supported on PostgreSQL and MySQL.
-
-    :param session: ORM Session
-    :param lock_timeout: Lock timeout in seconds.
-    """
-    if lock_timeout <= 0:
-        raise ValueError("lock_timeout must be a positive integer number of seconds")
-
-    try:
-        dialect_name = get_dialect_name(session)
-    except ValueError:
-        dialect_name = None
-
-    old_mysql_timeout = None
-
-    if dialect_name == "postgresql":
-        # SET LOCAL applies only to the current transaction and resets on COMMIT/ROLLBACK.
-        session.execute(text(f"SET LOCAL lock_timeout = '{lock_timeout}s'"))
-    elif dialect_name == "mysql":
-        old_mysql_timeout = session.execute(text("SELECT @@SESSION.innodb_lock_wait_timeout")).scalar()
-        session.execute(text(f"SET SESSION innodb_lock_wait_timeout = {lock_timeout}"))
-    else:
-        log.debug(
-            "Database lock timeout is not supported for dialect '%s'. "
-            "The requested timeout of %ss will not be applied.",
-            dialect_name,
-            lock_timeout,
-        )
-
-    try:
-        yield
-    finally:
-        if dialect_name == "mysql" and old_mysql_timeout is not None:
-            session.execute(text(f"SET SESSION innodb_lock_wait_timeout = {old_mysql_timeout}"))
-
-
-PROHIBIT_COMMIT_ERROR_MESSAGE = "UNEXPECTED COMMIT - THIS WILL BREAK HA LOCKS!"
-
-
 class CommitProhibitorGuard:
     """Context manager class that powers prohibit_commit."""
 
@@ -695,18 +421,11 @@ class CommitProhibitorGuard:
     def __init__(self, session: Session):
         self.session = session
 
-    def _validate_commit(self, session):
-        # before_commit fires for a SAVEPOINT release too, not just session.commit(). A
-        # savepoint release ends neither the outer transaction nor its row locks, so it can't
-        # break the HA locks this guard protects -- skip the check while one is open. This
-        # covers session.commit() and savepoint exits; nothing under this guard commits a
-        # transaction handle directly today, which would bypass this check.
-        if session.in_nested_transaction():
-            return
+    def _validate_commit(self, _):
         if self.expected_commit:
             self.expected_commit = False
             return
-        raise RuntimeError(PROHIBIT_COMMIT_ERROR_MESSAGE)
+        raise RuntimeError("UNEXPECTED COMMIT - THIS WILL BREAK HA LOCKS!")
 
     def __enter__(self) -> Self:
         event.listen(self.session, "before_commit", self._validate_commit)
@@ -764,24 +483,9 @@ def is_lock_not_available_error(error: OperationalError):
     # importing it. This doesn't
     if db_err_code in ("55P03", 1205, 3572):
         return True
-    # SQLite: `database is locked` (SQLITE_BUSY) — check the error text since
-    # sqlite3.OperationalError.args[0] is a human-readable string, not a numeric code
-    if error.orig and "database is locked" in str(error.orig).lower():
-        return True
     return False
 
 
-def is_deadlock_error(error: Exception) -> bool:
-    """Check if the Error is a database deadlock."""
-    if not isinstance(error, DBAPIError) or error.orig is None:
-        return False
-    # DB specific error codes:
-    # Postgres: 40P01 (deadlock_detected)
-    # MySQL: 1213, 'Deadlock found when trying to get lock; try restarting transaction'
-    # psycopg2 exposes `pgcode`, psycopg3 exposes `sqlstate`
-    db_err_code = (
-        getattr(error.orig, "pgcode", None)
-        or getattr(error.orig, "sqlstate", None)
-        or (error.orig.args[0] if error.orig.args else None)
-    )
-    return db_err_code in ("40P01", 1213)
+def make_dialect_kwarg(dialect: str) -> dict[str, str | Iterable[str]]:
+    """Create an SQLAlchemy-version-aware dialect keyword argument."""
+    return {"dialect_names": (dialect,)}

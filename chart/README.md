@@ -25,12 +25,12 @@
 
 ## Introduction
 
-This chart will bootstrap an [Airflow](https://airflow.apache.org) deployment on a [Kubernetes](https://kubernetes.io)
+This chart will bootstrap an [Airflow](https://airflow.apache.org) deployment on a [Kubernetes](http://kubernetes.io)
 cluster using the [Helm](https://helm.sh) package manager.
 
 ## Requirements
 
-- Kubernetes 1.31+ cluster
+- Kubernetes 1.30+ cluster
 - Helm 3.0+
 - PV provisioner support in the underlying infrastructure (optionally)
 
@@ -51,7 +51,6 @@ cluster using the [Helm](https://helm.sh) package manager.
    * Container-specific Service Account Token Volume configuration implementing Principle of Least Privilege
    * Only scheduler containers receive API access; init and sidecar containers operate without tokens
    * Defense-in-depth security with both ServiceAccount and Pod-level controls
-   * Default container hardening with security contexts set
    * Compatibility with security policies like Kyverno and compliance frameworks
 * Monitoring:
    * StatsD/Prometheus metrics for Airflow

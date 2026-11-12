@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from airflow.models import BaseOperator
@@ -103,7 +102,7 @@ class DdlOperator(BaseOperator):
         )
     """
 
-    template_fields: Sequence[str] = ("ddl", "ddl_job_name", "teradata_conn_id", "ssh_conn_id")
+    template_fields = ("ddl", "ddl_job_name")
     template_ext = (".sql",)
     ui_color = "#a8e4b1"
 
@@ -299,9 +298,6 @@ class TdLoadOperator(BaseOperator):
         "source_file_name",
         "target_file_name",
         "tdload_options",
-        "teradata_conn_id",
-        "target_teradata_conn_id",
-        "ssh_conn_id",
     )
     ui_color = "#a8e4b1"
 

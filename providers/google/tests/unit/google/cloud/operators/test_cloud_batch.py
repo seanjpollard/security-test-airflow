@@ -17,8 +17,6 @@
 # under the License.
 from __future__ import annotations
 
-import json
-from datetime import datetime
 from unittest import mock
 
 import pytest
@@ -31,8 +29,6 @@ from airflow.providers.google.cloud.operators.cloud_batch import (
     CloudBatchListTasksOperator,
     CloudBatchSubmitJobOperator,
 )
-
-from tests_common.test_utils.compat import DagSerialization
 
 CLOUD_BATCH_HOOK_PATH = "airflow.providers.google.cloud.operators.cloud_batch.CloudBatchHook"
 TASK_ID = "test"
@@ -94,114 +90,6 @@ class TestCloudBatchSubmitJobOperator:
             expected_exception=AirflowException, match="Unexpected error in the operation: test error"
         ):
             operator.execute_complete(context=mock.MagicMock(), event=event)
-
-
-def _job_dict_with_template() -> dict:
-    return {
-        "task_groups": [
-            {
-                "task_spec": {
-                    "runnables": [
-                        {
-                            "container": {
-                                "image_uri": "gcr.io/google-containers/busybox",
-                                "entrypoint": "/bin/sh",
-                                "commands": ["-c", "echo {{ ds }}"],
-                            }
-                        }
-                    ]
-                }
-            }
-        ],
-        "labels": {"run_id": "{{ run_id }}"},
-    }
-
-
-class TestCloudBatchSubmitJobOperatorTemplating:
-    def test_template_fields_includes_job(self):
-        assert "job" in CloudBatchSubmitJobOperator.template_fields
-
-    @pytest.mark.parametrize(
-        ("job_input_factory", "job_input_type"),
-        [
-            pytest.param(lambda d: d, dict, id="dict"),
-            pytest.param(lambda d: batch_v1.Job.from_json(json.dumps(d)), batch_v1.Job, id="protobuf-Job"),
-        ],
-    )
-    def test_job_is_unchanged_until_template_preparation(self, job_input_factory, job_input_type):
-        job = job_input_factory(_job_dict_with_template())
-        operator = CloudBatchSubmitJobOperator(
-            task_id=TASK_ID,
-            project_id=PROJECT_ID,
-            region=REGION,
-            job_name=JOB_NAME,
-            job=job,
-        )
-
-        assert operator.job is job
-        assert isinstance(operator.job, job_input_type)
-
-        operator.resolve_template_files()
-        assert isinstance(operator.job, dict)
-        prepared_job = operator.job
-        operator.resolve_template_files()
-        assert operator.job is prepared_job
-
-    @pytest.mark.db_test
-    @pytest.mark.parametrize(
-        "job_input_factory",
-        [
-            pytest.param(lambda d: d, id="dict"),
-            pytest.param(lambda d: batch_v1.Job.from_json(json.dumps(d)), id="protobuf-Job"),
-        ],
-    )
-    def test_jinja_in_job_commands_is_rendered(
-        self, dag_maker, create_task_instance_of_operator, job_input_factory
-    ):
-        job = job_input_factory(_job_dict_with_template())
-        ti = create_task_instance_of_operator(
-            CloudBatchSubmitJobOperator,
-            dag_id="test_cloud_batch_render",
-            task_id=TASK_ID,
-            project_id=PROJECT_ID,
-            region=REGION,
-            job_name=JOB_NAME,
-            job=job,
-            logical_date=datetime(2026, 1, 15),
-        )
-        operator = dag_maker.dag.get_task(TASK_ID)
-        assert isinstance(operator.job, dict)
-
-        task = ti.render_templates()
-
-        assert isinstance(task.job, dict)
-        rendered_cmd = task.job["task_groups"][0]["task_spec"]["runnables"][0]["container"]["commands"][1]
-        assert rendered_cmd == "echo 2026-01-15"
-        # dag_maker's default run_id is "test"; the point is {{ run_id }} got substituted at all.
-        assert task.job["labels"]["run_id"] == "test"
-
-    @pytest.mark.db_test
-    @pytest.mark.need_serialized_dag
-    def test_protobuf_job_is_prepared_before_serialization(self, dag_maker):
-        job = batch_v1.Job.from_json(json.dumps(_job_dict_with_template()))
-
-        with dag_maker(dag_id="test_cloud_batch_serialization"):
-            operator = CloudBatchSubmitJobOperator(
-                task_id=TASK_ID,
-                project_id=PROJECT_ID,
-                region=REGION,
-                job_name=JOB_NAME,
-                job=job,
-            )
-            assert operator.job is job
-            dag_maker.dag.resolve_template_files()
-
-        serialized_dag = DagSerialization.deserialize_dag(dag_maker.get_serialized_data()["dag"])
-        serialized_job = serialized_dag.get_task(TASK_ID).job
-
-        assert isinstance(serialized_job, dict)
-        command = serialized_job["task_groups"][0]["task_spec"]["runnables"][0]["container"]["commands"][1]
-        assert command == "echo {{ ds }}"
 
 
 class TestCloudBatchDeleteJobOperator:

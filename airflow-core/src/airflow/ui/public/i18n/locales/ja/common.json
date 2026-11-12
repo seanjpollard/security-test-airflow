@@ -59,11 +59,6 @@
     "dagVersions": "Dag バージョン",
     "dataIntervalEnd": "データ期間の終了",
     "dataIntervalStart": "データ期間の開始",
-    "durationStats": {
-      "mean": "平均",
-      "mode": "最頻値"
-    },
-    "expectedDuration": "予想所要時間",
     "lastSchedulingDecision": "最終スケジューリング決定時刻",
     "partitionKey": "パーティションキー",
     "queuedAt": "キュー登録時刻",
@@ -76,6 +71,7 @@
   "dagRun_one": "Dag 実行",
   "dagRun_other": "Dag 実行",
   "dagRunId": "Dag 実行 ID",
+  "dagWarnings": "Dag 実行警告/エラー",
   "defaultToGraphView": "グラフ表示を既定にします",
   "defaultToGridView": "グリッド表示を既定にします",
   "diff": "差分",
@@ -243,6 +239,7 @@
   },
   "task_one": "タスク",
   "task_other": "タスク",
+  "taskGroup": "タスクグループ",
   "taskId": "タスク ID",
   "taskInstance": {
     "dagVersion": "Dag バージョン",
@@ -291,7 +288,7 @@
     "bulkDelete": {
       "error": "{{resourceName}} の一括削除が失敗しました",
       "success": {
-        "description": "{{count, number}} {{resourceName}} が削除済。 キー: {{keys}}",
+        "description": "{{count}} {{resourceName}} が削除済。 キー: {{keys}}",
         "title": "{{resourceName}} 一括削除リクエストが送信済"
       }
     },
@@ -312,7 +309,7 @@
     "import": {
       "error": "{{resourceName}} のインポートに失敗しました",
       "success": {
-        "description": "{{count, number}} {{resourceName}} のインポートが成功しました",
+        "description": "{{count}} {{resourceName}} のインポートが成功しました",
         "title": "{{resourceName}} インポートリクエスト送信済み"
       }
     },

@@ -30,7 +30,7 @@ if __name__ == "__main__":
         with open(fname) as fh:
             root = ET.parse(fh)
         testsuite = root.find(".//testsuite")
-        if testsuite is not None:
+        if testsuite:
             num_failures = testsuite.get("failures")
             num_errors = testsuite.get("errors")
             if num_failures == "0" and num_errors == "0":

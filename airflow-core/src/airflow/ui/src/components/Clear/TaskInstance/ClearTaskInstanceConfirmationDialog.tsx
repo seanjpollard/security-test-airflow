@@ -16,25 +16,26 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useEffect, useState } from "react";
-
 import { Button, Icon, Spinner, Text, VStack } from "@chakra-ui/react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { GoAlertFill } from "react-icons/go";
 
-import type { ClearTaskInstancesBody } from "openapi/requests/types.gen";
-
-import { Dialog } from "src/system-components";
-
-import { ErrorAlert } from "src/components/ErrorAlert";
-
+import { Dialog } from "src/components/ui";
 import { useClearTaskInstancesDryRun } from "src/queries/useClearTaskInstancesDryRun";
-import { useDurationFormat } from "src/utils";
+import { getRelativeTime } from "src/utils/datetimeUtils";
 
 type Props = {
-  readonly dryRun?: {
+  readonly dagDetails?: {
     dagId: string;
-    requestBody: ClearTaskInstancesBody;
+    dagRunId: string;
+    downstream?: boolean;
+    future?: boolean;
+    mapIndex?: number;
+    onlyFailed?: boolean;
+    past?: boolean;
+    taskId: string;
+    upstream?: boolean;
   };
   readonly onClose: () => void;
   readonly onConfirm?: () => void;
@@ -43,24 +44,34 @@ type Props = {
 };
 
 const ClearTaskInstanceConfirmationDialog = ({
-  dryRun,
+  dagDetails,
   onClose,
   onConfirm,
   open,
   preventRunningTask,
 }: Props) => {
   const { t: translate } = useTranslation();
-  const { formatRelative } = useDurationFormat();
-  const { data, error, isFetching } = useClearTaskInstancesDryRun({
-    dagId: dryRun?.dagId ?? "",
+  const { data, isFetching } = useClearTaskInstancesDryRun({
+    dagId: dagDetails?.dagId ?? "",
     options: {
-      enabled: open && Boolean(dryRun),
+      enabled: open && Boolean(dagDetails),
       gcTime: 0,
       refetchOnMount: "always",
       refetchOnWindowFocus: false,
       staleTime: 0,
     },
-    requestBody: dryRun?.requestBody ?? {},
+    requestBody: {
+      dag_run_id: dagDetails?.dagRunId ?? "",
+      include_downstream: dagDetails?.downstream,
+      include_future: dagDetails?.future,
+      include_past: dagDetails?.past,
+      include_upstream: dagDetails?.upstream,
+      only_failed: dagDetails?.onlyFailed,
+      task_ids:
+        dagDetails?.mapIndex === undefined
+          ? [dagDetails?.taskId ?? ""]
+          : [[dagDetails.taskId, dagDetails.mapIndex]],
+    },
   });
 
   const [isReady, setIsReady] = useState(false);
@@ -70,7 +81,7 @@ const ClearTaskInstanceConfirmationDialog = ({
   const taskCurrentState = firstInstance?.state;
 
   useEffect(() => {
-    if (!isFetching && !Boolean(error) && open && data) {
+    if (!isFetching && open && data) {
       const isInTriggeringState = taskCurrentState === "queued" || taskCurrentState === "scheduled";
 
       if (!preventRunningTask || !isInTriggeringState) {
@@ -80,20 +91,10 @@ const ClearTaskInstanceConfirmationDialog = ({
         setIsReady(true);
       }
     }
-  }, [isFetching, error, data, open, taskCurrentState, preventRunningTask, onConfirm, onClose]);
+  }, [isFetching, data, open, taskCurrentState, preventRunningTask, onConfirm, onClose]);
 
-  // This dialog opens as the clear dialog closes beneath it, and that close would dismiss it
-  // twice over: removing a dialog layer dismisses the layers stacked above it, and the clear
-  // dialog hands focus back to its trigger outside this one. Either drops the clear before
-  // the dry run settles. Outside clicks and Escape still close it.
   return (
-    <Dialog.Root
-      lazyMount
-      onFocusOutside={(event) => event.preventDefault()}
-      onOpenChange={onClose}
-      onRequestDismiss={(event) => event.preventDefault()}
-      open={open}
-    >
+    <Dialog.Root lazyMount onOpenChange={onClose} open={open}>
       <Dialog.Content backdrop>
         {isFetching ? (
           <VStack align="center" gap={3} justify="center" py={8}>
@@ -102,18 +103,6 @@ const ClearTaskInstanceConfirmationDialog = ({
               {translate("common:task.documentation")}
             </Text>
           </VStack>
-        ) : Boolean(error) ? (
-          <>
-            <Dialog.Header>
-              <Dialog.Title>{translate("dags:runAndTaskActions.confirmationDialog.title")}</Dialog.Title>
-            </Dialog.Header>
-            <Dialog.Body>
-              <ErrorAlert error={error} />
-            </Dialog.Body>
-            <Dialog.Footer>
-              <Button onClick={onClose}>{translate("common:modal.cancel")}</Button>
-            </Dialog.Footer>
-          </>
         ) : isReady ? (
           <>
             <Dialog.Header>
@@ -131,7 +120,7 @@ const ClearTaskInstanceConfirmationDialog = ({
                         state: taskCurrentState,
                         time:
                           firstInstance?.start_date !== null && firstInstance?.start_date !== undefined
-                            ? formatRelative(firstInstance.start_date)
+                            ? getRelativeTime(firstInstance.start_date)
                             : undefined,
                         user:
                           (firstInstance?.unixname?.trim().length ?? 0) > 0
@@ -144,7 +133,9 @@ const ClearTaskInstanceConfirmationDialog = ({
               </VStack>
             </Dialog.Header>
             <Dialog.Footer>
-              <Button onClick={onClose}>{translate("common:modal.confirm")}</Button>
+              <Button colorPalette="blue" onClick={onClose}>
+                {translate("common:modal.confirm")}
+              </Button>
             </Dialog.Footer>
           </>
         ) : null}

@@ -16,9 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useEffect, useRef } from "react";
-
 import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 
 import {
   useDagServiceGetDagDetailsKey,
@@ -29,11 +28,7 @@ import {
 import { gridQueryKeys } from "./gridViewQueryKeys";
 import { useConfig } from "./useConfig";
 
-export const useRefreshOnNewDagRuns = (
-  dagId: string,
-  hasPendingRuns: boolean | undefined,
-  isPaused?: boolean,
-) => {
+export const useRefreshOnNewDagRuns = (dagId: string, hasPendingRuns: boolean | undefined) => {
   const queryClient = useQueryClient();
   const hasSyncedLatestRunRef = useRef(false);
   const previousLatestRunSignatureRef = useRef<string>("");
@@ -43,7 +38,7 @@ export const useRefreshOnNewDagRuns = (
 
   const { data: latestDagRun } = useDagServiceGetLatestRunInfo({ dagId }, undefined, {
     enabled: Boolean(dagId),
-    refetchInterval: Boolean(dagId) && !hasPendingRuns && !isPaused && pollIntervalMs,
+    refetchInterval: Boolean(dagId) && !hasPendingRuns ? pollIntervalMs : false,
   });
 
   useEffect(() => {

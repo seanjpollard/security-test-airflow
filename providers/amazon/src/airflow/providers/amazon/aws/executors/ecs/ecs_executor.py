@@ -24,18 +24,13 @@ Each Airflow task gets delegated out to an Amazon ECS Task.
 from __future__ import annotations
 
 import time
-import warnings
-from collections import deque
-from collections.abc import Callable, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor
+from collections import defaultdict, deque
+from collections.abc import Sequence
 from copy import deepcopy
-from functools import partial
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING
 
-from botocore.config import Config
 from botocore.exceptions import ClientError, NoCredentialsError
 
-from airflow.exceptions import AirflowProviderDeprecationWarning
 from airflow.executors.base_executor import BaseExecutor
 from airflow.providers.amazon.aws.executors.ecs.boto_schema import BotoDescribeTasksSchema, BotoRunTaskSchema
 from airflow.providers.amazon.aws.executors.ecs.utils import (
@@ -51,18 +46,10 @@ from airflow.providers.amazon.aws.executors.utils.exponential_backoff_retry impo
     exponential_backoff_retry,
 )
 from airflow.providers.amazon.aws.hooks.ecs import EcsHook
-from airflow.providers.amazon.version_compat import (
-    AIRFLOW_V_3_0_PLUS,
-    AIRFLOW_V_3_1_PLUS,
-    AIRFLOW_V_3_3_PLUS,
-    AIRFLOW_V_3_4_PLUS,
-)
+from airflow.providers.amazon.version_compat import AIRFLOW_V_3_0_PLUS
 from airflow.providers.common.compat.sdk import AirflowException, Stats, timezone
-from airflow.utils.helpers import merge_dicts, prune_dict
+from airflow.utils.helpers import merge_dicts
 from airflow.utils.state import State
-
-if AIRFLOW_V_3_4_PLUS:
-    from airflow.executors.workloads.base import WorkloadType
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -74,22 +61,11 @@ if TYPE_CHECKING:
         ExecutorConfigType,
     )
 
-    if AIRFLOW_V_3_3_PLUS:
-        from airflow.executors.workloads.types import WorkloadKey as _EcsWorkloadKey
-
-        WorkloadKey: TypeAlias = _EcsWorkloadKey
-    else:
-        WorkloadKey: TypeAlias = TaskInstanceKey  # type: ignore[no-redef, misc]
-
 INVALID_CREDENTIALS_EXCEPTIONS = [
     "ExpiredTokenException",
     "InvalidClientTokenId",
     "UnrecognizedClientException",
 ]
-THROTTLING_EXCEPTIONS = ["ThrottlingException"]
-# Retries on top of botocore's own. Past this number, a throttled RunTask call uses one of the workload's
-# ``max_run_task_attempts``, so a workload cannot stay pending for as long as the throttling lasts.
-MAX_THROTTLED_RUN_TASK_RETRIES = 5
 
 
 class AwsEcsExecutor(BaseExecutor):
@@ -115,22 +91,19 @@ class AwsEcsExecutor(BaseExecutor):
     """
 
     supports_multi_team: bool = True
-    supports_task_instance_uuid = hasattr(BaseExecutor, "get_task_key")
-
-    if AIRFLOW_V_3_4_PLUS:
-        supported_workload_types: frozenset[WorkloadType] = frozenset(
-            {WorkloadType.EXECUTE_TASK, WorkloadType.EXECUTE_CALLBACK}
-        )
-    elif AIRFLOW_V_3_3_PLUS:
-        supports_callbacks: bool = True
 
     # AWS limits the maximum number of ARNs in the describe_tasks function.
     DESCRIBE_TASKS_BATCH_SIZE = 99
 
+    if TYPE_CHECKING and AIRFLOW_V_3_0_PLUS:
+        # In the v3 path, we store workloads, not commands as strings.
+        # TODO: TaskSDK: move this type change into BaseExecutor
+        queued_tasks: dict[TaskInstanceKey, workloads.All]  # type: ignore[assignment]
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.active_workers: EcsTaskCollection = EcsTaskCollection()
-        self.pending_workloads: deque = deque()
+        self.pending_tasks: deque = deque()
 
         # Check if self has the ExecutorConf set on the self.conf attribute, and if not, set it to the global
         # configuration object. This allows the changes to be backwards compatible with older versions of
@@ -141,36 +114,10 @@ class AwsEcsExecutor(BaseExecutor):
             from airflow.providers.common.compat.sdk import conf
 
             self.conf = conf
-        # TODO: Remove this fallback once the min Airflow version for providers is >= 3.1
-        # (BaseExecutor.team_name is always defined from Airflow 3.1 onward).
-        if not hasattr(self, "team_name"):
-            self.team_name = None
 
         self.cluster = self.conf.get(CONFIG_GROUP_NAME, AllEcsConfigKeys.CLUSTER)
         self.container_name = self.conf.get(CONFIG_GROUP_NAME, AllEcsConfigKeys.CONTAINER_NAME)
         self.attempts_since_last_successful_connection = 0
-
-        # ``ExecutorConf`` has no ``getint`` before Airflow 3.2.
-        self.run_task_concurrency = int(
-            self.conf.get(
-                CONFIG_GROUP_NAME,
-                AllEcsConfigKeys.RUN_TASK_CONCURRENCY,
-                fallback=CONFIG_DEFAULTS[AllEcsConfigKeys.RUN_TASK_CONCURRENCY],
-            )
-        )
-        if self.run_task_concurrency < 1:
-            raise ValueError(
-                f"{AllEcsConfigKeys.RUN_TASK_CONCURRENCY} must be 1 or more, got {self.run_task_concurrency}"
-            )
-        # With a concurrency of 1, RunTask calls are made one by one in the scheduler loop.
-        self._run_task_threads = 0
-        self._run_task_pool: ThreadPoolExecutor | None = None
-        if self.run_task_concurrency > 1:
-            self._run_task_threads = self.run_task_concurrency
-            self._run_task_pool = ThreadPoolExecutor(
-                max_workers=self._run_task_threads, thread_name_prefix="ecs-run-task"
-            )
-        self._run_task_futures: dict[Future, EcsQueuedTask] = {}
 
         self.load_ecs_connection(check_connection=False)
         self.IS_BOTO_CONNECTION_HEALTHY = False
@@ -184,49 +131,30 @@ class AwsEcsExecutor(BaseExecutor):
             fallback=CONFIG_DEFAULTS[AllEcsConfigKeys.MAX_RUN_TASK_ATTEMPTS],
         )
 
-    if not AIRFLOW_V_3_1_PLUS:
-
-        def queue_workload(self, workload: workloads.All, session: Session | None) -> None:
-            from airflow.executors import workloads
-
-            if not isinstance(workload, workloads.ExecuteTask):
-                raise RuntimeError(f"{type(self)} cannot handle workloads of type {type(workload)}")
-            self.queued_tasks[workload.ti.key] = workload
-
-    def _process_workloads(self, workload_items: Sequence[workloads.All]) -> None:
-        """:sphinx-autoapi-skip:."""
+    def queue_workload(self, workload: workloads.All, session: Session | None) -> None:
         from airflow.executors import workloads
 
-        for workload in workload_items:
-            queue: str | None
-            key: WorkloadKey
-            command: CommandType
-            if isinstance(workload, workloads.ExecuteTask):
-                command = [workload]
-                key = self.get_task_key(workload.ti) if self.supports_task_instance_uuid else workload.ti.key
-                queue = workload.ti.queue
-                executor_config = workload.ti.executor_config or {}
+        if not isinstance(workload, workloads.ExecuteTask):
+            raise RuntimeError(f"{type(self)} cannot handle workloads of type {type(workload)}")
+        ti = workload.ti
+        self.queued_tasks[ti.key] = workload
 
-                if AIRFLOW_V_3_4_PLUS:
-                    del self.executor_queues[WorkloadType.EXECUTE_TASK][key]
-                else:
-                    del self.queued_tasks[key]
-                self.execute_async(key=key, command=command, queue=queue, executor_config=executor_config)
-                self.running.add(key)
+    def _process_workloads(self, workloads: Sequence[workloads.All]) -> None:
+        from airflow.executors.workloads import ExecuteTask
 
-            elif AIRFLOW_V_3_3_PLUS and isinstance(workload, workloads.ExecuteCallback):
-                command = [workload]
-                key = workload.callback.key
+        # Airflow V3 version
+        for w in workloads:
+            if not isinstance(w, ExecuteTask):
+                raise RuntimeError(f"{type(self)} cannot handle workloads of type {type(w)}")
 
-                if AIRFLOW_V_3_4_PLUS:
-                    del self.executor_queues[WorkloadType.EXECUTE_CALLBACK][key]
-                else:
-                    del self.queued_callbacks[key]
-                self.execute_async(key=key, command=command, queue=None)
-                self.running.add(key)
+            command = [w]
+            key = w.ti.key
+            queue = w.ti.queue
+            executor_config = w.ti.executor_config or {}
 
-            else:
-                raise RuntimeError(f"{type(self)} cannot handle workloads of type {type(workload)}")
+            del self.queued_tasks[key]
+            self.execute_async(key=key, command=command, queue=queue, executor_config=executor_config)  # type: ignore[arg-type]
+            self.running.add(key)
 
     def start(self):
         """Call this when the Executor is run for the first time by the scheduler."""
@@ -300,15 +228,7 @@ class AwsEcsExecutor(BaseExecutor):
             fallback=CONFIG_DEFAULTS[AllEcsConfigKeys.AWS_CONN_ID],
         )
         region_name = self.conf.get(CONFIG_GROUP_NAME, AllEcsConfigKeys.REGION_NAME, fallback=None)
-        hook = EcsHook(aws_conn_id=aws_conn_id, region_name=region_name)
-        # Each RunTask thread, and the scheduler thread, needs a connection of its own: past the client's pool
-        # size (10 by default), the extra connections are closed with a warning when a burst of calls is over,
-        # and the next burst opens them again.
-        config = hook.config
-        connections = self._run_task_threads + 1
-        if config.max_pool_connections < connections:
-            config = config.merge(Config(max_pool_connections=connections))
-        self.ecs = hook.get_client_type(region_name=hook.region_name, config=config)
+        self.ecs = EcsHook(aws_conn_id=aws_conn_id, region_name=region_name).conn
         self.attempts_since_last_successful_connection += 1
         self.last_connection_reload = timezone.utcnow()
 
@@ -326,8 +246,8 @@ class AwsEcsExecutor(BaseExecutor):
             if not self.IS_BOTO_CONNECTION_HEALTHY:
                 return
         try:
-            self.sync_running_workloads()
-            self.attempt_workload_runs()
+            self.sync_running_tasks()
+            self.attempt_task_runs()
         except (ClientError, NoCredentialsError) as error:
             error_code = error.response["Error"]["Code"]
             if error_code in INVALID_CREDENTIALS_EXCEPTIONS:
@@ -341,11 +261,11 @@ class AwsEcsExecutor(BaseExecutor):
             # up and kill the scheduler process
             self.log.exception("Failed to sync %s", self.__class__.__name__)
 
-    def sync_running_workloads(self):
-        """Check and update state on all running workloads (tasks and callbacks)."""
+    def sync_running_tasks(self):
+        """Check and update state on all running tasks."""
         all_task_arns = self.active_workers.get_all_arns()
         if not all_task_arns:
-            self.log.debug("No active Airflow workloads, skipping sync.")
+            self.log.debug("No active Airflow tasks, skipping sync.")
             return
 
         describe_tasks_response = self.__describe_tasks(all_task_arns)
@@ -354,13 +274,13 @@ class AwsEcsExecutor(BaseExecutor):
 
         if describe_tasks_response["failures"]:
             for failure in describe_tasks_response["failures"]:
-                self.__handle_failed_workload(failure["arn"], failure["reason"])
+                self.__handle_failed_task(failure["arn"], failure["reason"])
 
         updated_tasks = describe_tasks_response["tasks"]
         for task in updated_tasks:
-            self.__update_running_workload(task)
+            self.__update_running_task(task)
 
-    def __update_running_workload(self, task):
+    def __update_running_task(self, task):
         self.active_workers.update_task(task)
         # Get state of current task.
         task_state = task.get_task_state()
@@ -369,10 +289,10 @@ class AwsEcsExecutor(BaseExecutor):
         # Mark finished tasks as either a success/failure.
         if task_state == State.FAILED or task_state == State.REMOVED:
             self.__log_container_failures(task_arn=task.task_arn)
-            self.__handle_failed_workload(task.task_arn, task.stopped_reason)
+            self.__handle_failed_task(task.task_arn, task.stopped_reason)
         elif task_state == State.SUCCESS:
             self.log.debug(
-                "Airflow workload %s marked as %s after running on ECS Task (arn) %s",
+                "Airflow task %s marked as %s after running on ECS Task (arn) %s",
                 task_key,
                 task_state,
                 task.task_arn,
@@ -409,13 +329,13 @@ class AwsEcsExecutor(BaseExecutor):
                 "The ECS task failed due to the following containers failing:\n%s", "\n".join(reasons)
             )
 
-    def __handle_failed_workload(self, task_arn: str, reason: str):
+    def __handle_failed_task(self, task_arn: str, reason: str):
         """
-        If an API failure occurs, the workload is rescheduled.
+        If an API failure occurs, the task is rescheduled.
 
         This function will determine whether the task has been attempted the appropriate number
         of times, and determine whether the task should be marked failed or not. The task will
-        be removed active_workers, and marked as FAILED, or set into pending_workloads depending on
+        be removed active_workers, and marked as FAILED, or set into pending_tasks depending on
         how many times it has been retried.
         """
         task_key = self.active_workers.arn_to_key[task_arn]
@@ -426,14 +346,14 @@ class AwsEcsExecutor(BaseExecutor):
         failure_count = self.active_workers.failure_count_by_key(task_key)
         if int(failure_count) < int(self.max_run_task_attempts):
             self.log.warning(
-                "Airflow workload %s failed due to %s. Failure %s out of %s occurred on %s. Rescheduling.",
+                "Airflow task %s failed due to %s. Failure %s out of %s occurred on %s. Rescheduling.",
                 task_key,
                 reason,
                 failure_count,
                 self.max_run_task_attempts,
                 task_arn,
             )
-            self.pending_workloads.append(
+            self.pending_tasks.append(
                 EcsQueuedTask(
                     task_key,
                     task_cmd,
@@ -445,143 +365,102 @@ class AwsEcsExecutor(BaseExecutor):
             )
         else:
             self.log.error(
-                "Airflow workload %s has failed a maximum of %s times. Marking as failed",
+                "Airflow task %s has failed a maximum of %s times. Marking as failed",
                 task_key,
                 failure_count,
             )
             self.fail(task_key)
         self.active_workers.pop_by_key(task_key)
 
-    def attempt_workload_runs(self):
+    def attempt_task_runs(self):
         """
-        Take tasks from the pending_workloads queue, and attempts to find an instance to run it on.
+        Take tasks from the pending_tasks queue, and attempts to find an instance to run it on.
 
         If the launch type is EC2, this will attempt to place tasks on empty EC2 instances.  If
             there are no EC2 instances available, no task is placed and this function will be
             called again in the next heart-beat.
 
         If the launch type is FARGATE, this will run the tasks on new AWS Fargate instances.
-
-        With ``run_task_concurrency`` above 1, the RunTask calls are made in background threads, at most
-        that many at a time, and the scheduler loop does not wait for them: each call is handled by the
-        first sync that finds it finished.
         """
-        for _ in range(len(self.pending_workloads)):
-            ecs_task = self.pending_workloads.popleft()
+        queue_len = len(self.pending_tasks)
+        failure_reasons = defaultdict(int)
+        for _ in range(queue_len):
+            ecs_task = self.pending_tasks.popleft()
+            task_key = ecs_task.key
+            cmd = ecs_task.command
+            queue = ecs_task.queue
+            exec_config = ecs_task.executor_config
+            attempt_number = ecs_task.attempt_number
+            failure_reasons = []
             if timezone.utcnow() < ecs_task.next_attempt_time:
-                self.pending_workloads.append(ecs_task)
+                self.pending_tasks.append(ecs_task)
                 continue
-            run_task = partial(
-                self._run_task, ecs_task.key, ecs_task.command, ecs_task.queue, ecs_task.executor_config
-            )
-            if self._run_task_pool is None:
-                self._handle_run_task_response(ecs_task, run_task)
-            else:
-                self._run_task_futures[self._run_task_pool.submit(run_task)] = ecs_task
-        # All the calls made with expired credentials fail together: raising on the first one would leave
-        # the others to fail one sync at a time, each forcing its own reconnection.
-        credentials_error: ClientError | NoCredentialsError | None = None
-        for future in [future for future in self._run_task_futures if future.done()]:
             try:
-                self._handle_run_task_response(self._run_task_futures.pop(future), future.result)
-            except (ClientError, NoCredentialsError) as error:
-                credentials_error = credentials_error or error
-        if credentials_error is not None:
-            raise credentials_error
-
-    def _handle_run_task_response(self, ecs_task: EcsQueuedTask, get_response: Callable[[], dict]) -> None:
-        """Get the RunTask response for ``ecs_task``, then track the ECS task, or retry or fail the workload."""
-        task_key = ecs_task.key
-        cmd = ecs_task.command
-        queue = ecs_task.queue
-        exec_config = ecs_task.executor_config
-        attempt_number = ecs_task.attempt_number
-        failure_reasons = []
-        try:
-            run_task_response = get_response()
-        except NoCredentialsError:
-            self.pending_workloads.append(ecs_task)
-            raise
-        except ClientError as e:
-            error_code = e.response["Error"]["Code"]
-            if error_code in INVALID_CREDENTIALS_EXCEPTIONS:
-                self.pending_workloads.append(ecs_task)
+                run_task_response = self._run_task(task_key, cmd, queue, exec_config)
+            except NoCredentialsError:
+                self.pending_tasks.append(ecs_task)
                 raise
-            if (
-                error_code in THROTTLING_EXCEPTIONS
-                and ecs_task.throttled_attempts < MAX_THROTTLED_RUN_TASK_RETRIES
-            ):
-                # ECS is asking to slow down; that says nothing about the workload, so keep its attempts.
-                ecs_task.throttled_attempts += 1
-                delay = calculate_next_attempt_delay(ecs_task.throttled_attempts, exponent_base=2)
-                self.log.info(
-                    "ECS throttled the RunTask call for %s, retrying in %s (retry %s of %s)",
-                    task_key,
-                    delay,
-                    ecs_task.throttled_attempts,
-                    MAX_THROTTLED_RUN_TASK_RETRIES,
-                )
-                ecs_task.next_attempt_time = timezone.utcnow() + delay
-                self.pending_workloads.append(ecs_task)
-                return
-            failure_reasons.append(str(e))
-        except Exception as e:
-            # Failed to even get a response back from the Boto3 API or something else went
-            # wrong.  For any possible failure we want to add the exception reasons to the
-            # failure list so that it is logged to the user and most importantly the task is
-            # added back to the pending list to be retried later.
-            failure_reasons.append(str(e))
-        else:
-            # We got a response back, check if there were failures. If so, add them to the
-            # failures list so that it is logged to the user and most importantly the task
-            # is added back to the pending list to be retried later.
-            if run_task_response["failures"]:
-                failure_reasons.extend([f["reason"] for f in run_task_response["failures"]])
-
-        if failure_reasons:
-            # Make sure the number of attempts does not exceed max_run_task_attempts
-            if int(attempt_number) < int(self.max_run_task_attempts):
-                ecs_task.attempt_number += 1
-                ecs_task.next_attempt_time = timezone.utcnow() + calculate_next_attempt_delay(attempt_number)
-                self.pending_workloads.append(ecs_task)
+            except ClientError as e:
+                error_code = e.response["Error"]["Code"]
+                if error_code in INVALID_CREDENTIALS_EXCEPTIONS:
+                    self.pending_tasks.append(ecs_task)
+                    raise
+                failure_reasons.append(str(e))
+            except Exception as e:
+                # Failed to even get a response back from the Boto3 API or something else went
+                # wrong.  For any possible failure we want to add the exception reasons to the
+                # failure list so that it is logged to the user and most importantly the task is
+                # added back to the pending list to be retried later.
+                failure_reasons.append(str(e))
             else:
-                reasons_str = ", ".join(failure_reasons)
-                self.log.error(
-                    "ECS workload %s has failed a maximum of %s times. Marking as failed. Reasons: %s",
-                    task_key,
-                    attempt_number,
-                    reasons_str,
-                )
+                # We got a response back, check if there were failures. If so, add them to the
+                # failures list so that it is logged to the user and most importantly the task
+                # is added back to the pending list to be retried later.
+                if run_task_response["failures"]:
+                    failure_reasons.extend([f["reason"] for f in run_task_response["failures"]])
+
+            if failure_reasons:
+                # Make sure the number of attempts does not exceed max_run_task_attempts
+                if int(attempt_number) < int(self.max_run_task_attempts):
+                    ecs_task.attempt_number += 1
+                    ecs_task.next_attempt_time = timezone.utcnow() + calculate_next_attempt_delay(
+                        attempt_number
+                    )
+                    self.pending_tasks.append(ecs_task)
+                else:
+                    reasons_str = ", ".join(failure_reasons)
+                    self.log.error(
+                        "ECS task %s has failed a maximum of %s times. Marking as failed. Reasons: %s",
+                        task_key,
+                        attempt_number,
+                        reasons_str,
+                    )
+                    self.log_task_event(
+                        event="ecs task submit failure",
+                        ti_key=task_key,
+                        extra=(
+                            f"Task could not be queued after {attempt_number} attempts. "
+                            f"Marking as failed. Reasons: {reasons_str}"
+                        ),
+                    )
+                    self.fail(task_key)
+            elif not run_task_response["tasks"]:
+                self.log.error("ECS RunTask Response: %s", run_task_response)
                 self.log_task_event(
                     event="ecs task submit failure",
+                    extra=f"ECS RunTask Response: {run_task_response}",
                     ti_key=task_key,
-                    extra=(
-                        f"Task could not be queued after {attempt_number} attempts. "
-                        f"Marking as failed. Reasons: {reasons_str}"
-                    ),
                 )
-                self.fail(task_key)
-        elif not run_task_response["tasks"]:
-            self.log.error("ECS RunTask Response: %s", run_task_response)
-            self.log_task_event(
-                event="ecs task submit failure",
-                extra=f"ECS RunTask Response: {run_task_response}",
-                ti_key=task_key,
-            )
-            raise EcsExecutorException(
-                "No failures and no ECS tasks provided in response. This should never happen."
-            )
-        else:
-            task = run_task_response["tasks"][0]
-            self.active_workers.add_task(task, task_key, queue, cmd, exec_config, attempt_number)
-            self.running_state(task_key, task.task_arn)
+                raise EcsExecutorException(
+                    "No failures and no ECS tasks provided in response. This should never happen."
+                )
+            else:
+                task = run_task_response["tasks"][0]
+                self.active_workers.add_task(task, task_key, queue, cmd, exec_config, attempt_number)
+                self.running_state(task_key, task.task_arn)
 
     def _run_task(
-        self,
-        task_id: WorkloadKey,
-        cmd: CommandType,
-        queue: str | None,
-        exec_config: ExecutorConfigType,
+        self, task_id: TaskInstanceKey, cmd: CommandType, queue: str, exec_config: ExecutorConfigType
     ):
         """
         Run a queued-up Airflow task.
@@ -591,17 +470,12 @@ class AwsEcsExecutor(BaseExecutor):
         section of the JSON request before calling Boto3's "run_task" function.
         """
         run_task_kwargs = self._run_task_kwargs(task_id, cmd, queue, exec_config)
-        with Stats.timer("ecs_executor.run_task.duration", tags=prune_dict({"team_name": self.team_name})):
-            boto_run_task = self.ecs.run_task(**run_task_kwargs)
+        boto_run_task = self.ecs.run_task(**run_task_kwargs)
         run_task_response = BotoRunTaskSchema().load(boto_run_task)
         return run_task_response
 
     def _run_task_kwargs(
-        self,
-        task_id: WorkloadKey,
-        cmd: CommandType,
-        queue: str | None,
-        exec_config: ExecutorConfigType,
+        self, task_id: TaskInstanceKey, cmd: CommandType, queue: str, exec_config: ExecutorConfigType
     ) -> dict:
         """
         Update the Airflow command by modifying container overrides for task-specific kwargs.
@@ -620,23 +494,21 @@ class AwsEcsExecutor(BaseExecutor):
 
         return run_task_kwargs
 
-    def execute_async(self, key: WorkloadKey, command: CommandType, queue=None, executor_config=None):
-        """Save the workload to be executed in the next sync by inserting the commands into a queue."""
+    def execute_async(self, key: TaskInstanceKey, command: CommandType, queue=None, executor_config=None):
+        """Save the task to be executed in the next sync by inserting the commands into a queue."""
         if executor_config and ("name" in executor_config or "command" in executor_config):
             raise ValueError('Executor Config should never override "name" or "command"')
         if len(command) == 1:
-            from airflow.executors import workloads
+            from airflow.executors.workloads import ExecuteTask
 
-            if isinstance(command[0], workloads.ExecuteTask) or (
-                AIRFLOW_V_3_3_PLUS and isinstance(command[0], workloads.ExecuteCallback)
-            ):
+            if isinstance(command[0], ExecuteTask):
                 command = self._serialize_workload_to_command(command[0])
             else:
                 raise ValueError(
                     f"EcsExecutor doesn't know how to handle workload of type: {type(command[0])}"
                 )
 
-        self.pending_workloads.append(
+        self.pending_tasks.append(
             EcsQueuedTask(key, command, queue, executor_config or {}, 1, timezone.utcnow())
         )
 
@@ -645,34 +517,17 @@ class AwsEcsExecutor(BaseExecutor):
         try:
             while True:
                 self.sync()
-                if not self.active_workers and not self._run_task_futures:
+                if not self.active_workers:
                     break
                 time.sleep(heartbeat_interval)
         except Exception:
             # We catch any and all exceptions because otherwise they would bubble
             # up and kill the scheduler process.
             self.log.exception("Failed to end %s", self.__class__.__name__)
-        if self._run_task_pool is not None:
-            self._run_task_pool.shutdown(wait=False, cancel_futures=True)
 
     def terminate(self):
         """Kill all ECS processes by calling Boto3's StopTask API."""
         try:
-            if self._run_task_pool is not None:
-                # A RunTask call still in flight may start an ECS task after the StopTask calls below:
-                # wait for the calls already started, and drop the ones not started yet.
-                self._run_task_pool.shutdown(wait=True, cancel_futures=True)
-                # The pool no longer takes calls: ``end()`` below makes them in the scheduler loop.
-                self._run_task_pool = None
-                for future, ecs_task in list(self._run_task_futures.items()):
-                    del self._run_task_futures[future]
-                    if future.cancelled():
-                        continue
-                    # One failure must not keep the other ECS tasks from being tracked, then stopped.
-                    try:
-                        self._handle_run_task_response(ecs_task, future.result)
-                    except Exception:
-                        self.log.exception("Failed to handle the RunTask response for %s", ecs_task.key)
             for arn in self.active_workers.get_all_arns():
                 self.ecs.stop_task(
                     cluster=self.cluster, task=arn, reason="Airflow Executor received a SIGTERM"
@@ -712,9 +567,9 @@ class AwsEcsExecutor(BaseExecutor):
     @staticmethod
     def _serialize_workload_to_command(workload) -> CommandType:
         """
-        Serialize a workload into a command for the Task SDK.
+        Serialize an ExecuteTask workload into a command for the Task SDK.
 
-        :param workload: ExecuteTask or ExecuteCallback workload to serialize
+        :param workload: ExecuteTask workload to serialize
         :return: Command as list of strings for Task SDK execution
         """
         return [
@@ -748,9 +603,7 @@ class AwsEcsExecutor(BaseExecutor):
 
         Anything that is not adopted will be cleared by the scheduler and becomes eligible for re-scheduling.
         """
-        with Stats.timer(
-            "ecs_executor.adopt_task_instances.duration", tags=prune_dict({"team_name": self.team_name})
-        ):
+        with Stats.timer("ecs_executor.adopt_task_instances.duration"):
             adopted_tis: list[TaskInstance] = []
 
             if task_arns := [ti.external_executor_id for ti in tis if ti.external_executor_id]:
@@ -762,7 +615,7 @@ class AwsEcsExecutor(BaseExecutor):
 
                     self.active_workers.add_task(
                         task,
-                        self.get_task_key(ti) if self.supports_task_instance_uuid else ti.key,
+                        ti.key,
                         ti.queue or "",
                         command,
                         ti.executor_config or {},
@@ -781,33 +634,3 @@ class AwsEcsExecutor(BaseExecutor):
 
             not_adopted_tis = [ti for ti in tis if ti not in adopted_tis]
             return not_adopted_tis
-
-    # ── Back-compat shims for renamed methods/attrs ────────────────────────
-
-    @property
-    def pending_tasks(self) -> deque:
-        """Use pending_workloads as pending_tasks is deprecated."""
-        warnings.warn(
-            "pending_tasks is deprecated, use pending_workloads instead.",
-            AirflowProviderDeprecationWarning,
-            stacklevel=2,
-        )
-        return self.pending_workloads
-
-    def sync_running_tasks(self):
-        """Use sync_running_workloads as sync_running_tasks is deprecated."""
-        warnings.warn(
-            "sync_running_tasks is deprecated, use sync_running_workloads instead.",
-            AirflowProviderDeprecationWarning,
-            stacklevel=2,
-        )
-        return self.sync_running_workloads()
-
-    def attempt_task_runs(self):
-        """Use attempt_workload_runs as attempt_task_runs is deprecated."""
-        warnings.warn(
-            "attempt_task_runs is deprecated, use attempt_workload_runs instead.",
-            AirflowProviderDeprecationWarning,
-            stacklevel=2,
-        )
-        return self.attempt_workload_runs()

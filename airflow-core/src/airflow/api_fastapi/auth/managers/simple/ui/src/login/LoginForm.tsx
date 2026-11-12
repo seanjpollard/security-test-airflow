@@ -17,7 +17,7 @@
  * under the License.
  */
 import { Button, Field, Input, Stack } from "@chakra-ui/react";
-import type { SyntheticEvent } from "react";
+import React from "react";
 import { Controller, useForm } from "react-hook-form";
 
 import type { LoginBody } from "./Login";
@@ -41,7 +41,7 @@ export const LoginForm = ({ isPending, onLogin }: LoginFormProps) => {
 
   return (
     <form
-      onSubmit={(event: SyntheticEvent) => {
+      onSubmit={(event: React.SyntheticEvent) => {
         event.preventDefault();
         void handleSubmit(onLogin)();
       }}

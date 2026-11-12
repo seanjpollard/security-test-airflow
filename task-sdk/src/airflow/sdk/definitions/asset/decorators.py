@@ -28,18 +28,15 @@ from airflow.sdk.exceptions import AirflowRuntimeError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Iterator, Mapping
-    from typing import Self
 
     from pydantic.types import JsonValue
+    from typing_extensions import Self
 
     from airflow.sdk import DAG, ObjectStoragePath
     from airflow.sdk.bases.decorator import _TaskDecorator
     from airflow.sdk.definitions.dag import DagStateChangeCallback, ScheduleArg
     from airflow.sdk.definitions.param import ParamsDict
     from airflow.triggers.base import BaseTrigger
-
-
-_INVALID_INLET_ASSET_NAMES = ("self", "context", "outlet_events")
 
 
 def _validate_asset_function_arguments(f: Callable) -> None:
@@ -65,8 +62,7 @@ class _AssetMainOperator(PythonOperator):
             inlets=[
                 Asset.ref(name=inlet_asset_name)
                 for inlet_asset_name, param in inspect.signature(definition._function).parameters.items()
-                if inlet_asset_name not in _INVALID_INLET_ASSET_NAMES
-                and param.default is inspect.Parameter.empty
+                if inlet_asset_name not in ("self", "context") and param.default is inspect.Parameter.empty
             ],
             outlets=list(definition.iter_outlets()),
             python_callable=definition._function,
@@ -87,15 +83,12 @@ class _AssetMainOperator(PythonOperator):
 
         value: Any
         for key, param in inspect.signature(self.python_callable).parameters.items():
-            # ``self``/``context``/``outlet_events`` are reserved keys.
-            if key == "self":
+            if param.default is not inspect.Parameter.empty:
+                value = param.default
+            elif key == "self":
                 value = _fetch_asset(self._definition_name)
             elif key == "context":
                 value = context
-            elif key == "outlet_events":
-                value = context["outlet_events"]
-            elif param.default is not inspect.Parameter.empty:
-                value = param.default
             else:
                 value = _fetch_asset(key)
             yield key, value

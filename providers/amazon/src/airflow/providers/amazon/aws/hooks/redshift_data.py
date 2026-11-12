@@ -268,7 +268,7 @@ class RedshiftDataHook(AwsGenericHook["RedshiftDataAPIServiceClient"]):
         pk_columns = []
         token = ""
         while True:
-            kwargs: dict[str, Any] = {"Id": stmt_id}
+            kwargs = {"Id": stmt_id}
             if token:
                 kwargs["NextToken"] = token
             response = self.conn.get_statement_result(**kwargs)

@@ -27,7 +27,7 @@ Create Date: 2025-10-24 00:34:57.111239
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from textwrap import dedent
 
 import sqlalchemy as sa
@@ -56,7 +56,7 @@ _ASYNC_CALLBACK_CLASSNAME = "airflow.sdk.definitions.deadline.AsyncCallback"
 
 def _upgrade_postgresql(conn, batch_size):
     """Writable CTE per batch: SELECT window → INSERT callback → UPDATE deadline in one round-trip."""
-    timestamp = datetime.now(UTC)
+    timestamp = datetime.now(timezone.utc)
     batch_num = 0
     last_id = "00000000-0000-0000-0000-000000000000"
 
@@ -69,8 +69,8 @@ def _upgrade_postgresql(conn, batch_size):
                         d.id AS deadline_id,
                         gen_random_uuid() AS callback_id,
                         COALESCE(dr.dag_id, '') AS dag_id,
-                        COALESCE(d.callback::jsonb->'__data__'->>'path', '') AS cb_path,
-                        COALESCE(NULLIF(d.callback::jsonb->'__data__'->'kwargs', 'null'::jsonb), '{}'::jsonb) AS cb_kwargs,
+                        d.callback::jsonb->'__data__'->>'path' AS cb_path,
+                        d.callback::jsonb->'__data__'->'kwargs' AS cb_kwargs,
                         CASE
                             WHEN d.callback_state IN (:state_success, :state_failed) THEN d.callback_state
                             ELSE :state_pending
@@ -92,7 +92,7 @@ def _upgrade_postgresql(conn, batch_size):
                             '__var', json_build_object(
                                 'path', b.cb_path,
                                 'kwargs', b.cb_kwargs,
-                                'prefix', CAST(:prefix AS text),
+                                'prefix', :prefix,
                                 'dag_id', b.dag_id
                             ),
                             '__type', 'dict'
@@ -147,7 +147,7 @@ def _upgrade_mysql_sqlite(conn, batch_size):
 
     import uuid6
 
-    timestamp = datetime.now(UTC)
+    timestamp = datetime.now(timezone.utc)
 
     deadline_table = table(
         "deadline",
@@ -177,7 +177,6 @@ def _upgrade_mysql_sqlite(conn, batch_size):
     )
 
     batch_num = 0
-    null_callback_count = 0
     while True:
         batch_num += 1
         batch = conn.execute(
@@ -200,23 +199,11 @@ def _upgrade_mysql_sqlite(conn, batch_size):
 
         for row in batch:
             callback_id = uuid6.uuid7()
-            raw_cb = row.callback
-            if raw_cb is None:
-                null_callback_count += 1
-                cb = {}
-            elif isinstance(raw_cb, dict):
-                cb = raw_cb
-            else:
-                cb = json.loads(raw_cb)
-            cb_inner = cb.get("__data__", cb) if isinstance(cb, dict) else {}
-            if not isinstance(cb_inner, dict):
-                cb_inner = {}
-            kwargs = cb_inner.get("kwargs", {})
-            if not isinstance(kwargs, dict):
-                kwargs = {}
+            cb = row.callback if isinstance(row.callback, dict) else json.loads(row.callback)
+            cb_inner = cb.get("__data__", cb)
             cb_data = {
-                "path": cb_inner.get("path", "") or "",
-                "kwargs": kwargs,
+                "path": cb_inner.get("path", ""),
+                "kwargs": cb_inner.get("kwargs", {}),
                 "prefix": _CALLBACK_METRICS_PREFIX,
                 "dag_id": row.dag_id or "",
             }
@@ -249,12 +236,6 @@ def _upgrade_mysql_sqlite(conn, batch_size):
             deadline_updates,
         )
         print(f"Migrated {len(batch)} deadline records in batch {batch_num}")
-
-    if null_callback_count:
-        print(
-            f"WARNING: {null_callback_count} deadline rows had NULL callback "
-            "(legacy 0080 data); migrated with empty envelope."
-        )
 
 
 def upgrade():
@@ -325,7 +306,7 @@ def _downgrade_postgresql(conn, batch_size):
                                 'path', c.data::jsonb->'__var'->>'path',
                                 'kwargs', c.data::jsonb->'__var'->'kwargs'
                             ),
-                            '__classname__', CAST(:classname AS text),
+                            '__classname__', :classname,
                             '__version__', 0
                         )::json,
                         callback_state = CASE
@@ -360,7 +341,7 @@ def _downgrade_postgresql(conn, batch_size):
                             'path', c.data::jsonb->'__var'->>'path',
                             'kwargs', c.data::jsonb->'__var'->'kwargs'
                         ),
-                        '__classname__', CAST(:classname AS text),
+                        '__classname__', :classname,
                         '__version__', 0
                     )::json,
                     callback_state = CASE

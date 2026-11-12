@@ -1,8 +1,9 @@
-// generated with @7nohe/openapi-react-query-codegen@3.0.2
-import { type FetchQueryOptions, type QueryClient } from "@tanstack/react-query";
+// generated with @7nohe/openapi-react-query-codegen@2.1.0
+import { type QueryClient } from "@tanstack/react-query";
 
-import { createTokenAllAdmins, loginAllAdmins, type Options } from "../requests/sdk.gen";
-import type { CreateTokenAllAdminsData, LoginAllAdminsData } from "../requests/types.gen";
+import type { Options } from "../requests/sdk.gen";
+import { createTokenAllAdmins, loginAllAdmins } from "../requests/sdk.gen";
+import { CreateTokenAllAdminsData, LoginAllAdminsData } from "../requests/types.gen";
 import * as Common from "./common";
 
 /**
@@ -13,15 +14,10 @@ import * as Common from "./common";
 export const prefetchUseCreateTokenAllAdmins = (
   queryClient: QueryClient,
   clientOptions: Options<CreateTokenAllAdminsData, true> = {},
-  options?: Omit<FetchQueryOptions<Common.CreateTokenAllAdminsDefaultResponse>, "queryKey" | "queryFn">,
 ) =>
   queryClient.prefetchQuery({
     queryKey: Common.UseCreateTokenAllAdminsKeyFn(clientOptions),
-    queryFn: ({ signal }) =>
-      createTokenAllAdmins({ ...clientOptions, signal, throwOnError: true }).then(
-        (response) => response.data,
-      ),
-    ...options,
+    queryFn: () => createTokenAllAdmins({ ...clientOptions }).then((response) => response.data),
   });
 /**
  * Login All Admins
@@ -31,11 +27,8 @@ export const prefetchUseCreateTokenAllAdmins = (
 export const prefetchUseLoginAllAdmins = (
   queryClient: QueryClient,
   clientOptions: Options<LoginAllAdminsData, true> = {},
-  options?: Omit<FetchQueryOptions<Common.LoginAllAdminsDefaultResponse>, "queryKey" | "queryFn">,
 ) =>
   queryClient.prefetchQuery({
     queryKey: Common.UseLoginAllAdminsKeyFn(clientOptions),
-    queryFn: ({ signal }) =>
-      loginAllAdmins({ ...clientOptions, signal, throwOnError: true }).then((response) => response.data),
-    ...options,
+    queryFn: () => loginAllAdmins({ ...clientOptions }).then((response) => response.data),
   });

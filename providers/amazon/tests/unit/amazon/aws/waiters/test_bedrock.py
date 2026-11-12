@@ -181,17 +181,10 @@ class TestBatchInferenceScheduledWaiter(TestBedrockCustomWaitersBase):
             BedrockHook().get_waiter(self.WAITER_NAME).wait(jobIdentifier="job_arn")
 
     def test_batch_inference_wait(self, mock_get_job):
-        wait = {"status": "Validating"}
-        success = {"status": "Scheduled"}
+        wait = {"status": "InProgress"}
+        success = {"status": "Completed"}
         mock_get_job.side_effect = [wait, wait, success]
 
         BedrockHook().get_waiter(self.WAITER_NAME).wait(
             jobIdentifier="job_arn", WaiterConfig={"Delay": 0.01, "MaxAttempts": 3}
-        )
-
-    def test_batch_inference_in_progress(self, mock_get_job):
-        mock_get_job.return_value = {"status": "InProgress"}
-
-        BedrockHook().get_waiter(self.WAITER_NAME).wait(
-            jobIdentifier="job_arn", WaiterConfig={"Delay": 0.01, "MaxAttempts": 1}
         )

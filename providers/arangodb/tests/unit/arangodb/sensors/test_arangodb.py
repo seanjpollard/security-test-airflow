@@ -24,7 +24,7 @@ import pytest
 from airflow.models import Connection
 from airflow.models.dag import DAG
 from airflow.providers.arangodb.sensors.arangodb import AQLSensor
-from airflow.providers.common.compat.sdk import timezone
+from airflow.utils import timezone
 
 # The tests do not create dag runs, so db isolation tests are skipped
 

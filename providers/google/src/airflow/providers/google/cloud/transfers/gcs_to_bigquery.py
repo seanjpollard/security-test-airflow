@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import json
-import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -32,11 +31,11 @@ from google.cloud.bigquery import (
     ExtractJob,
     LoadJob,
     QueryJob,
+    SchemaField,
     UnknownJob,
 )
 from google.cloud.bigquery.table import EncryptionConfiguration, Table, TableReference
 
-from airflow.exceptions import AirflowProviderDeprecationWarning
 from airflow.providers.common.compat.sdk import AirflowException, conf
 from airflow.providers.google.cloud.hooks.bigquery import BigQueryHook, BigQueryJob
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
@@ -120,9 +119,6 @@ class GCSToBigQueryOperator(BaseOperator):
         If true, the extra values are ignored. If false, records with extra columns
         are treated as bad records, and if there are too many bad records, an
         invalid error is returned in the job result.
-        For CSV and JSON sources with ``autodetect=True`` and no schema provided, the values are
-        checked against the schema inferred from the source data rather than the destination
-        table's schema - see ``autodetect``.
     :param allow_quoted_newlines: Whether to allow quoted newlines (true) or not (false).
     :param allow_jagged_rows: Accept rows that are missing trailing optional columns.
         The missing values are treated as nulls. If false, records with missing trailing
@@ -140,18 +136,7 @@ class GCSToBigQueryOperator(BaseOperator):
         future executions, you can pick up from the max ID.
     :param schema_update_options: Allows the schema of the destination
         table to be updated as a side effect of the load job.
-    :param src_fmt_configs: (Deprecated) configure optional fields specific to the source format.
-        Use ``extra_config`` instead. Note when migrating that ``extra_config`` uses the fully-nested API
-        structure, so format-specific options must be nested under their parent key
-        (e.g., ``{"parquetOptions": {"enableListInference": True}}`` rather than
-        ``{"enableListInference": True}``).
-    :param extra_config: Dict of additional properties to apply over the BigQuery job configuration.
-        When ``external_table=False``, applied over the load job configuration
-        (see `JobConfigurationLoad <https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationLoad>`_).
-        When ``external_table=True``, applied over the external table configuration
-        (see `ExternalDataConfiguration <https://cloud.google.com/bigquery/docs/reference/rest/v2/tables#ExternalDataConfiguration>`_).
-        Applied after all top-level params, so keys here take precedence over overlapping top-level
-        operator params. Nested dicts are replaced entirely, not deep-merged.
+    :param src_fmt_configs: configure optional fields specific to the source format
     :param external_table: Flag to specify if the destination table should be
         a BigQuery external table. Default Value is False.
     :param time_partitioning: configure optional time partitioning fields i.e.
@@ -165,11 +150,12 @@ class GCSToBigQueryOperator(BaseOperator):
         by one or more columns. BigQuery supports clustering for both partitioned and
         non-partitioned tables. The order of columns given determines the sort order.
         Not applicable for external tables.
-    :param autodetect: [Optional] Whether to infer the schema from the source data for CSV and
-        JSON sources when neither ``schema_fields`` nor ``schema_object`` is provided. If ``True``,
-        the schema is inferred from the source data. If ``False``, either ``schema_fields`` or
-        ``schema_object`` must be provided. If ``None``, the existing destination table's schema
-        is used. (Default: ``True``).
+    :param autodetect: [Optional] Indicates if we should automatically infer the
+        options and schema for CSV and JSON sources. (Default: ``True``).
+        Parameter must be set to True if 'schema_fields' and 'schema_object' are undefined.
+        It is suggested to set to True if table are create outside of Airflow.
+        If autodetect is None and no schema is provided (neither via schema_fields
+        nor a schema_object), assume the table already exists.
     :param encryption_configuration: [Optional] Custom encryption configuration (e.g., Cloud KMS keys).
 
         .. code-block:: python
@@ -198,16 +184,12 @@ class GCSToBigQueryOperator(BaseOperator):
     template_fields: Sequence[str] = (
         "bucket",
         "source_objects",
-        "schema_fields",
         "schema_object",
         "schema_object_bucket",
         "destination_project_dataset_table",
         "impersonation_chain",
         "src_fmt_configs",
-        "extra_config",
-        "gcp_conn_id",
     )
-    template_fields_renderers = {"schema_fields": "json"}
     template_ext: Sequence[str] = (".sql",)
     ui_color = "#f0eee4"
     operator_extra_links = (BigQueryTableLink(),)
@@ -237,12 +219,11 @@ class GCSToBigQueryOperator(BaseOperator):
         gcp_conn_id="google_cloud_default",
         schema_update_options=(),
         src_fmt_configs=None,
-        extra_config: dict | None = None,
         external_table=False,
         time_partitioning=None,
         range_partitioning=None,
         cluster_fields=None,
-        autodetect: bool | None = True,
+        autodetect=True,
         encryption_configuration=None,
         location=None,
         impersonation_chain: str | Sequence[str] | None = None,
@@ -264,6 +245,8 @@ class GCSToBigQueryOperator(BaseOperator):
         self.configuration: dict[str, Any] = {}
 
         # GCS config
+        if src_fmt_configs is None:
+            src_fmt_configs = {}
         if time_partitioning is None:
             time_partitioning = {}
         if range_partitioning is None:
@@ -273,6 +256,9 @@ class GCSToBigQueryOperator(BaseOperator):
         self.bucket = bucket
         self.source_objects = source_objects
         self.schema_object = schema_object
+
+        if schema_object_bucket is None:
+            schema_object_bucket = bucket
         self.schema_object_bucket = schema_object_bucket
 
         # BQ config
@@ -303,7 +289,6 @@ class GCSToBigQueryOperator(BaseOperator):
 
         self.schema_update_options = schema_update_options
         self.src_fmt_configs = src_fmt_configs
-        self.extra_config = extra_config
         self.time_partitioning = time_partitioning
         self.range_partitioning = range_partitioning
         self.cluster_fields = cluster_fields
@@ -347,35 +332,11 @@ class GCSToBigQueryOperator(BaseOperator):
         if job.error_result:
             raise AirflowException(f"BigQuery job {job.job_id} failed: {job.error_result}")
 
-    def _warn_on_deprecated_template_fields(self) -> None:
-        if self.src_fmt_configs:
-            warnings.warn(
-                "The 'src_fmt_configs' parameter is deprecated. Use 'extra_config' instead. "
-                "Note: 'extra_config' uses the fully-nested API structure, so format-specific "
-                "options must be nested under their parent key "
-                "(e.g., {'parquetOptions': {'enableListInference': True}} rather than "
-                "{'enableListInference': True}).",
-                AirflowProviderDeprecationWarning,
-                stacklevel=1,
-            )
-
     def execute(self, context: Context):
-        # Template fields render after __init__, so defaults that depend on a template field
-        # (schema_object_bucket falls back to bucket) and the src_fmt_configs deprecation check
-        # must run here, against the rendered values.
-        if self.src_fmt_configs is None:
-            self.src_fmt_configs = {}
-        if self.schema_object_bucket is None:
-            self.schema_object_bucket = self.bucket
-            # Not captured in the rendered-template view (it defaults after rendering), so log it.
-            self.log.info("schema_object_bucket not set, defaulting to bucket %s", self.bucket)
-        self._warn_on_deprecated_template_fields()
-
         hook = BigQueryHook(
             gcp_conn_id=self.gcp_conn_id,
             location=self.location,
             impersonation_chain=self.impersonation_chain,
-            use_legacy_sql=False,
         )
         self.hook = hook
         self.source_format = self.source_format.upper()
@@ -496,7 +457,6 @@ class GCSToBigQueryOperator(BaseOperator):
                         project_id=self.project_id or self.hook.project_id,
                         location=self.location or self.hook.location,
                         impersonation_chain=self.impersonation_chain,
-                        cancel_on_kill=self.cancel_on_kill,
                     ),
                     method_name="execute_complete",
                 )
@@ -528,7 +488,6 @@ class GCSToBigQueryOperator(BaseOperator):
             gcp_conn_id=self.gcp_conn_id,
             location=self.location,
             impersonation_chain=self.impersonation_chain,
-            use_legacy_sql=False,
         )
         if self.max_id_key:
             self.log.info("Selecting the MAX value from BigQuery column %r...", self.max_id_key)
@@ -611,15 +570,11 @@ class GCSToBigQueryOperator(BaseOperator):
             )
             external_config_api_repr[src_fmt_to_param_mapping[self.source_format]] = self.src_fmt_configs
 
-        if self.schema_fields:
-            external_config_api_repr["schema"] = {"fields": self.schema_fields}
-        if self.max_bad_records:
-            external_config_api_repr["maxBadRecords"] = self.max_bad_records
-
-        if self.extra_config:
-            external_config_api_repr.update(self.extra_config)
-
         external_config = ExternalConfig.from_api_repr(external_config_api_repr)
+        if self.schema_fields:
+            external_config.schema = [SchemaField.from_api_repr(f) for f in self.schema_fields]
+        if self.max_bad_records:
+            external_config.max_bad_records = self.max_bad_records
 
         # build table definition
         table = Table(
@@ -773,38 +728,6 @@ class GCSToBigQueryOperator(BaseOperator):
 
         if self.allow_jagged_rows:
             self.configuration["load"]["allowJaggedRows"] = self.allow_jagged_rows
-
-        if self.extra_config:
-            self.configuration["load"].update(self.extra_config)
-
-        # Checked against the assembled load config rather than the operator attributes, because
-        # src_fmt_configs and extra_config can still override any of these keys.
-        # Self-describing formats (Avro, Parquet, ORC, Datastore backups) carry their own schema and
-        # ignoreUnknownValues still drops file fields missing from the table, so only CSV and JSON apply.
-        load_config = self.configuration["load"]
-        if (
-            load_config.get("sourceFormat") in ("CSV", "NEWLINE_DELIMITED_JSON")
-            and load_config.get("autodetect")
-            and load_config.get("ignoreUnknownValues")
-            and "schema" not in load_config
-            and "ALLOW_FIELD_ADDITION" not in (load_config.get("schemaUpdateOptions") or [])
-        ):
-            # autodetect=None only works against a table that exists when the load job runs,
-            # and force_delete deletes it first.
-            if self.force_delete:
-                fix = "Pass `schema_fields` or `schema_object` instead."
-            else:
-                fix = (
-                    "If the destination table already exists, set `autodetect=None` to use its "
-                    "schema; otherwise pass `schema_fields` or `schema_object`."
-                )
-            self.log.warning(
-                "`ignore_unknown_values` is checked against the schema autodetected from the source "
-                "data, not against the destination table's schema, so fields missing from the "
-                "destination table are not dropped. %s",
-                fix,
-            )
-
         return self.configuration
 
     def _validate_src_fmt_configs(
@@ -898,7 +821,6 @@ class GCSToBigQueryOperator(BaseOperator):
                 gcp_conn_id=self.gcp_conn_id,
                 location=self.location,
                 impersonation_chain=self.impersonation_chain,
-                use_legacy_sql=False,
             )
 
         project_id = self.project_id or self.hook.project_id

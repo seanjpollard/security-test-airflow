@@ -33,9 +33,6 @@ from importlib.resources import files as resource_files
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, NamedTuple, ParamSpec, TypeVar, cast
 
-from packaging.utils import canonicalize_name
-from packaging.version import Version
-
 from airflow import DeprecatedImportWarning
 from airflow._shared.module_loading import import_string
 from airflow._shared.providers_discovery import discover_all_providers_from_packages
@@ -43,8 +40,6 @@ from airflow.exceptions import AirflowOptionalProviderFeatureException, AirflowP
 from airflow.utils.log.logging_mixin import LoggingMixin
 
 if TYPE_CHECKING:
-    from importlib.metadata import Distribution
-
     from airflow.cli.cli_config import CLICommand
 
 log = logging.getLogger(__name__)
@@ -56,33 +51,6 @@ RT = TypeVar("RT")
 MIN_PROVIDER_VERSIONS = {
     "apache-airflow-providers-celery": "2.1.0",
 }
-
-BLOCKED_PROVIDER_MIN_VERSIONS = {
-    "apache-airflow-providers-common-ai": "1.0.0",
-}
-
-
-def _is_source_install(dist: Distribution) -> bool:
-    """Whether the distribution was installed from a local directory, editable or not (PEP 610)."""
-    with contextlib.suppress(ValueError):
-        return "dir_info" in json.loads(dist.read_text("direct_url.json") or "{}")
-    return False
-
-
-def provider_incompatibility_reason(dist: Distribution) -> str | None:
-    """Return a reason to skip a provider that cannot run with this Airflow version."""
-    package_name = canonicalize_name(dist.metadata["Name"])
-    minimum_version = BLOCKED_PROVIDER_MIN_VERSIONS.get(package_name)
-    if minimum_version is None or Version(Version(dist.version).base_version) >= Version(minimum_version):
-        return None
-    # A source tree reports the last released version, so version alone can't tell it apart; this
-    # exemption can go as soon as a version > 0.10.0 exists.
-    if _is_source_install(dist):
-        return None
-    return (
-        f"Skipping incompatible provider {package_name} {dist.version}; "
-        f"install {package_name}>={minimum_version} for this version of Airflow."
-    )
 
 
 def _ensure_prefix_for_placeholders(field_behaviors: dict[str, Any], conn_type: str):
@@ -252,14 +220,6 @@ class NotificationInfo(NamedTuple):
     """Notification class and provider it comes from."""
 
     notification_class_name: str
-    package_name: str
-
-
-class RemoteLoggingInfo(NamedTuple):
-    """Remote logging IO handler registered by a provider."""
-
-    classpath: str
-    scheme: str
     package_name: str
 
 
@@ -472,8 +432,6 @@ class ProvidersManager(LoggingMixin):
         self._cli_command_provider_name_set: set[str] = set()
         self._extra_link_class_name_set: set[str] = set()
         self._logging_class_name_set: set[str] = set()
-        self._remote_logging_info_list: list[RemoteLoggingInfo] = []
-        self._remote_logging_by_scheme: dict[str, RemoteLoggingInfo] = {}
         self._auth_manager_class_name_set: set[str] = set()
         self._auth_manager_without_check_set: set[tuple[str, str]] = set()
         self._secrets_backend_class_name_set: set[str] = set()
@@ -553,9 +511,7 @@ class ProvidersManager(LoggingMixin):
         # Development purpose. In production provider.yaml files are not present in the 'airflow" directory
         # So there is no risk we are going to override package provider accidentally. This can only happen
         # in case of local development
-        discover_all_providers_from_packages(
-            self._provider_dict, self._provider_schema_validator, provider_incompatibility_reason
-        )
+        discover_all_providers_from_packages(self._provider_dict, self._provider_schema_validator)
         self._verify_all_providers_all_compatible()
         self._provider_dict = dict(sorted(self._provider_dict.items()))
 
@@ -614,12 +570,6 @@ class ProvidersManager(LoggingMixin):
         """Lazy initialization of providers logging information."""
         self.initialize_providers_list()
         self._discover_logging()
-
-    @provider_info_cache("remote_logging")
-    def initialize_providers_remote_logging(self):
-        """Lazy initialization of providers remote logging IO handlers."""
-        self.initialize_providers_list()
-        self._discover_remote_logging()
 
     @provider_info_cache("secrets_backends")
     def initialize_providers_secrets_backends(self):
@@ -1290,31 +1240,6 @@ class ProvidersManager(LoggingMixin):
                     if _correctness_check(provider_package, logging_class_name, provider):
                         self._logging_class_name_set.add(logging_class_name)
 
-    def _discover_remote_logging(self) -> None:
-        """Retrieve all remote logging IO handlers defined in the providers."""
-        for provider_package, provider in self._provider_dict.items():
-            entries = provider.data.get("remote-logging") or []
-            for entry in entries:
-                classpath = entry["classpath"]
-                if not _correctness_check(provider_package, classpath, provider):
-                    continue
-                info = RemoteLoggingInfo(
-                    classpath=classpath,
-                    scheme=entry["scheme"],
-                    package_name=provider_package,
-                )
-                if (existing := self._remote_logging_by_scheme.get(info.scheme)) is not None:
-                    log.warning(
-                        "Remote logging scheme '%s' is already registered by %s; ignoring "
-                        "duplicate registration from %s.",
-                        info.scheme,
-                        existing.package_name,
-                        info.package_name,
-                    )
-                    continue
-                self._remote_logging_info_list.append(info)
-                self._remote_logging_by_scheme[info.scheme] = info
-
     def _discover_secrets_backends(self) -> None:
         """Retrieve all secrets backends defined in the providers."""
         for provider_package, provider in self._provider_dict.items():
@@ -1526,17 +1451,6 @@ class ProvidersManager(LoggingMixin):
         return sorted(self._logging_class_name_set)
 
     @property
-    def remote_logging_handlers(self) -> list[RemoteLoggingInfo]:
-        """Return all remote logging IO handlers contributed by providers."""
-        self.initialize_providers_remote_logging()
-        return list(self._remote_logging_info_list)
-
-    def remote_logging_handler_by_scheme(self, scheme: str) -> RemoteLoggingInfo | None:
-        """Return the remote logging IO handler registered for the given URL scheme, if any."""
-        self.initialize_providers_remote_logging()
-        return self._remote_logging_by_scheme.get(scheme)
-
-    @property
     def secrets_backend_class_names(self) -> list[str]:
         """Returns set of secret backend class names."""
         self.initialize_providers_secrets_backends()
@@ -1618,8 +1532,6 @@ class ProvidersManager(LoggingMixin):
         self._field_behaviours.clear()
         self._extra_link_class_name_set.clear()
         self._logging_class_name_set.clear()
-        self._remote_logging_info_list.clear()
-        self._remote_logging_by_scheme.clear()
         self._auth_manager_class_name_set.clear()
         self._auth_manager_without_check_set.clear()
         self._secrets_backend_class_name_set.clear()

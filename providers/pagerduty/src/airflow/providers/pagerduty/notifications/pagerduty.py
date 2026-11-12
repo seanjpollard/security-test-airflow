@@ -69,7 +69,6 @@ class PagerdutyNotifier(BaseNotifier):
         "class_type",
         "images",
         "links",
-        "pagerduty_events_conn_id",
     )
 
     def __init__(

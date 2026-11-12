@@ -16,19 +16,14 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import type { ButtonProps } from "@chakra-ui/react";
-import { useDisclosure } from "@chakra-ui/react";
+import { IconButton, useDisclosure } from "@chakra-ui/react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { useTranslation } from "react-i18next";
 import { CgRedo } from "react-icons/cg";
 
 import type { LightGridTaskInstanceSummary, TaskInstanceResponse } from "openapi/requests/types.gen";
-
-import { IconButton } from "src/system-components";
-
 import { ClearGroupTaskInstanceDialog } from "src/components/Clear/TaskInstance/ClearGroupTaskInstanceDialog";
-
-import { SHORTCUTS } from "src/context/keyboardShortcuts";
-import { useShortcut } from "src/hooks/useShortcut";
+import { Tooltip } from "src/components/ui";
 
 import ClearTaskInstanceDialog from "./ClearTaskInstanceDialog";
 
@@ -44,9 +39,9 @@ type Props = {
   readonly onOpen?: (ti: LightGridTaskInstanceSummary | TaskInstanceResponse) => void;
   readonly taskId?: string;
   readonly taskInstance?: TaskInstanceResponse;
-} & ButtonProps;
+};
 
-export const ClearTaskInstanceButton = ({
+const ClearTaskInstanceButton = ({
   allMapped = false,
   dagId,
   dagRunId,
@@ -55,7 +50,6 @@ export const ClearTaskInstanceButton = ({
   onOpen,
   taskId,
   taskInstance,
-  ...rest
 }: Props) => {
   const { onClose, onOpen: onOpenInternal, open } = useDisclosure();
   const { t: translate } = useTranslation();
@@ -64,41 +58,54 @@ export const ClearTaskInstanceButton = ({
 
   const selectedInstance = taskInstance ?? groupTaskInstance;
 
-  useShortcut({
-    ...SHORTCUTS.runActions.clearTaskInstance,
-    callback: () => {
+  useHotkeys(
+    "shift+c",
+    () => {
       if (onOpen && selectedInstance) {
         onOpen(selectedInstance);
       } else {
         onOpenInternal();
       }
     },
-    options: { enabled: isHotkeyEnabled },
-  });
-
-  const label = allMapped
-    ? isHotkeyEnabled
-      ? translate("dags:runAndTaskActions.clearAllMapped.buttonTooltip")
-      : translate("dags:runAndTaskActions.clearAllMapped.button")
-    : isHotkeyEnabled
-      ? translate("dags:runAndTaskActions.clear.buttonTooltip")
-      : translate("dags:runAndTaskActions.clear.button", { type: translate("taskInstance_one") });
+    { enabled: isHotkeyEnabled },
+  );
 
   return (
     <>
-      <IconButton
-        {...rest}
-        label={label}
-        onClick={() => (onOpen && selectedInstance ? onOpen(selectedInstance) : onOpenInternal())}
+      <Tooltip
+        closeDelay={100}
+        content={
+          allMapped
+            ? isHotkeyEnabled
+              ? translate("dags:runAndTaskActions.clearAllMapped.buttonTooltip")
+              : translate("dags:runAndTaskActions.clearAllMapped.button")
+            : isHotkeyEnabled
+              ? translate("dags:runAndTaskActions.clear.buttonTooltip")
+              : translate("dags:runAndTaskActions.clear.button", { type: translate("taskInstance_one") })
+        }
+        openDelay={100}
       >
-        <CgRedo />
-      </IconButton>
+        <IconButton
+          aria-label={
+            allMapped
+              ? translate("dags:runAndTaskActions.clearAllMapped.button")
+              : translate("dags:runAndTaskActions.clear.button", { type: translate("taskInstance_one") })
+          }
+          colorPalette="brand"
+          onClick={() => (onOpen && selectedInstance ? onOpen(selectedInstance) : onOpenInternal())}
+          size="md"
+          variant="ghost"
+        >
+          <CgRedo />
+        </IconButton>
+      </Tooltip>
 
-      {useInternalDialog && isGroup ? (
+      {useInternalDialog && open && isGroup ? (
         <ClearGroupTaskInstanceDialog onClose={onClose} open={open} taskInstance={groupTaskInstance} />
       ) : undefined}
 
       {useInternalDialog &&
+      open &&
       !isGroup &&
       allMapped &&
       dagId !== undefined &&
@@ -114,9 +121,11 @@ export const ClearTaskInstanceButton = ({
         />
       ) : undefined}
 
-      {useInternalDialog && !isGroup && !allMapped && taskInstance ? (
+      {useInternalDialog && open && !isGroup && !allMapped && taskInstance ? (
         <ClearTaskInstanceDialog onClose={onClose} open={open} taskInstance={taskInstance} />
       ) : undefined}
     </>
   );
 };
+
+export default ClearTaskInstanceButton;

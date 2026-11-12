@@ -18,41 +18,18 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-import importlib
 import time
-import warnings
 from unittest import mock
 
 import pytest
 from asyncssh.sftp import SFTPAttrs, SFTPName
 
-from airflow.providers.common.compat.sdk import AirflowException, timezone
+from airflow.providers.common.compat.sdk import AirflowException
 from airflow.providers.sftp.triggers.sftp import SFTPTrigger
 from airflow.triggers.base import TriggerEvent
 
-WARNING_CATEGORY: type[Warning]
-try:
-    from airflow.utils.deprecation_tools import DeprecatedImportWarning
-except ImportError:
-    WARNING_CATEGORY = DeprecationWarning
-else:
-    WARNING_CATEGORY = DeprecatedImportWarning
-
 
 class TestSFTPTrigger:
-    def test_no_timezone_deprecated_import_warning_on_module_reload(self):
-        with warnings.catch_warnings(record=True) as captured_warnings:
-            warnings.simplefilter("always")
-            import airflow.providers.sftp.triggers.sftp as sftp_trigger_module
-
-            importlib.reload(sftp_trigger_module)
-
-        assert not any(
-            issubclass(warning.category, WARNING_CATEGORY)
-            and "airflow.utils.timezone" in str(warning.message)
-            for warning in captured_warnings
-        )
-
     def test_sftp_trigger_serialization(self):
         """
         Asserts that the SFTPTrigger correctly serializes its arguments and classpath.
@@ -67,30 +44,6 @@ class TestSFTPTrigger:
             "newer_than": None,
             "poke_interval": 5.0,
         }
-
-    def test_newer_than_utc_none_when_not_provided(self):
-        trigger = SFTPTrigger(path="test/path/")
-        assert trigger.newer_than_utc is None
-
-    def test_newer_than_utc_converts_datetime(self):
-        naive = datetime.datetime(2023, 5, 1, 12, 0, 0)
-        trigger = SFTPTrigger(path="test/path/", newer_than=naive)
-        assert trigger.newer_than_utc == timezone.convert_to_utc(naive)
-
-    def test_newer_than_utc_parses_string(self):
-        trigger = SFTPTrigger(path="test/path/", newer_than="2023-05-01T12:00:00")
-        assert trigger.newer_than_utc == timezone.convert_to_utc(datetime.datetime(2023, 5, 1, 12, 0, 0))
-
-    def test_newer_than_utc_is_cached_and_does_not_mutate_newer_than(self):
-        trigger = SFTPTrigger(path="test/path/", newer_than="2023-05-01T12:00:00")
-
-        first_access = trigger.newer_than_utc
-        # newer_than stays the original string; only the cached property is converted.
-        assert trigger.newer_than == "2023-05-01T12:00:00"
-
-        trigger.newer_than = "2024-01-01T00:00:00"
-        # Property is cached, so mutating newer_than afterwards has no effect on it.
-        assert trigger.newer_than_utc is first_access
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

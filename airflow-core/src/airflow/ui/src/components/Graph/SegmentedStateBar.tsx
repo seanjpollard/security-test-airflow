@@ -19,7 +19,6 @@
 import { Box, Flex } from "@chakra-ui/react";
 
 import type { TaskInstanceState } from "openapi/requests/types.gen";
-
 import { sortStateEntries } from "src/utils";
 
 type Props = {
@@ -32,9 +31,11 @@ export const SegmentedStateBar = ({ childStates, fallbackState, height = "6px" }
   const entries = sortStateEntries(childStates);
 
   if (entries.length === 0) {
-    return fallbackState ? (
-      <Box bg={`${fallbackState}.solid`} borderRadius="2px" height={height} mt="auto" />
-    ) : undefined;
+    if (!fallbackState) {
+      return undefined;
+    }
+
+    return <Box bg={`${fallbackState}.solid`} borderRadius="2px" height={height} mt="auto" />;
   }
 
   return (

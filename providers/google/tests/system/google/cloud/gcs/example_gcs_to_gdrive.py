@@ -41,7 +41,6 @@ else:
 from airflow.models.dag import DAG
 from airflow.providers.google.cloud.operators.gcs import GCSCreateBucketOperator, GCSDeleteBucketOperator
 from airflow.providers.google.cloud.transfers.gcs_to_gcs import GCSToGCSOperator
-from airflow.providers.google.common.utils.get_secret import get_secret
 from airflow.providers.google.suite.hooks.drive import GoogleDriveHook
 from airflow.providers.google.suite.transfers.gcs_to_gdrive import GCSToGoogleDriveOperator
 
@@ -72,8 +71,6 @@ CURRENT_FOLDER = Path(__file__).parent
 LOCAL_PATH = str(Path("gcs"))
 FILE_LOCAL_PATH = str(Path(LOCAL_PATH))
 FILE_NAME = "example_upload.txt"
-GDRIVE_SECRET_ID = "gdrive_shared_folder_id"
-
 
 log = logging.getLogger(__name__)
 
@@ -84,12 +81,6 @@ with DAG(
     catchup=False,
     tags=["example", "gcs", "gdrive"],
 ) as dag:
-
-    @task
-    def get_shared_drive_id() -> str:
-        return get_secret(secret_id=GDRIVE_SECRET_ID).strip()
-
-    get_shared_drive_id_task = get_shared_drive_id()
 
     @task
     def create_connection(connection_id: str):
@@ -133,7 +124,6 @@ with DAG(
         source_bucket=BUCKET_NAME,
         source_object=f"{TMP_PATH}/{FILE_NAME}",
         destination_object=f"{WORK_DIR}/copied_{FILE_NAME}",
-        destination_folder_id=get_shared_drive_id_task,
     )
     # [END howto_operator_gcs_to_gdrive_copy_single_file]
 
@@ -144,7 +134,7 @@ with DAG(
         source_bucket=BUCKET_NAME,
         source_object=f"{TMP_PATH}/{FILE_NAME}",
         destination_object=f"{WORK_DIR}/copied_{FILE_NAME}",
-        destination_folder_id=get_shared_drive_id_task,
+        destination_folder_id=FOLDER_ID,
     )
     # [END howto_operator_gcs_to_gdrive_copy_single_file_into_folder]
 
@@ -155,7 +145,6 @@ with DAG(
         source_bucket=BUCKET_NAME,
         source_object=f"{TMP_PATH}/*",
         destination_object=f"{WORK_DIR}/",
-        destination_folder_id=get_shared_drive_id_task,
     )
     # [END howto_operator_gcs_to_gdrive_copy_files]
 
@@ -166,31 +155,23 @@ with DAG(
         source_bucket=BUCKET_NAME,
         source_object=f"{TMP_PATH}/*.txt",
         destination_object=f"{WORK_DIR}/",
-        destination_folder_id=get_shared_drive_id_task,
         move_object=True,
     )
     # [END howto_operator_gcs_to_gdrive_move_files]
 
     @task(trigger_rule=TriggerRule.ALL_DONE)
-    def remove_files_from_drive(**context):
-        ti = context["ti"]
+    def remove_files_from_drive():
         service = GoogleDriveHook(gcp_conn_id=CONNECTION_ID).get_conn()
         root_path = (
             service.files()
-            .list(
-                q=f"name = '{WORK_DIR}' and mimeType = 'application/vnd.google-apps.folder'",
-                corpora="drive",
-                driveId=ti.xcom_pull("get_shared_drive_id"),
-                includeItemsFromAllDrives=True,
-                supportsAllDrives=True,
-            )
+            .list(q=f"name = '{WORK_DIR}' and mimeType = 'application/vnd.google-apps.folder'")
             .execute()
         )
         if files := root_path["files"]:
             batch = service.new_batch_http_request()
             for file in files:
-                log.info("Deleting file %s...", file["name"])
-                batch.add(service.files().delete(fileId=file["id"], supportsAllDrives=True))
+                log.info("Preparing to remove file: {}", file)
+                batch.add(service.files().delete(fileId=file["id"]))
             batch.execute()
             log.info("Selected files removed.")
 
@@ -207,7 +188,7 @@ with DAG(
     delete_connection_task = delete_connection(connection_id=CONNECTION_ID)
 
     # TEST SETUP
-    get_shared_drive_id_task >> create_bucket >> [upload_file_1, upload_file_2]
+    create_bucket >> [upload_file_1, upload_file_2]
     (
         [upload_file_1, upload_file_2, create_connection_task]
         # TEST BODY

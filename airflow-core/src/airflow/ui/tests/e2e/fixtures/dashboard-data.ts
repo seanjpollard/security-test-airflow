@@ -16,13 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 /**
  * Dashboard data fixture — tracks UI-triggered Dag runs for cleanup.
  */
 import { testConfig } from "playwright.config";
-
 import { test as base } from "tests/e2e/fixtures";
-import { safeCleanupDagRun } from "tests/e2e/utils/api/dag-runs";
+import { safeCleanupDagRun } from "tests/e2e/utils/test-helpers";
 
 export type DagRunCleanup = {
   track: (runId: string) => void;

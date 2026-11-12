@@ -141,7 +141,7 @@ class TestFormatHandlers:
             ),
             (
                 {"table_name": "t", "format": "parquet", "conn_id": "c"},
-                "URI must be provided when format is set",
+                "Unsupported storage type for URI:",
             ),
         ],
     )

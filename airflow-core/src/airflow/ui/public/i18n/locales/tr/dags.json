@@ -1,5 +1,5 @@
 {
-  "assetSchedule": "{{total, number}} varlıktan {{count, number}} tanesi güncellendi",
+  "assetSchedule": "{{total}} varlıktan {{count}} tanesi güncellendi",
   "dagActions": {
     "delete": {
       "button": "Dag'ı Sil",
@@ -26,18 +26,13 @@
   "runAndTaskActions": {
     "affectedTasks": {
       "noItemsFound": "Görev bulunamadı.",
-      "title": "Etkilenen Görevler: {{count, number}}"
+      "title": "Etkilenen Görevler: {{count}}"
     },
     "clear": {
       "button": "{{type}} Temizle",
       "buttonTooltip": "Temizlemek için shift+c tuşuna basın",
       "error": "{{type}} temizlenemedi",
       "title": "{{type}} Temizle"
-    },
-    "clearAllMapped": {
-      "button": "Tüm Haritalanmış Görevleri Temizle",
-      "buttonTooltip": "Tüm haritalanmış görev örneklerini temizlemek için shift+c tuşlarına basın",
-      "title": "Tüm Haritalanmış Görev Örneklerini Temizle"
     },
     "confirmationDialog": {
       "description": "Bu işlem, seçilen görev {{state}} ve {{user}} kullanıcısı tarafından {{time}} tarihinde başlatıldı. Görev çalışmayı tamamlayana kadar veya bir kullanıcı temizleme görev iletişim kutusundaki \"Çalışan görevlerin yeniden çalıştırılmasını önle\" seçeneğinin işaretini kaldırana kadar bu görevi temizleyemez.",

@@ -44,6 +44,7 @@ export const DagNotFound = ({ dagId }: DagNotFoundProps) => {
 
           <HStack gap={4}>
             <Button
+              colorPalette="brand"
               onClick={() => {
                 void Promise.resolve(navigate(-1));
               }}
@@ -52,6 +53,7 @@ export const DagNotFound = ({ dagId }: DagNotFoundProps) => {
               {translate("notFound.back")}
             </Button>
             <Button
+              colorPalette="brand"
               onClick={() => {
                 void Promise.resolve(navigate("/dags"));
               }}

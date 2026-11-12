@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Literal
 
 import yaml
 from openlineage.client import OpenLineageClient, set_producer
@@ -36,13 +36,7 @@ from openlineage.client.facet_v2 import (
 
 from airflow.providers.common.compat.sdk import Stats, conf as airflow_conf
 from airflow.providers.openlineage import conf
-from airflow.providers.openlineage.token_provider import (
-    AirflowConnectionConfigProvider,
-    resolve_airflow_connection_auth,
-)
 from airflow.providers.openlineage.utils.utils import (
-    _JOB_TYPE_DAG,
-    _JOB_TYPE_TASK,
     _PRODUCER,
     OpenLineageRedactor,
     build_dag_run_ol_run_id,
@@ -52,14 +46,12 @@ from airflow.providers.openlineage.utils.utils import (
     get_dag_job_dependency_facet,
     get_processing_engine_facet,
 )
-from airflow.utils.helpers import prune_dict
 from airflow.utils.log.logging_mixin import LoggingMixin
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from airflow.providers.openlineage.extractors import OperatorLineage
-    from airflow.providers.openlineage.plugins.facets import AirflowDagRunFacet, AirflowRunFacet
     from airflow.sdk.execution_time.secrets_masker import SecretsMasker, _secrets_masker
     from airflow.utils.state import DagRunState
 else:
@@ -73,6 +65,9 @@ else:
 
 
 set_producer(_PRODUCER)
+
+_JOB_TYPE_DAG: Literal["DAG"] = "DAG"
+_JOB_TYPE_TASK: Literal["TASK"] = "TASK"
 
 
 class OpenLineageAdapter(LoggingMixin):
@@ -108,35 +103,22 @@ class OpenLineageAdapter(LoggingMixin):
         return self._client
 
     def get_openlineage_config(self) -> dict | None:
-        # First, try to read from Airflow connection
-        openlineage_config_conn_id = conf.config_conn_id()
-        if openlineage_config_conn_id:
-            config = AirflowConnectionConfigProvider(openlineage_config_conn_id).get_config()
-            resolve_airflow_connection_auth(config=config, config_conn_id=openlineage_config_conn_id)
-            return config
-        self.log.debug("OpenLineage config_conn_id configuration not found.")
-
-        # Second, try to read from YAML file
+        # First, try to read from YAML file
         openlineage_config_path = conf.config_path(check_legacy_env_var=False)
         if openlineage_config_path:
-            yaml_config = self._read_yaml_config(openlineage_config_path)
-            if yaml_config is None:
-                return None
-            resolve_airflow_connection_auth(yaml_config)
-            return yaml_config
+            config = self._read_yaml_config(openlineage_config_path)
+            return config
         self.log.debug("OpenLineage config_path configuration not found.")
 
-        # Third, try to get transport config
+        # Second, try to get transport config
         transport_config = conf.transport()
         if not transport_config:
             self.log.debug("OpenLineage transport configuration not found.")
             return None
-        config = {"transport": transport_config}
-        resolve_airflow_connection_auth(config)
-        return config
+        return {"transport": transport_config}
 
     @staticmethod
-    def _read_yaml_config(path: str) -> dict[str, Any] | None:
+    def _read_yaml_config(path: str) -> dict | None:
         with open(path) as config_file:
             return yaml.safe_load(config_file)
 
@@ -173,33 +155,10 @@ class OpenLineageAdapter(LoggingMixin):
         event_type = event.eventType.value.lower() if event.eventType else ""
         transport_type = f"{self._client.transport.kind}".lower()
 
-        team_name = None
-
-        facets = event.run.facets or {}
-        airflow_facet = cast("AirflowRunFacet | None", facets.get("airflow"))
-
-        if airflow_facet:
-            team_name = airflow_facet.dagRun.get("dag_team_name")
-        else:
-            airflow_dagrun_facet = cast("AirflowDagRunFacet | None", facets.get("airflowDagRun"))
-            if airflow_dagrun_facet:
-                dag_run = airflow_dagrun_facet.dagRun
-                team_name = (
-                    dag_run.get("dag_team_name")
-                    if isinstance(dag_run, dict)
-                    else getattr(dag_run, "dag_team_name", None)
-                )
-
         try:
             with Stats.timer(
                 "ol.emit.attempts",
-                tags=prune_dict(
-                    {
-                        "event_type": event_type,
-                        "transport_type": transport_type,
-                        "team_name": team_name,
-                    }
-                ),
+                tags={"event_type": event_type, "transport_type": transport_type},
             ):
                 self._client.emit(redacted_event)
                 self.log.info(
@@ -208,11 +167,7 @@ class OpenLineageAdapter(LoggingMixin):
                     event.run.runId,
                 )
         except Exception as e:
-            Stats.incr(
-                "ol.emit.failed",
-                tags=prune_dict({"team_name": team_name}),
-            )
-
+            Stats.incr("ol.emit.failed")
             self.log.warning(
                 "Failed to emit OpenLineage `%s` event of id `%s` with the following exception: `%s`",
                 event_type.upper(),

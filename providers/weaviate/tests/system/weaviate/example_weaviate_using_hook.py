@@ -19,7 +19,8 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pendulum
-from weaviate.classes.config import Configure, DataType, Property
+from weaviate.classes.config import DataType, Property
+from weaviate.collections.classes.config import Configure
 
 try:
     from airflow.sdk import dag, task, teardown
@@ -62,7 +63,7 @@ def example_weaviate_dag_using_hook():
                 Property(name="answer", description="The answer", data_type=DataType.TEXT),
                 Property(name="category", description="The category", data_type=DataType.TEXT),
             ],
-            vector_config=Configure.Vectors.text2vec_openai(),
+            vectorizer_config=Configure.Vectorizer.text2vec_openai(),
         )
 
     @task()
@@ -76,7 +77,7 @@ def example_weaviate_dag_using_hook():
         # collection definition object. Weaviate's autoschema feature will infer properties when importing.
         weaviate_hook.create_collection(
             "QuestionWithoutVectorizerUsingHook",
-            vector_config=Configure.Vectors.self_provided(),
+            vectorizer_config=None,
         )
 
     @task(trigger_rule="all_done")

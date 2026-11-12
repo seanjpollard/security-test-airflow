@@ -71,7 +71,6 @@ class CloudDataFusionRestartInstanceOperator(GoogleCloudBaseOperator):
     template_fields: Sequence[str] = (
         "instance_name",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (DataFusionInstanceLink(),)
 
@@ -144,7 +143,6 @@ class CloudDataFusionDeleteInstanceOperator(GoogleCloudBaseOperator):
     template_fields: Sequence[str] = (
         "instance_name",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -211,7 +209,6 @@ class CloudDataFusionCreateInstanceOperator(GoogleCloudBaseOperator):
         "instance_name",
         "instance",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (DataFusionInstanceLink(),)
 
@@ -313,7 +310,6 @@ class CloudDataFusionUpdateInstanceOperator(GoogleCloudBaseOperator):
         "instance_name",
         "instance",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (DataFusionInstanceLink(),)
 
@@ -392,7 +388,6 @@ class CloudDataFusionGetInstanceOperator(GoogleCloudBaseOperator):
     template_fields: Sequence[str] = (
         "instance_name",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (DataFusionInstanceLink(),)
 
@@ -472,7 +467,6 @@ class CloudDataFusionCreatePipelineOperator(GoogleCloudBaseOperator):
         "instance_name",
         "pipeline_name",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -560,7 +554,6 @@ class CloudDataFusionDeletePipelineOperator(GoogleCloudBaseOperator):
         "version_id",
         "pipeline_name",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -643,7 +636,6 @@ class CloudDataFusionListPipelinesOperator(GoogleCloudBaseOperator):
         "artifact_name",
         "artifact_version",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (DataFusionPipelinesLink(),)
 
@@ -747,7 +739,6 @@ class CloudDataFusionStartPipelineOperator(GoogleCloudBaseOperator):
         "pipeline_name",
         "runtime_args",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (DataFusionPipelineLink(),)
 
@@ -929,13 +920,7 @@ class CloudDataFusionStopPipelineOperator(GoogleCloudBaseOperator):
     :param run_id: The specific run_id to stop execution if available; when absent it will stop all runs under pipeline_name.
     """
 
-    template_fields: Sequence[str] = (
-        "instance_name",
-        "pipeline_name",
-        "impersonation_chain",
-        "run_id",
-        "gcp_conn_id",
-    )
+    template_fields: Sequence[str] = ("instance_name", "pipeline_name", "impersonation_chain", "run_id")
     operator_extra_links = (DataFusionPipelineLink(),)
 
     def __init__(

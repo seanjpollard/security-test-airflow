@@ -25,12 +25,8 @@ description: |
 
 state: ready
 lifecycle: incubation
-source-date-epoch: 1791328842
+source-date-epoch: 1712361600
 versions:
-  - 0.3.2
-  - 0.3.1
-  - 0.3.0
-  - 0.2.0
   - 0.1.0
 
 integrations:
@@ -79,7 +75,7 @@ connection-types:
           type:
             - string
             - 'null'
-      jwt_token:
+      jwt:
         label: JWT
         schema:
           type:

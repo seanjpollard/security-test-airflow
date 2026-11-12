@@ -16,46 +16,40 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { Badge, Box, Button, Flex, Heading, HStack, VStack, useDisclosure } from "@chakra-ui/react";
 import { useState } from "react";
-
-import { Badge, Box, Button, Flex, HStack, useDisclosure } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
 import { FiX } from "react-icons/fi";
 import { LuCheck } from "react-icons/lu";
 
 import type { TaskInstanceResponse, TaskInstanceState } from "openapi/requests/types.gen";
-
-import { Modal, Menu, SegmentedControl } from "src/system-components";
-
 import { ActionAccordion } from "src/components/ActionAccordion";
-import { ActionErrors } from "src/components/ActionErrors";
+import { ErrorAlert } from "src/components/ErrorAlert";
 import { allowedStates } from "src/components/MarkAs/utils";
 import { StateBadge } from "src/components/StateBadge";
-
+import { Dialog, Menu } from "src/components/ui";
+import SegmentedControl from "src/components/ui/SegmentedControl";
 import { useBulkMarkAsDryRun } from "src/queries/useBulkMarkAsDryRun";
 import { useBulkTaskInstances } from "src/queries/useBulkTaskInstances";
-import { formatNumber } from "src/utils";
-import { isLoopTaskInstance } from "src/utils/loopTaskInstance";
 
 type Props = {
-  readonly deselectKeys: (keys: Array<string>) => void;
+  readonly clearSelections: VoidFunction;
   readonly selectedTaskInstances: Array<TaskInstanceResponse>;
 };
 
-const BulkMarkTaskInstancesAsButton = ({ deselectKeys, selectedTaskInstances }: Props) => {
-  const { i18n, t: translate } = useTranslation();
+const BulkMarkTaskInstancesAsButton = ({ clearSelections, selectedTaskInstances }: Props) => {
+  const { t: translate } = useTranslation();
   const { onClose, onOpen, open } = useDisclosure();
   const [state, setState] = useState<TaskInstanceState>("success");
   const [selectedOptions, setSelectedOptions] = useState<Array<string>>([]);
   const [note, setNote] = useState<string | null>(null);
-  const { bulkAction, data, error, isPending, reset } = useBulkTaskInstances({
-    deselectKeys,
+  const { bulkAction, error, isPending, setError } = useBulkTaskInstances({
+    clearSelections,
     onSuccessConfirm: onClose,
   });
 
-  const hasRegional = selectedTaskInstances.some(isLoopTaskInstance);
-  const past = !hasRegional && selectedOptions.includes("past");
-  const future = !hasRegional && selectedOptions.includes("future");
+  const past = selectedOptions.includes("past");
+  const future = selectedOptions.includes("future");
   const upstream = selectedOptions.includes("upstream");
   const downstream = selectedOptions.includes("downstream");
 
@@ -79,7 +73,7 @@ const BulkMarkTaskInstancesAsButton = ({ deselectKeys, selectedTaskInstances }: 
     setState(newState);
     setSelectedOptions([]);
     setNote(null);
-    reset();
+    setError(undefined);
     onOpen();
   };
 
@@ -89,14 +83,16 @@ const BulkMarkTaskInstancesAsButton = ({ deselectKeys, selectedTaskInstances }: 
     <Box>
       <Menu.Root positioning={{ gutter: 0, placement: "top" }}>
         <Menu.Trigger asChild>
-          <Button variant="outline">
-            <HStack gap={1} mx={1}>
-              <LuCheck />
-              <span>/</span>
-              <FiX />
-            </HStack>
-            {translate("dags:runAndTaskActions.markAs.button", { type: translate("taskInstance_other") })}
-          </Button>
+          <div>
+            <Button colorPalette="brand" size="sm" variant="outline">
+              <HStack gap={1} mx={1}>
+                <LuCheck />
+                <span>/</span>
+                <FiX />
+              </HStack>
+              {translate("dags:runAndTaskActions.markAs.button", { type: translate("taskInstance_other") })}
+            </Button>
+          </div>
         </Menu.Trigger>
         <Menu.Content>
           {allowedStates.map((menuState) => {
@@ -116,7 +112,7 @@ const BulkMarkTaskInstancesAsButton = ({ deselectKeys, selectedTaskInstances }: 
                 <HStack justify="space-between" width="full">
                   <StateBadge state={menuState}>{translate(`common:states.${menuState}`)}</StateBadge>
                   <Badge colorPalette="gray" variant="subtle">
-                    {formatNumber(count, i18n.language)}
+                    {count}
                   </Badge>
                 </HStack>
               </Menu.Item>
@@ -125,83 +121,86 @@ const BulkMarkTaskInstancesAsButton = ({ deselectKeys, selectedTaskInstances }: 
         </Menu.Content>
       </Menu.Root>
 
-      <Modal
-        footerActions={
-          <Button
-            disabled={affectedTasks.total_entries === 0}
-            loading={isPending || isFetching}
-            onClick={() => {
-              bulkAction({
-                actions: [
+      <Dialog.Root onOpenChange={onClose} open={open} size="xl">
+        <Dialog.Content backdrop>
+          <Dialog.Header>
+            <VStack align="start" gap={4}>
+              <Heading size="xl">
+                {translate("dags:runAndTaskActions.markAs.title", {
+                  state,
+                  type: translate("taskInstance_other"),
+                })}{" "}
+                <StateBadge state={state} />
+              </Heading>
+            </VStack>
+          </Dialog.Header>
+
+          <Dialog.CloseTrigger />
+          <Dialog.Body width="full">
+            <Flex justifyContent="center" mb={4}>
+              <SegmentedControl
+                defaultValues={[]}
+                multiple
+                onChange={setSelectedOptions}
+                options={[
                   {
-                    action: "update" as const,
-                    action_on_non_existence: "skip",
-                    entities: directlyAffected.map((ti) => ({
-                      ...(ti.region_id === undefined
-                        ? {}
-                        : { region_id: ti.region_id, region_index: ti.region_index }),
-                      dag_id: ti.dag_id,
-                      dag_run_id: ti.dag_run_id,
-                      include_downstream: downstream,
-                      include_future: future,
-                      include_past: past,
-                      include_upstream: upstream,
-                      map_index: ti.map_index,
-                      new_state: state,
-                      note,
-                      task_id: ti.task_id,
-                    })),
-                    update_mask: note === null ? ["new_state"] : ["new_state", "note"],
+                    disabled: !hasLogicalDate,
+                    label: translate("dags:runAndTaskActions.options.past"),
+                    value: "past",
                   },
-                ],
-              });
-            }}
-          >
-            {translate("modal.confirm")}
-          </Button>
-        }
-        onOpenChange={onClose}
-        open={open}
-        title={
-          <>
-            {translate("dags:runAndTaskActions.markAs.title", {
-              state,
-              type: translate("taskInstance_other"),
-            })}{" "}
-            <StateBadge state={state} />
-          </>
-        }
-      >
-        <Flex justifyContent="center" mb={4}>
-          <SegmentedControl
-            defaultValues={[]}
-            multiple
-            onChange={setSelectedOptions}
-            options={[
-              {
-                disabled: !hasLogicalDate || hasRegional,
-                label: translate("dags:runAndTaskActions.options.past"),
-                value: "past",
-              },
-              {
-                disabled: !hasLogicalDate || hasRegional,
-                label: translate("dags:runAndTaskActions.options.future"),
-                value: "future",
-              },
-              {
-                label: translate("dags:runAndTaskActions.options.upstream"),
-                value: "upstream",
-              },
-              {
-                label: translate("dags:runAndTaskActions.options.downstream"),
-                value: "downstream",
-              },
-            ]}
-          />
-        </Flex>
-        <ActionAccordion affectedTasks={affectedTasks} groupByRunId note={note} setNote={setNote} />
-        <ActionErrors actionResponse={data?.update} error={error} />
-      </Modal>
+                  {
+                    disabled: !hasLogicalDate,
+                    label: translate("dags:runAndTaskActions.options.future"),
+                    value: "future",
+                  },
+                  {
+                    label: translate("dags:runAndTaskActions.options.upstream"),
+                    value: "upstream",
+                  },
+                  {
+                    label: translate("dags:runAndTaskActions.options.downstream"),
+                    value: "downstream",
+                  },
+                ]}
+              />
+            </Flex>
+            <ActionAccordion affectedTasks={affectedTasks} groupByRunId note={note} setNote={setNote} />
+            <ErrorAlert error={error} />
+            <Flex justifyContent="end" mt={3}>
+              <Button
+                colorPalette="brand"
+                disabled={affectedTasks.total_entries === 0}
+                loading={isPending || isFetching}
+                onClick={() => {
+                  bulkAction({
+                    actions: [
+                      {
+                        action: "update" as const,
+                        action_on_non_existence: "skip",
+                        entities: directlyAffected.map((ti) => ({
+                          dag_id: ti.dag_id,
+                          dag_run_id: ti.dag_run_id,
+                          include_downstream: downstream,
+                          include_future: future,
+                          include_past: past,
+                          include_upstream: upstream,
+                          map_index: ti.map_index,
+                          new_state: state,
+                          note,
+                          task_id: ti.task_id,
+                        })),
+                        update_mask: note === null ? ["new_state"] : ["new_state", "note"],
+                      },
+                    ],
+                  });
+                }}
+              >
+                {translate("modal.confirm")}
+              </Button>
+            </Flex>
+          </Dialog.Body>
+        </Dialog.Content>
+      </Dialog.Root>
     </Box>
   );
 };

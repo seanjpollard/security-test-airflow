@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 import sqlparse
 from attrs import define
@@ -472,55 +472,27 @@ class SQLParser(LoggingMixin):
         return hierarchy
 
 
-def get_sql_parser_for_hook(hook: DbApiHook, connection: Any, conn_id: str | None) -> SQLParser | None:
-    get_dialect = getattr(hook, "get_openlineage_database_dialect", None)
-    get_default_schema = getattr(hook, "get_openlineage_default_schema", None)
-    if get_dialect is None or get_default_schema is None:
-        log.debug("%s has no database dialect or default schema provided", conn_id)
-        return None
-    try:
-        return SQLParser(dialect=get_dialect(connection), default_schema=get_default_schema())
-    except Exception as e:
-        log.warning("Failed to get OpenLineage database dialect or default schema for %s: %s", conn_id, e)
-        log.debug("OpenLineage failure details:", exc_info=True)
-        return None
-
-
 def get_openlineage_facets_with_sql(
-    hook: DbApiHook,
-    sql: str | list[str],
-    conn_id: str,
-    database: str | None,
-    use_connection: bool = True,
-    *,
-    connection: Any | None = None,
-    database_info: Any | None = None,
-    sql_parser: SQLParser | None = None,
+    hook: DbApiHook, sql: str | list[str], conn_id: str, database: str | None, use_connection: bool = True
 ) -> OperatorLineage | None:
-    # Accept pre-fetched connection, database_info and sql_parser to avoid redundant lookups
-    # when processing multiple SQL extras from the same hook. Each get_connection() call
-    # hits SecretsManager (miss) then the Airflow API server — passing these in avoids that cost.
-    # A failing dialect/default schema lookup is then also reported once per hook, not once per query.
-    if connection is None:
-        connection = hook.get_connection(conn_id)
+    connection = hook.get_connection(conn_id)
+    try:
+        database_info = hook.get_openlineage_database_info(connection)
+    except AttributeError:
+        database_info = None
 
     if database_info is None:
-        get_database_info = getattr(hook, "get_openlineage_database_info", None)
-        if get_database_info is not None:
-            try:
-                database_info = get_database_info(connection)
-            except Exception as e:
-                log.warning("Failed to get OpenLineage database info for %s: %s", conn_id, e)
-                log.debug("OpenLineage failure details:", exc_info=True)
-
-    if database_info is None:
-        log.debug("%s has no database info provided", conn_id)
+        log.debug("%s has no database info provided", hook)
         return None
 
-    if sql_parser is None:
-        sql_parser = get_sql_parser_for_hook(hook, connection, conn_id)
-        if sql_parser is None:
-            return None
+    try:
+        sql_parser = SQLParser(
+            dialect=hook.get_openlineage_database_dialect(connection),
+            default_schema=hook.get_openlineage_default_schema(),
+        )
+    except AttributeError:
+        log.debug("%s failed to get database dialect", hook)
+        return None
 
     sqlalchemy_engine = None
     if use_connection:

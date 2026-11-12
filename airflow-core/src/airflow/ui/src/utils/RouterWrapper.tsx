@@ -17,7 +17,6 @@
  * under the License.
  */
 import type { PropsWithChildren } from "react";
-
 import { MemoryRouter } from "react-router-dom";
 
 export const RouterWrapper = ({ children }: PropsWithChildren) => <MemoryRouter>{children}</MemoryRouter>;

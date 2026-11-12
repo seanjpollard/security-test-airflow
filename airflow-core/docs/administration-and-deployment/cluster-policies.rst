@@ -37,24 +37,10 @@ There are three main types of cluster policy:
   task running in a DagRun. The ``task_policy`` defined is applied to all the task instances that will be
   executed in the future.
 * ``task_instance_mutation_hook``: Takes a :class:`~airflow.models.taskinstance.TaskInstance` parameter called
-  ``task_instance`` and an optional :class:`~airflow.models.dagrun.DagRun` parameter called ``dag_run``. The
-  ``task_instance_mutation_hook`` applies not to a task but to the instance of a task that
-  relates to a particular DagRun. It is executed scheduler-side while task instances are created or
-  reconciled (not in the Dag file processor, and not on the worker). The policy is only applied to the
-  currently executed run (i.e. instance) of that task. The policy can run more than once for the same task
-  instance, for example when it is created or reconciled, so implementations should be idempotent. It also
-  runs when a retry is scheduled, with ``task_instance.try_number`` set to the attempt about to run. The
-  ``dag_run`` argument lets the policy route on run configuration (``dag_run.conf``); it may be ``None`` in
-  early task-instance construction, and a hook that only declares ``task_instance`` keeps working
-  unchanged. Note that ``dag_run.conf`` is only populated for manually triggered or API-triggered runs;
-  scheduled runs carry an empty ``conf``.
-
-.. warning::
-
-    ``task_instance_mutation_hook`` runs inside a scheduler transaction that prohibits committing the
-    session. Do not open a new database session or commit from within the hook -- in particular, do not
-    call ``task_instance.get_dagrun()`` without passing the active session, as the resulting commit
-    crashes the scheduler. Use the ``dag_run`` argument to read run configuration instead.
+  ``task_instance``. The ``task_instance_mutation_hook`` applies not to a task but to the instance of a task that
+  relates to a particular DagRun. It is executed in a "worker", not in the Dag file processor, just before the
+  task instance is executed. The policy is only applied to the currently executed run (i.e. instance) of that
+  task.
 
 The Dag and Task cluster policies can raise the  :class:`~airflow.exceptions.AirflowClusterPolicyViolation`
 exception to indicate that the Dag/task they were passed is not compliant and should not be loaded.
@@ -69,7 +55,7 @@ cluster policy's value will take precedence.
 
 .. _administration-and-deployment:cluster-policies-define:
 
-How to define a policy function
+How do define a policy function
 -------------------------------
 
 There are two ways to configure cluster policies:
@@ -168,7 +154,7 @@ Here's an example of enforcing a maximum timeout policy on every task:
         :start-after: [START example_task_cluster_policy]
         :end-before: [END example_task_cluster_policy]
 
-You could also implement cluster policies to protect against common errors, rather than as technical security controls. For example, don't run tasks without Airflow owners:
+You could also implement to protect against common errors, rather than as technical security controls. For example, don't run tasks without Airflow owners:
 
 .. literalinclude:: /../tests/unit/cluster_policies/__init__.py
         :language: python
@@ -213,7 +199,7 @@ Two functions can be overridden:
 
 * ``create_metadata_engine(sql_alchemy_conn, *, engine_args, connect_args) -> Engine`` — called by
   ``configure_orm()`` to create the synchronous metadata engine.
-* ``create_async_metadata_engine(sql_alchemy_conn_async, *, connect_args, engine_args) -> AsyncEngine`` — called by
+* ``create_async_metadata_engine(sql_alchemy_conn_async, *, connect_args) -> AsyncEngine`` — called by
   ``_configure_async_session()`` to create the asynchronous metadata engine.
 
 The default implementations call ``sqlalchemy.create_engine`` / ``sqlalchemy.ext.asyncio.create_async_engine``
@@ -234,7 +220,7 @@ Example: registering a ``do_connect`` handler that refreshes a JWT token before 
         dbapi_connection.execute(f"SET SESSION AUTHORIZATION '{token}'")
 
 
-    def create_metadata_engine(sql_alchemy_conn, *, engine_args, connect_args) -> Engine:
+    def create_metadata_engine(sql_alchemy_conn, *, engine_args, connect_args):
         engine = create_engine(
             sql_alchemy_conn,
             connect_args=connect_args,
@@ -242,21 +228,4 @@ Example: registering a ``do_connect`` handler that refreshes a JWT token before 
             future=True,
         )
         event.listen(engine, "do_connect", _refresh_jwt)
-        return engine
-
-
-    def create_async_metadata_engine(sql_alchemy_conn_async, *, connect_args, engine_args) -> AsyncEngine:
-        connect_args["ssl"] = "require"
-        engine = create_async_engine(
-            sql_alchemy_conn_async,
-            connect_args=connect_args,
-            **engine_args,
-            future=True,
-        )
-
-        @event.listens_for(engine.sync_engine, "do_connect")
-        def provide_token(dialect, conn_rec, cargs, cparams):
-            token = my_token_provider.get_token(user=cparams["user"], host=cparams["host"], port=cparams["port"])
-            cparams["password"] = token
-
         return engine

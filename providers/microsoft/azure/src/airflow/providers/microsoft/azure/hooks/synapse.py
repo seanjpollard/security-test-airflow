@@ -16,7 +16,6 @@
 # under the License.
 from __future__ import annotations
 
-import json
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -30,7 +29,6 @@ from azure.synapse.artifacts import ArtifactsClient
 from azure.synapse.artifacts.aio import ArtifactsClient as AsyncArtifactsClient
 from azure.synapse.spark import SparkClient
 
-from airflow.providers.common.compat.connection import get_async_connection
 from airflow.providers.common.compat.sdk import AirflowException, AirflowTaskTimeout, BaseHook
 from airflow.providers.microsoft.azure.utils import (
     add_managed_identity_connection_widgets,
@@ -491,9 +489,8 @@ class AzureSynapsePipelineAsyncHook(AzureSynapsePipelineHook):
         if self._async_conn is not None:
             return self._async_conn
 
-        conn = await get_async_connection(self.conn_id)
-        # extra_dejson can call mask_secret -> sync send on the triggerer loop.
-        extras = json.loads(conn.extra) if conn.extra else {}
+        conn = self.get_connection(self.conn_id)
+        extras = conn.extra_dejson
         tenant = self._get_field(extras, "tenantId")
 
         credential: AsyncCredentials

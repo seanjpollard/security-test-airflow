@@ -54,7 +54,7 @@ Configuration Steps
 
    .. code-block:: ini
 
-      [core]
+      [webserver]
       auth_manager = airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
 
    This replaces the default ``SimpleAuthManager``.
@@ -99,36 +99,57 @@ Configuration Steps
 
 4. **Configure OAuth2 Provider**
 
-   Define ``OAUTH_PROVIDERS`` in the same ``webserver_config.py`` file as ``AUTH_TYPE``.
-   This is a Flask AppBuilder setting read from that file, not an Airflow configuration
-   option, so it cannot be set in ``airflow.cfg`` or through an ``AIRFLOW__FAB__``
-   environment variable.
+   FAB Auth Manager reads provider configuration from the ``[fab]`` section
+   of ``airflow.cfg`` or from environment variables.
 
-   .. code-block:: python
+   **Option A: Environment Variables (Recommended)**
 
-      OAUTH_PROVIDERS = [
-          {
-              "name": "generic",
-              "icon": "fa-circle",
-              "token_key": "access_token",
-              "remote_app": {
-                  "client_id": "your-client-id",
-                  "client_secret": "your-client-secret",
-                  "api_base_url": "https://provider.com/oauth/",
-                  "request_token_url": None,
-                  "access_token_url": "https://provider.com/oauth/token",
-                  "authorize_url": "https://provider.com/oauth/authorize",
-              },
+   .. code-block:: bash
+
+      export AIRFLOW__FAB__OAUTH_PROVIDERS='[{
+         "name": "generic",
+         "icon": "fa-circle",
+         "token_key": "access_token",
+         "remote_app": {
+           "client_id": "your-client-id",
+           "client_secret": "your-client-secret",
+           "api_base_url": "https://provider.com/oauth/",
+           "request_token_url": null,
+           "access_token_url": "https://provider.com/oauth/token",
+           "authorize_url": "https://provider.com/oauth/authorize"
+         }
+      }]'
+
+   **Option B: Configuration File**
+
+   Add to your ``airflow.cfg``:
+
+   .. code-block:: ini
+
+      [fab]
+      oauth_providers = [
+        {
+          "name": "generic",
+          "icon": "fa-circle",
+          "token_key": "access_token",
+          "remote_app": {
+            "client_id": "your-client-id",
+            "client_secret": "your-client-secret",
+            "api_base_url": "https://provider.com/oauth/",
+            "request_token_url": null,
+            "access_token_url": "https://provider.com/oauth/token",
+            "authorize_url": "https://provider.com/oauth/authorize"
           }
+        }
       ]
 
    Adjust these values according to your provider's documentation.
 
-5. **Restart Airflow API Server**
+5. **Restart Airflow Webserver**
 
    .. code-block:: bash
 
-      airflow api-server
+      airflow webserver --reload
 
 6. **Test SSO Login**
 
@@ -139,68 +160,45 @@ Provider Examples
 
 **Okta**
 
-.. code-block:: python
+.. code-block:: bash
 
-   OAUTH_PROVIDERS = [
-       {
-           "name": "okta",
-           "icon": "fa-circle",
-           "token_key": "access_token",
-           "remote_app": {
-               "client_id": "your-client-id",
-               "client_secret": "your-client-secret",
-               "api_base_url": "https://your-org.okta.com/oauth2/default",
-               "request_token_url": None,
-               "access_token_url": "https://your-org.okta.com/oauth2/default/v1/token",
-               "authorize_url": "https://your-org.okta.com/oauth2/default/v1/authorize",
-           },
-       }
-   ]
+   export AIRFLOW__FAB__OAUTH_PROVIDERS='[{
+      "name": "okta",
+      "icon": "fa-circle",
+      "token_key": "access_token",
+      "remote_app": {
+        "client_id": "your-client-id",
+        "client_secret": "your-client-secret",
+        "api_base_url": "https://your-org.okta.com/oauth2/default",
+        "request_token_url": null,
+        "access_token_url": "https://your-org.okta.com/oauth2/default/v1/token",
+        "authorize_url": "https://your-org.okta.com/oauth2/default/v1/authorize"
+      }
+   }]'
 
 .. seealso::
    For detailed Okta setup instructions, see the `Okta OAuth2 documentation <https://developer.okta.com/docs/guides/implement-oauth/>`_.
 
 **Azure Entra ID (Azure AD)**
 
-.. code-block:: python
+.. code-block:: bash
 
-   OAUTH_PROVIDERS = [
-       {
-           "name": "azure",
-           "icon": "fa-circle",
-           "token_key": "access_token",
-           "remote_app": {
-               "client_id": "your-client-id",
-               "client_secret": "your-client-secret",
-               "api_base_url": "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/",
-               "request_token_url": None,
-               "access_token_url": "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token",
-               "authorize_url": "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/authorize",
-               "client_kwargs": {"scope": "openid email profile"},
-           },
-       }
-   ]
-
-.. note::
-   The ``<tenant-id>`` in the Azure endpoints can be specified as a tenant GUID
-   (e.g., ``72f988bf-86f1-41af-91ab-2d7cd011db47``) or as a tenant domain (e.g.,
-   ``contoso.onmicrosoft.com`` or ``example.com``). Alternatively, you can specify
-   the tenant explicitly by setting ``tenant_id`` inside ``client_kwargs``. Tenant-agnostic
-   authorities (``common``, ``organizations``, ``consumers``) are not accepted; configure a
-   specific tenant GUID or domain instead.
-
-.. note::
-   National clouds are supported by pointing the endpoints at their authority host:
-   ``login.microsoftonline.us`` (Azure Government) or ``login.partner.microsoftonline.cn``
-   (Azure operated by 21Vianet). The issuer and the signing key set are then read from that
-   tenant's own OpenID metadata, so no extra configuration is needed. Azure AD B2C
-   (``<tenant>.b2clogin.com``) is not supported, because its metadata is addressed by policy
-   rather than by tenant alone.
-
-   Configuring a tenant domain, or any national-cloud tenant, makes an outbound HTTPS request
-   to the authority's OpenID discovery endpoint the first time a user logs in. The result is
-   cached for the lifetime of the process. Deployments with restricted egress must allow that
-   host.
+   export AIRFLOW__FAB__OAUTH_PROVIDERS='[{
+      "name": "azure",
+      "icon": "fa-circle",
+      "token_key": "access_token",
+      "remote_app": {
+        "client_id": "your-client-id",
+        "client_secret": "your-client-secret",
+        "api_base_url": "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/",
+        "request_token_url": null,
+        "access_token_url": "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token",
+        "authorize_url": "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/authorize",
+        "client_kwargs": {
+          "scope": "openid email profile"
+        }
+      }
+   }]'
 
 .. seealso::
    For Azure app registration and OAuth setup, see :doc:`apache-airflow-providers-microsoft-azure:connections/azure`
@@ -267,24 +265,24 @@ Provider Examples
 
 **Google OAuth2**
 
-.. code-block:: python
+.. code-block:: bash
 
-   OAUTH_PROVIDERS = [
-       {
-           "name": "google",
-           "icon": "fa-google",
-           "token_key": "access_token",
-           "remote_app": {
-               "client_id": "your-client-id.googleusercontent.com",
-               "client_secret": "your-client-secret",
-               "api_base_url": "https://www.googleapis.com/oauth2/v2/",
-               "request_token_url": None,
-               "access_token_url": "https://oauth2.googleapis.com/token",
-               "authorize_url": "https://accounts.google.com/o/oauth2/auth",
-               "client_kwargs": {"scope": "openid email profile"},
-           },
-       }
-   ]
+   export AIRFLOW__FAB__OAUTH_PROVIDERS='[{
+      "name": "google",
+      "icon": "fa-google",
+      "token_key": "access_token",
+      "remote_app": {
+        "client_id": "your-client-id.googleusercontent.com",
+        "client_secret": "your-client-secret",
+        "api_base_url": "https://www.googleapis.com/oauth2/v2/",
+        "request_token_url": null,
+        "access_token_url": "https://oauth2.googleapis.com/token",
+        "authorize_url": "https://accounts.google.com/o/oauth2/auth",
+        "client_kwargs": {
+          "scope": "openid email profile"
+        }
+      }
+   }]'
 
 .. seealso::
    For Google OAuth setup and credential configuration, see :doc:`apache-airflow-providers-google:connections/gcp`
@@ -299,14 +297,12 @@ Troubleshooting
 
   - Check Airflow and webserver logs for detailed error messages
   - Ensure all environment variables are set and exported correctly
-  - Verify callback URLs in your SSO provider match your Airflow webserver URL (typically ``http://your-airflow-domain/auth/oauth-authorized/<provider>``)
+  - Verify callback URLs in your SSO provider match your Airflow webserver URL (typically ``http://your-airflow-domain/oauth-authorized``)
 
 - **Redirect URI mismatch**:
 
-  - In your OAuth provider, set the redirect URI to: ``http://your-airflow-domain/auth/oauth-authorized/<provider>``,
-    where ``<provider>`` is the ``name`` you gave it in ``OAUTH_PROVIDERS``
-  - For development, this might be: ``http://localhost:8080/auth/oauth-authorized/google``
-  - On Airflow 2 the path had no ``/auth`` prefix: ``http://your-airflow-domain/oauth-authorized/<provider>``
+  - In your OAuth provider, set the redirect URI to: ``http://your-airflow-domain/oauth-authorized``
+  - For development, this might be: ``http://localhost:8080/oauth-authorized``
 
 - **Scope-related errors**:
 

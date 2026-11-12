@@ -26,27 +26,22 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import NoResultFound
 
 from airflow.api.common.trigger_dag import trigger_dag
-from airflow.api_fastapi.common.dagbag import DagBagDep, get_dag_for_run, resolve_run_on_latest_version
-from airflow.api_fastapi.common.db.common import AsyncSessionDep, SessionDep
+from airflow.api_fastapi.common.dagbag import DagBagDep, get_dag_for_run
+from airflow.api_fastapi.common.db.common import SessionDep
 from airflow.api_fastapi.common.types import UtcDateTime
 from airflow.api_fastapi.compat import HTTP_422_UNPROCESSABLE_CONTENT
 from airflow.api_fastapi.execution_api.datamodels.dagrun import DagRunStateResponse, TriggerDAGRunPayload
 from airflow.api_fastapi.execution_api.datamodels.taskinstance import DagRun
 from airflow.api_fastapi.execution_api.datamodels.token import TIToken
-from airflow.api_fastapi.execution_api.security import (
-    CurrentTIToken,
-    DagInGrantedBundle,
-    ExecutionAPIRoute,
-    ExecutionOrDagParseToken,
-)
-from airflow.exceptions import DagNotPartitionedError, DagRunAlreadyExists, InvalidPartitionKeyError
+from airflow.api_fastapi.execution_api.security import CurrentTIToken
+from airflow.exceptions import DagRunAlreadyExists
 from airflow.models.dag import DagModel
 from airflow.models.dagrun import DagRun as DagRunModel
 from airflow.models.taskinstance import TaskInstance
 from airflow.utils.state import DagRunState
 from airflow.utils.types import DagRunTriggeredByType, DagRunType
 
-router = VersionedAPIRouter(route_class=ExecutionAPIRoute)
+router = VersionedAPIRouter()
 
 log = logging.getLogger(__name__)
 
@@ -158,24 +153,6 @@ def trigger_dag_run(
                 "message": f"A run already exists for Dag '{dag_id}' with run_id '{run_id}'",
             },
         )
-    except DagNotPartitionedError as e:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail={"reason": "not_partitioned", "message": str(e)},
-        )
-    except InvalidPartitionKeyError as e:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail={"reason": "invalid_partition_key", "message": str(e)},
-        ) from e
-    except ValueError as e:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail={
-                "reason": "value_error",
-                "message": str(e),
-            },
-        ) from e
 
 
 @router.post(
@@ -220,25 +197,22 @@ def clear_dag_run(
         )
     dag = get_dag_for_run(dag_bag, dag_run=dag_run, session=session)
 
-    resolved_run_on_latest = resolve_run_on_latest_version(None, dag_id, session)
-    dag.clear(run_id=run_id, run_on_latest_version=resolved_run_on_latest)
+    dag.clear(run_id=run_id)
 
 
 @router.get(
     "/{dag_id}/{run_id}/state",
     responses={status.HTTP_404_NOT_FOUND: {"description": "Dag run not found"}},
 )
-async def get_dagrun_state(
+def get_dagrun_state(
     dag_id: str,
     run_id: str,
-    session: AsyncSessionDep,
+    session: SessionDep,
 ) -> DagRunStateResponse:
     """Get a Dag run State."""
     try:
-        state: DagRunState = (
-            await session.scalars(
-                select(DagRunModel.state).where(DagRunModel.dag_id == dag_id, DagRunModel.run_id == run_id)
-            )
+        state: DagRunState = session.scalars(
+            select(DagRunModel.state).where(DagRunModel.dag_id == dag_id, DagRunModel.run_id == run_id)
         ).one()
     except NoResultFound:
         raise HTTPException(
@@ -252,9 +226,9 @@ async def get_dagrun_state(
 
 
 @router.get("/count", status_code=status.HTTP_200_OK)
-async def get_dr_count(
+def get_dr_count(
     dag_id: str,
-    session: AsyncSessionDep,
+    session: SessionDep,
     logical_dates: Annotated[list[UtcDateTime] | None, Query()] = None,
     run_ids: Annotated[list[str] | None, Query()] = None,
     states: Annotated[list[str] | None, Query()] = None,
@@ -267,14 +241,10 @@ async def get_dr_count(
         stmt = stmt.where(DagRunModel.run_id.in_(run_ids))
     if states:
         stmt = stmt.where(DagRunModel.state.in_(states))
-    return (await session.scalar(stmt)) or 0
+    return session.scalar(stmt) or 0
 
 
-@router.get(
-    "/previous",
-    status_code=status.HTTP_200_OK,
-    dependencies=[ExecutionOrDagParseToken, DagInGrantedBundle],
-)
+@router.get("/previous", status_code=status.HTTP_200_OK)
 def get_previous_dagrun(
     dag_id: str,
     logical_date: UtcDateTime,

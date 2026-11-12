@@ -16,10 +16,9 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useEffect, useState } from "react";
-
-import { Box, Button, Input, Text, VStack } from "@chakra-ui/react";
+import { Button, Box, Heading, Input, Text, VStack } from "@chakra-ui/react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -30,10 +29,8 @@ import {
   useXcomServiceUpdateXcomEntry,
 } from "openapi/queries";
 import type { XComResponseNative } from "openapi/requests/types.gen";
-
-import { Modal, ProgressBar, toaster } from "src/system-components";
-
 import { JsonEditor } from "src/components/JsonEditor";
+import { Dialog, ProgressBar, toaster } from "src/components/ui";
 
 type XComModalProps = {
   readonly dagId: string;
@@ -41,25 +38,12 @@ type XComModalProps = {
   readonly mapIndex: number;
   readonly mode: "add" | "edit";
   readonly onClose: () => void;
-  readonly regionId?: string;
-  readonly regionIndex?: number;
   readonly runId: string;
   readonly taskId: string;
   readonly xcomKey?: string;
 };
 
-const XComModal = ({
-  dagId,
-  isOpen,
-  mapIndex,
-  mode,
-  onClose,
-  regionId,
-  regionIndex,
-  runId,
-  taskId,
-  xcomKey,
-}: XComModalProps) => {
+const XComModal = ({ dagId, isOpen, mapIndex, mode, onClose, runId, taskId, xcomKey }: XComModalProps) => {
   const { t: translate } = useTranslation(["browse", "common"]);
   const queryClient = useQueryClient();
   const [key, setKey] = useState("");
@@ -72,12 +56,8 @@ const XComModal = ({
     {
       dagId,
       dagRunId: runId,
-      // Editing needs the stored type; display deserialization can parse JSON-looking strings.
-      deserialize: false,
+      deserialize: true,
       mapIndex,
-      regionId,
-      regionIndex,
-      stringify: false,
       taskId,
       xcomKey: xcomKey ?? "",
     },
@@ -90,7 +70,7 @@ const XComModal = ({
     if (isOpen && isEditMode && data) {
       const val = data.value;
 
-      setValue(JSON.stringify(val, undefined, 2));
+      setValue(typeof val === "string" ? val : JSON.stringify(val, undefined, 2));
     }
   }, [data, isEditMode, isOpen]);
 
@@ -164,8 +144,6 @@ const XComModal = ({
         dagRunId: runId,
         requestBody: {
           map_index: mapIndex,
-          region_id: regionId,
-          region_index: regionIndex,
           value: parsedValue,
         },
         taskId,
@@ -178,8 +156,6 @@ const XComModal = ({
         requestBody: {
           key,
           map_index: mapIndex,
-          region_id: regionId,
-          region_index: regionIndex,
           value: parsedValue,
         },
         taskId,
@@ -191,41 +167,46 @@ const XComModal = ({
   const title = isEditMode ? translate("browse:xcom.edit.title") : translate("browse:xcom.add.title");
 
   return (
-    <Modal
-      footerActions={
-        <Button disabled={isLoading || (!isEditMode && !key)} loading={isPending} onClick={onSave}>
-          {translate("common:modal.save")}
-        </Button>
-      }
-      lazyMount
-      onOpenChange={onClose}
-      open={isOpen}
-      size="lg"
-      title={title}
-    >
-      {isLoading ? (
-        <ProgressBar size="xs" />
-      ) : (
-        <VStack gap={4}>
-          <Box width="100%">
-            <Text fontWeight="bold" mb={2}>
-              {translate("browse:xcom.key")}
-            </Text>
-            {isEditMode ? (
-              <Text>{xcomKey}</Text>
-            ) : (
-              <Input onChange={(event) => setKey(event.target.value)} value={key} />
-            )}
-          </Box>
-          <Box width="100%">
-            <Text fontWeight="bold" mb={2}>
-              {translate("browse:xcom.value")}
-            </Text>
-            <JsonEditor onChange={(val) => setValue(val)} value={value} />
-          </Box>
-        </VStack>
-      )}
-    </Modal>
+    <Dialog.Root lazyMount onOpenChange={onClose} open={isOpen} size="lg">
+      <Dialog.Content backdrop>
+        <Dialog.Header>
+          <Heading size="lg">{title}</Heading>
+        </Dialog.Header>
+        <Dialog.CloseTrigger />
+        <Dialog.Body>
+          {isLoading ? (
+            <ProgressBar size="xs" />
+          ) : (
+            <VStack gap={4}>
+              <Box width="100%">
+                <Text fontWeight="bold" mb={2}>
+                  {translate("browse:xcom.key")}
+                </Text>
+                {isEditMode ? (
+                  <Text>{xcomKey}</Text>
+                ) : (
+                  <Input onChange={(event) => setKey(event.target.value)} value={key} />
+                )}
+              </Box>
+              <Box width="100%">
+                <Text fontWeight="bold" mb={2}>
+                  {translate("browse:xcom.value")}
+                </Text>
+                <JsonEditor onChange={(val) => setValue(val)} value={value} />
+              </Box>
+            </VStack>
+          )}
+        </Dialog.Body>
+        <Dialog.Footer>
+          <Button onClick={onClose} variant="outline">
+            {translate("common:modal.cancel")}
+          </Button>
+          <Button disabled={isLoading || (!isEditMode && !key)} loading={isPending} onClick={onSave}>
+            {translate("common:modal.save")}
+          </Button>
+        </Dialog.Footer>
+      </Dialog.Content>
+    </Dialog.Root>
   );
 };
 

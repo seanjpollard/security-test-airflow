@@ -21,11 +21,8 @@ import { useTranslation } from "react-i18next";
 import { Link as RouterLink } from "react-router-dom";
 
 import type { TaskInstanceStateCount } from "openapi/requests/types.gen";
-
 import { StateBadge } from "src/components/StateBadge";
-
 import { SearchParamsKeys } from "src/constants/searchParams";
-import { formatNumber } from "src/utils";
 
 const BAR_WIDTH = 100;
 const BAR_HEIGHT = 5;
@@ -33,7 +30,6 @@ const BAR_HEIGHT = 5;
 type MetricSectionProps = {
   readonly capped?: boolean;
   readonly endDate?: string;
-  readonly isTotalTruncated?: boolean;
   readonly kind: string;
   readonly runs: number;
   readonly startDate: string;
@@ -44,24 +40,21 @@ type MetricSectionProps = {
 export const MetricSection = ({
   capped = false,
   endDate,
-  isTotalTruncated = false,
   kind,
   runs,
   startDate,
   state,
   total,
 }: MetricSectionProps) => {
-  // A lower bound has no known proportion, so it deliberately fills the bar.
   const stateWidth = capped ? BAR_WIDTH : total === 0 ? 0 : (runs / total) * BAR_WIDTH;
   const remainingWidth = BAR_WIDTH - stateWidth;
-  const hidePercent = isTotalTruncated;
-  const statePercent = hidePercent ? undefined : total === 0 ? 0 : ((runs / total) * 100).toFixed(2);
+  const statePercent = capped ? undefined : total === 0 ? 0 : ((runs / total) * 100).toFixed(2);
 
   const stateParam = kind === "task_instances" ? SearchParamsKeys.TASK_STATE : SearchParamsKeys.STATE;
   const searchParams = new URLSearchParams(
     `?${stateParam}=${state}&${SearchParamsKeys.START_DATE_GTE}=${startDate}`,
   );
-  const { i18n, t: translate } = useTranslation();
+  const { t: translate } = useTranslation();
 
   if (endDate !== undefined) {
     searchParams.append(SearchParamsKeys.END_DATE, endDate);
@@ -74,7 +67,7 @@ export const MetricSection = ({
           <RouterLink to={`/${kind}?${searchParams.toString()}`}>
             <StateBadge fontSize="md" state={state === "no_status" ? null : state}>
               {}
-              {`${formatNumber(runs, i18n.language)}${capped ? "+" : ""}`}
+              {capped ? `${runs}+` : runs}
             </StateBadge>
           </RouterLink>
           <Text>{translate(`states.${state}`)}</Text>
@@ -85,7 +78,6 @@ export const MetricSection = ({
         <Box
           bg={`${state === "no_status" ? "none" : state}.solid`}
           borderLeftRadius={5}
-          borderRightRadius={remainingWidth === 0 ? 5 : 0} // When the state fills the whole bar, round the right side too since this is the only bar displayed
           height={`${BAR_HEIGHT}px`}
           minHeight={2}
           width={`${stateWidth}%`}

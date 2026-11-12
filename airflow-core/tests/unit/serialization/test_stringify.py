@@ -19,12 +19,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import ClassVar
-from unittest import mock
 
 import pytest
 
 from airflow._shared.module_loading import qualname
-from airflow.sdk import Asset, AssetAlias
 from airflow.sdk.serde import serialize
 from airflow.serialization.stringify import CLASSNAME, VERSION, stringify
 
@@ -44,11 +42,6 @@ class V:
     c: int
 
 
-@dataclass
-class Thing:
-    f: object
-
-
 class TestStringify:
     # Existing ported over tests
     def test_stringify(self):
@@ -66,30 +59,6 @@ class TestStringify:
 
         s = stringify(e)
         assert "t=(1, 2)" in s
-
-    def test_stringify_quotes_string_fields(self):
-        """String field values are repr-quoted so they read like a Pydantic/dataclass instance."""
-        e = {
-            CLASSNAME: "mymod.MyClass",
-            VERSION: 1,
-            "__data__": {"name": "alice", "age": 30, "active": True},
-        }
-        s = stringify(e)
-        assert "name='alice'" in s
-        assert "age=30" in s
-        assert "active=True" in s
-
-    def test_stringify_strips_dagbag_module_prefix(self):
-        """DagBag's ``unusual_prefix_<sha>_`` is stripped from the displayed classname."""
-        e = {
-            CLASSNAME: "unusual_prefix_" + "a" * 40 + "_my_dag.MyModel",
-            VERSION: 1,
-            "__data__": {"field": "value"},
-        }
-        s = stringify(e)
-        assert "unusual_prefix_" not in s
-        assert "my_dag.MyModel@version=1" in s
-        assert "field='value'" in s
 
     @pytest.mark.parametrize(
         ("value", "expected"),
@@ -225,7 +194,7 @@ class TestStringify:
         }
         result = stringify(e)
         assert "deltalake.table.DeltaTable@version=1" in result
-        assert "table_uri='s3://bucket/path'" in result
+        assert "table_uri=s3://bucket/path" in result
         assert "version=0" in result
 
     def test_stringify_empty_classname_error(self):
@@ -260,83 +229,9 @@ class TestStringify:
         result = stringify(e)
         assert result == {"key1": "(1,2)", "key2": "value"}
 
-    @pytest.mark.parametrize(
-        "value",
-        [
-            pytest.param(AssetAlias("x"), id="asset-alias"),
-            pytest.param(Asset("s3://bucket/key", extra={"a": [1, "b"]}), id="asset-with-nested-class"),
-        ],
-    )
-    def test_stringify_airflow_class_reads_like_repr(self, value):
-        assert stringify(serialize(value)) == repr(value)
+    def test_error_thrown_for_airflow_classes(self):
+        from airflow.sdk import AssetAlias
 
-    @pytest.mark.parametrize(
-        ("data", "expected"),
-        [
-            pytest.param(None, "Thing()", id="no-data"),
-            pytest.param("x", "Thing('x')", id="str"),
-            pytest.param(3, "Thing(3)", id="int"),
-            pytest.param([1, "a", {"k": "v"}], "Thing(1, 'a', {'k': 'v'})", id="list"),
-            pytest.param(
-                {"inner": {"__type": "dict", "__var": {"k": None}}}, "Thing(inner={'k': None})", id="old-dict"
-            ),
-        ],
-    )
-    def test_stringify_airflow_class_data_shapes(self, data, expected):
-        assert (
-            stringify({CLASSNAME: "airflow.sdk.definitions.asset.Thing", VERSION: 0, "__data__": data})
-            == expected
-        )
-
-    @pytest.mark.parametrize(
-        "field",
-        [
-            pytest.param(("a", "b"), id="tuple"),
-            pytest.param(("a",), id="single-tuple"),
-            pytest.param((), id="empty-tuple"),
-            pytest.param((1, ("x", (2,))), id="nested-tuple"),
-            pytest.param({"a"}, id="set"),
-            pytest.param(set(), id="empty-set"),
-            pytest.param(frozenset({"a"}), id="frozenset"),
-            pytest.param(frozenset(), id="empty-frozenset"),
-            pytest.param([("a",), {"k": ("v", 1)}], id="tuples-in-list-and-dict"),
-        ],
-    )
-    def test_stringify_airflow_class_collection_fields_read_like_repr(self, field):
-        e = {
-            CLASSNAME: "airflow.sdk.definitions.asset.Thing",
-            VERSION: 0,
-            "__data__": {"f": serialize(field)},
-        }
-        assert stringify(e) == repr(Thing(field))
-
-    @pytest.mark.parametrize(
-        ("data", "expected"),
-        [
-            pytest.param(
-                {"path": "s3://conn@bucket/key", "conn_id": "conn", "kwargs": {"key": "k", "token": "t"}},
-                "ObjectStoragePath('s3://conn@bucket/key')",
-                id="path",
-            ),
-            pytest.param(
-                {"uri": "s3://b", "options": {"token": "t"}}, "ObjectStoragePath('s3://b')", id="uri"
-            ),
-            pytest.param(
-                {"conn_id": "conn", "kwargs": {"anon": False}}, "ObjectStoragePath(...)", id="no-locator"
-            ),
-            pytest.param("s3://b", "ObjectStoragePath(...)", id="non-dict"),
-        ],
-    )
-    def test_stringify_airflow_class_with_custom_serialization_is_compact(self, data, expected):
-        e = {CLASSNAME: "airflow.sdk.io.path.ObjectStoragePath", VERSION: 1, "__data__": data}
-        assert stringify(e) == expected
-
-    @mock.patch("importlib.import_module", autospec=True)
-    def test_stringify_airflow_class_does_not_import_nested_class(self, import_module):
-        e = {
-            CLASSNAME: "airflow.sdk.definitions.asset.Outer",
-            VERSION: 1,
-            "__data__": {"inner": {CLASSNAME: "other.mod.Inner", VERSION: 2, "__data__": {"uri": "s3://b"}}},
-        }
-        assert stringify(e) == "Outer(inner=other.mod.Inner@version=2(uri='s3://b'))"
-        import_module.assert_not_called()
+        e = serialize(AssetAlias("x"))
+        with pytest.raises(ValueError, match="Cannot stringify Airflow class"):
+            stringify(e)

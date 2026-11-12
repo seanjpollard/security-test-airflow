@@ -112,6 +112,7 @@ class JiraHook(BaseHook):
         """Return custom UI field behaviour for Atlassian Jira Connection."""
         return {
             "hidden_fields": ["schema", "extra"],
+            "relabeling": {},
         }
 
 

@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # /// script
-# requires-python = ">=3.11,<3.12"
+# requires-python = ">=3.10,<3.11"
 # dependencies = [
 #   "rich>=13.6.0",
 # ]
@@ -40,7 +40,6 @@ from pathlib import Path
 from common_prek_utils import (
     AIRFLOW_ROOT_PATH,
     check_uv_version,
-    is_hidden_within_root,
 )
 
 CI = os.environ.get("CI")
@@ -139,7 +138,7 @@ def get_all_files(folder: str) -> list[str]:
         if (
             file.name not in ("conftest.py",)
             and not any(x.match(file.as_posix()) for x in exclude_regexps)
-            and not is_hidden_within_root(file, AIRFLOW_ROOT_PATH)
+            and not any(part.startswith(".") for part in file.parts)
         ):
             files_to_check.append(file.relative_to(AIRFLOW_ROOT_PATH).as_posix())
     return files_to_check
@@ -285,14 +284,12 @@ if console:
 else:
     print(f"Running mypy for folders: {mypy_folders}")
 
-# SKIP_BREEZE_PREK_HOOKS marks a CI run without the CI image (basic checks only, e.g. on the airflow-ctl
-# release branches), where mypy runs in its local virtualenv rather than being skipped with the image hooks.
-if CI and not os.environ.get("SKIP_BREEZE_PREK_HOOKS"):
+if CI:
     # In CI, run inside the breeze Docker image to avoid needing a local environment
     # and to not change uv.lock or synchronize dependencies.
     from common_prek_utils import (
         initialize_breeze_prek,
-        run_command_via_breeze_run,
+        run_command_via_breeze_shell,
     )
 
     initialize_breeze_prek(__name__, __file__)
@@ -305,13 +302,13 @@ if CI and not os.environ.get("SKIP_BREEZE_PREK_HOOKS"):
         print("No files to test. Quitting")
         sys.exit(0)
 
-    mypy_file_list = write_file_list(all_files_to_check, suffix=mypy_folders[0].replace("/", "-"))
-    file_argument_ci = f"@/files/{mypy_file_list.name}"
+    write_file_list(all_files_to_check)
+    file_argument_ci = "@/files/mypy_files.txt"
 
     mypy_cmd = (
         f"TERM=ansi mypy --follow-imports=silent {shlex.quote(file_argument_ci)} {' '.join(mypy_extra_args)}"
     )
-    result = run_command_via_breeze_run(
+    result = run_command_via_breeze_shell(
         cmd=["bash", "-c", mypy_cmd],
         warn_image_upgrade_needed=True,
         extra_env={

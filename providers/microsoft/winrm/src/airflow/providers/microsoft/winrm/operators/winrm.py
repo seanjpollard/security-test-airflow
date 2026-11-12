@@ -65,7 +65,6 @@ class WinRMOperator(BaseOperator):
     template_fields: Sequence[str] = (
         "command",
         "working_directory",
-        "ssh_conn_id",
     )
     template_fields_renderers = {"command": "powershell", "working_directory": "powershell"}
 

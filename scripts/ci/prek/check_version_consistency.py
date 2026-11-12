@@ -16,10 +16,11 @@
 # specific language governing permissions and limitations
 # under the License.
 # /// script
-# requires-python = ">=3.11,<3.12"
+# requires-python = ">=3.10,<3.11"
 # dependencies = [
 #   "rich>=13.6.0",
 #   "packaging>=25.0",
+#   "tomli>=2.0.1",
 # ]
 # ///
 from __future__ import annotations
@@ -27,7 +28,11 @@ from __future__ import annotations
 import ast
 import re
 import sys
-import tomllib
+
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib  # type: ignore[no-redef]
 
 from common_prek_utils import (
     AIRFLOW_CORE_SOURCES_PATH,

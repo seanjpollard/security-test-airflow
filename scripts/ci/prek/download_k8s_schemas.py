@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # /// script
-# requires-python = ">=3.11,<3.12"
+# requires-python = ">=3.10,<3.11"
 # dependencies = [
 #   "pyyaml>=6.0.3",
 #   "requests>=2.31.0",
@@ -43,12 +43,7 @@ from tempfile import NamedTemporaryFile
 
 import requests
 import yaml
-from common_prek_utils import (
-    AIRFLOW_ROOT_PATH,
-    console,
-    read_allowed_kubernetes_versions,
-    resolve_github_token,
-)
+from common_prek_utils import AIRFLOW_ROOT_PATH, console, read_allowed_kubernetes_versions
 
 KUBERNETES_VERSIONS = read_allowed_kubernetes_versions()
 DEFAULT_KUBERNETES_VERSION = KUBERNETES_VERSIONS[0]
@@ -68,7 +63,10 @@ VALUE_SETS: list[dict] = [
     {"executor": "CeleryKubernetesExecutor"},
     {"executor": "LocalExecutor"},
     {"executor": "LocalKubernetesExecutor"},
-    {"executor": "CeleryExecutor", "workers": {"celery": {"keda": {"enabled": True}}}},
+    {
+        "executor": "CeleryExecutor",
+        "workers": {"keda": {"enabled": True}},
+    },
     {"pgbouncer": {"enabled": True}},
     {
         "dags": {"persistence": {"enabled": True}},
@@ -88,7 +86,7 @@ VALUE_SETS: list[dict] = [
         "executor": "CeleryExecutor",
     },
     {
-        "workers": {"celery": {"hpa": {"enabled": True}}},
+        "workers": {"hpa": {"enabled": True}},
         "webserver": {
             "hpa": {"enabled": True},
             "podDisruptionBudget": {"enabled": True},
@@ -218,6 +216,8 @@ def download_schemas_for_version(
 
 
 def main() -> None:
+    import os
+
     parser = argparse.ArgumentParser(description="Download K8s JSON schemas for helm chart tests.")
     parser.add_argument(
         "--output-dir",
@@ -236,7 +236,15 @@ def main() -> None:
     output_dir: Path = args.output_dir
     versions: list[str] = args.versions if args.versions else KUBERNETES_VERSIONS
 
-    token = resolve_github_token()
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        # Try gh CLI
+        try:
+            result = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, check=False)
+            if result.returncode == 0 and result.stdout.strip():
+                token = result.stdout.strip()
+        except FileNotFoundError:
+            pass
 
     if token:
         console.print("[green]Using GitHub token for authenticated requests.[/]")

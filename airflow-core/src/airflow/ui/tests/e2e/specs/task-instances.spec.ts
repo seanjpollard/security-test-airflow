@@ -39,4 +39,9 @@ test.describe("Task Instances Page", () => {
     await taskInstancesPage.navigate();
     await taskInstancesPage.verifyStateFiltering("Failed", taskInstancesData.dagId);
   });
+
+  test("verify filtering by success state", async ({ taskInstancesData, taskInstancesPage }) => {
+    await taskInstancesPage.navigate();
+    await taskInstancesPage.verifyStateFiltering("Success", taskInstancesData.dagId);
+  });
 });

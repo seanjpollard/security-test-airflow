@@ -18,13 +18,12 @@
 from __future__ import annotations
 
 import copy
-from typing import Any
 
 from airflow.listeners import hookimpl
 
-changed: list[Any] = []
-created: list[Any] = []
-emitted: list[Any] = []
+changed = []
+created = []
+emitted = []
 
 
 @hookimpl

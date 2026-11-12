@@ -147,13 +147,11 @@ def _find_path_from_directory(
 
     :return: a generator of file paths which should not be ignored.
     """
-    # A Dict of patterns, keyed using the walked (not resolved) paths, so that a symlink switched
-    # during the walk (e.g. by git-sync) does not drop the patterns inherited by subdirectories
+    # A Dict of patterns, keyed using resolved, absolute paths
     patterns_by_dir: dict[Path, list[_IgnoreRule]] = {}
-    visited_dirs: set[Path] = set()
 
     for root, dirs, files in os.walk(base_dir_path, followlinks=True):
-        patterns: list[_IgnoreRule] = patterns_by_dir.get(Path(root), [])
+        patterns: list[_IgnoreRule] = patterns_by_dir.get(Path(root).resolve(), [])
 
         ignore_file_path = Path(root) / ignore_file_name
         if ignore_file_path.is_file():
@@ -174,20 +172,16 @@ def _find_path_from_directory(
                 # evaluation order of patterns is important with negation
                 # so that later patterns can override earlier patterns
 
-        # Kubernetes volume internals; the visible entries are symlinks through "..data" to the same files
-        if "..data" in dirs:
-            dirs[:] = [subdir for subdir in dirs if not subdir.startswith("..")]
         dirs[:] = [subdir for subdir in dirs if not ignore_rule_type.match(Path(root) / subdir, patterns)]
         # explicit loop for infinite recursion detection since we are following symlinks in this walk
         for sd in dirs:
             dirpath = (Path(root) / sd).resolve()
-            if dirpath in visited_dirs:
+            if dirpath in patterns_by_dir:
                 raise RuntimeError(
                     "Detected recursive loop when walking DAG directory "
                     f"{base_dir_path}: {dirpath} has appeared more than once."
                 )
-            visited_dirs.add(dirpath)
-            patterns_by_dir[Path(root) / sd] = patterns.copy()
+            patterns_by_dir.update({dirpath: patterns.copy()})
 
         for file in files:
             if file != ignore_file_name:

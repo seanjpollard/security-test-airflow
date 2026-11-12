@@ -269,6 +269,28 @@ class TestStatsd:
             "runAsNonRoot": True,
         }
 
+    def test_statsd_security_context_legacy(self):
+        docs = render_chart(
+            values={
+                "statsd": {
+                    "securityContext": {
+                        "fsGroup": 1000,
+                        "runAsGroup": 1001,
+                        "runAsNonRoot": True,
+                        "runAsUser": 2000,
+                    }
+                },
+            },
+            show_only=["templates/statsd/statsd-deployment.yaml"],
+        )
+
+        assert jmespath.search("spec.template.spec.securityContext", docs[0]) == {
+            "runAsUser": 2000,
+            "runAsGroup": 1001,
+            "fsGroup": 1000,
+            "runAsNonRoot": True,
+        }
+
     def test_statsd_resources_are_not_added_by_default(self):
         docs = render_chart(
             show_only=["templates/statsd/statsd-deployment.yaml"],
@@ -355,29 +377,6 @@ class TestStatsd:
             jmespath.search("spec.template.metadata.annotations", docs[0])["test_pod_annotation"]
             == "test_pod_annotation_value"
         )
-        assert "checksum/statsd-config" in jmespath.search("spec.template.metadata.annotations", docs[0])
-
-    @pytest.mark.parametrize(
-        "statsd_values",
-        [
-            pytest.param(
-                {"overrideMappings": [{"match": "foo.*", "name": "foo", "match_type": "regex"}]},
-                id="overrideMappings",
-            ),
-            pytest.param({"cache": {"ttl": "10m"}}, id="cache-ttl"),
-        ],
-    )
-    def test_configmap_checksum_should_change_with_configmap_data(self, statsd_values):
-        def get_checksum(values):
-            docs = render_chart(
-                values={"statsd": {"enabled": True, **values}},
-                show_only=["templates/statsd/statsd-deployment.yaml"],
-            )
-            annotations = jmespath.search("spec.template.metadata.annotations", docs[0]) or {}
-            assert "checksum/statsd-config" in annotations
-            return annotations["checksum/statsd-config"]
-
-        assert get_checksum(statsd_values) != get_checksum({})
 
     def test_should_add_custom_env_variables(self):
         env1 = {"name": "TEST_ENV_1", "value": "test_env_1"}
@@ -421,32 +420,6 @@ class TestStatsd:
             show_only=["templates/statsd/statsd-deployment.yaml"],
         )
         assert expected == jmespath.search("spec.template.spec.terminationGracePeriodSeconds", docs[0])
-
-
-class TestStatsdService:
-    """Tests statsd service."""
-
-    def test_ip_family_policy(self):
-        docs = render_chart(
-            values={
-                "statsd": {"enabled": True},
-                "ipFamilyPolicy": "PreferDualStack",
-                "ipFamilies": ["IPv4", "IPv6"],
-            },
-            show_only=["templates/statsd/statsd-service.yaml"],
-        )
-
-        assert jmespath.search("spec.ipFamilyPolicy", docs[0]) == "PreferDualStack"
-        assert jmespath.search("spec.ipFamilies", docs[0]) == ["IPv4", "IPv6"]
-
-    def test_ip_family_policy_not_set_by_default(self):
-        docs = render_chart(
-            values={"statsd": {"enabled": True}},
-            show_only=["templates/statsd/statsd-service.yaml"],
-        )
-
-        assert jmespath.search("spec.ipFamilyPolicy", docs[0]) is None
-        assert jmespath.search("spec.ipFamilies", docs[0]) is None
 
 
 class TestStatsdServiceAccount:

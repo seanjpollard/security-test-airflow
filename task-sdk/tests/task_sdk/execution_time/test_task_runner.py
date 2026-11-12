@@ -18,86 +18,57 @@
 from __future__ import annotations
 
 import contextlib
-import contextvars
 import functools
-import inspect
 import json
 import os
 import textwrap
 import time
 from collections.abc import Iterable
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest import mock
 from unittest.mock import call, patch
-from uuid import UUID
 
-import attrs
 import pandas as pd
 import pytest
-import structlog
-from opentelemetry import trace
+from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-from pydantic import BaseModel
 from task_sdk import FAKE_BUNDLE
 from uuid6 import uuid7
 
-from airflow._shared.observability.traces import (
-    OverrideableRandomIdGenerator,
-    new_dagrun_trace_carrier,
-    new_task_run_carrier,
-)
+from airflow._shared.observability.traces import OverrideableRandomIdGenerator, new_task_run_carrier
 from airflow.api_fastapi.execution_api.routes.task_instances import _emit_task_span
 from airflow.listeners import hookimpl
-from airflow.models.task_coordinates import TaskCoordinateResolver
 from airflow.providers.standard.operators.python import PythonOperator
-from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
-from airflow.providers.standard.triggers.temporal import DateTimeTrigger
 from airflow.sdk import (
     DAG,
     BaseOperator,
     BaseOperatorLink,
     Connection,
-    ExternalClearTarget,
     dag as dag_decorator,
     get_current_context,
     task as task_decorator,
-    task_group,
     timezone,
 )
 from airflow.sdk._shared.observability.metrics.base_stats_logger import StatsLogger
-from airflow.sdk._shared.secrets_masker import _secrets_masker
-from airflow.sdk._shared.state import AssetScope, TaskScope
 from airflow.sdk.api.datamodels._generated import (
     AssetProfile,
     AssetResponse,
     DagRun,
     DagRunState,
-    ExternalClearTargetPayload,
     PreviousTIResponse,
     TaskInstance,
     TaskInstanceState,
     TIRunContext,
 )
-from airflow.sdk.bases.operator import ExecutorSafeguard
 from airflow.sdk.bases.xcom import BaseXCom
-from airflow.sdk.coordinators._dag_importer import CoordinatorDagImporter
-from airflow.sdk.coordinators._subprocess import SubprocessCoordinator
-from airflow.sdk.definitions._internal.loop import create_loop
 from airflow.sdk.definitions._internal.types import NOTSET, SET_DURING_EXECUTION, is_arg_set
 from airflow.sdk.definitions.asset import Asset, AssetAlias, AssetUniqueKey, AssetUriRef, Dataset, Model
 from airflow.sdk.definitions.param import DagParam
-from airflow.sdk.definitions.retry_policy import (
-    ExceptionRetryPolicy,
-    RetryAction,
-    RetryDecision,
-    RetryPolicy,
-    RetryRule,
-)
 from airflow.sdk.exceptions import (
     AirflowException,
     AirflowFailException,
@@ -118,28 +89,28 @@ from airflow.sdk.execution_time.comms import (
     AssetResult,
     AssetsByAliasResult,
     BundleInfo,
-    ClearAssetStateStoreByName,
-    ClearTaskStateStore,
+    ClearAssetStateByName,
+    ClearTaskState,
     ConnectionResult,
     DagResult,
     DagRunStateResult,
     DeferTask,
-    DeleteAssetStateStoreByName,
-    DeleteTaskStateStore,
+    DeleteAssetStateByName,
+    DeleteTaskState,
     DRCount,
     ErrorResponse,
     GetAssetByUri,
     GetAssetsByAlias,
-    GetAssetStateStoreByName,
-    GetAssetStateStoreByUri,
+    GetAssetStateByName,
+    GetAssetStateByUri,
     GetConnection,
     GetDag,
     GetDagRunState,
     GetDRCount,
     GetPreviousDagRun,
     GetPreviousTI,
+    GetTaskState,
     GetTaskStates,
-    GetTaskStateStore,
     GetTICount,
     GetVariable,
     GetXCom,
@@ -151,12 +122,10 @@ from airflow.sdk.execution_time.comms import (
     PreviousTIResult,
     PrevSuccessfulDagRunResult,
     RescheduleTask,
-    RetryTask,
-    SetAssetStateStoreByName,
-    SetAssetStateStoreByUri,
-    SetExecutionTimeout,
+    SetAssetStateByName,
+    SetAssetStateByUri,
     SetRenderedFields,
-    SetTaskStateStore,
+    SetTaskState,
     SetXCom,
     SkipDownstreamTasks,
     StartupDetails,
@@ -166,7 +135,6 @@ from airflow.sdk.execution_time.comms import (
     TaskStatesResult,
     TICount,
     TriggerDagRun,
-    UpdateDagRunNote,
     ValidateInletsAndOutlets,
     VariableResult,
     XComResult,
@@ -177,26 +145,18 @@ from airflow.sdk.execution_time.context import (
     InletEventsAccessors,
     MacrosAccessor,
     OutletEventAccessors,
-    TaskStateStoreAccessor,
+    TaskStateAccessor,
     TriggeringAssetEventsAccessor,
     VariableAccessor,
-    _wrap_external_ref,
 )
-from airflow.sdk.execution_time.lazy_sequence import LazyXComSequence
 from airflow.sdk.execution_time.task_runner import (
     RuntimeTaskInstance,
     TaskRunnerMarker,
-    _axcom_push,
     _defer_task,
-    _find_native_dag_importer,
+    _execute_task,
     _make_task_span,
     _push_xcom_if_needed,
-    _register_deserialization_allowed_classes,
-    _run_execute_callable,
-    _serialize_outlet_events,
-    _TaskRunner,
     _xcom_push,
-    check_xcom_backend_supports_loops,
     finalize,
     get_startup_details,
     parse,
@@ -204,27 +164,17 @@ from airflow.sdk.execution_time.task_runner import (
     startup,
 )
 from airflow.sdk.execution_time.xcom import XCom
-from airflow.sdk.importers import DagSourceCode
 from airflow.sdk.serde import deserialize
-from airflow.sdk.state import BaseStoreBackend
 from airflow.triggers.base import BaseEventTrigger, BaseTrigger, TriggerEvent
 from airflow.triggers.callback import CallbackTrigger
 from airflow.triggers.testing import SuccessTrigger
 
 from tests_common.test_utils.config import conf_vars
 from tests_common.test_utils.mock_operators import AirflowLink
-from tests_common.test_utils.xcom_backends import SerializeValueOnlyXCom
 
 if TYPE_CHECKING:
     from kgb import SpyAgency
 import time_machine
-
-
-@pytest.fixture(autouse=True)
-def _clear_structlog_contextvars():
-    # startup() binds TI identifiers for the life of the worker process; we need to clear them else other tests will be impacted.
-    yield
-    structlog.contextvars.clear_contextvars()
 
 
 def get_inline_dag(dag_id: str, task: BaseOperator) -> DAG:
@@ -241,17 +191,7 @@ class CustomOperator(BaseOperator):
         print(f"Hello World {task_id}!")
 
 
-@pytest.mark.parametrize(
-    "coordinates",
-    [
-        {},
-        {"region_id": None, "region_index": None},
-        {"region_id": UUID(int=0), "region_index": -1},
-        {"region_id": uuid7(), "region_index": 7},
-    ],
-)
-@pytest.mark.parametrize("map_index", [-1, 3])
-def test_parse(test_dags_dir: Path, make_ti_context, coordinates, map_index):
+def test_parse(test_dags_dir: Path, make_ti_context):
     """Test that checks parsing of a basic dag with an un-mocked parse."""
     what = StartupDetails(
         ti=TaskInstance(
@@ -261,9 +201,6 @@ def test_parse(test_dags_dir: Path, make_ti_context, coordinates, map_index):
             run_id="c",
             try_number=1,
             dag_version_id=uuid7(),
-            queue="default",
-            map_index=map_index,
-            **coordinates,
         ),
         dag_rel_path="super_basic.py",
         bundle_info=BundleInfo(name="my-bundle", version=None),
@@ -290,29 +227,18 @@ def test_parse(test_dags_dir: Path, make_ti_context, coordinates, map_index):
 
     assert ti.task
     assert ti.task.dag
-    assert ti.region_id == (coordinates.get("region_id") or UUID(int=0))
-    assert ti.region_index == (
-        coordinates["region_index"] if coordinates.get("region_index") is not None else map_index
-    )
-    assert ti.map_index == map_index
 
 
-@mock.patch("airflow.sdk.execution_time.task_runner.check_xcom_backend_supports_loops", autospec=True)
 @mock.patch("airflow.dag_processing.dagbag.BundleDagBag")
-def test_parse_dag_bag(mock_dagbag, mock_check_xcom_backend, test_dags_dir: Path, make_ti_context):
+def test_parse_dag_bag(mock_dagbag, test_dags_dir: Path, make_ti_context):
     """Test that checks that the BundleDagBag is constructed as expected during parsing"""
     mock_bag_instance = mock.Mock()
     mock_dagbag.return_value = mock_bag_instance
     mock_dag = mock.Mock(spec=DAG)
     mock_task = mock.Mock(spec=BaseOperator)
-    # The worker walks dag.tasks to register declared deserialization classes;
-    # give the mock an iterable tasks list and an empty declaration so the walk
-    # is a no-op for this BundleDagBag-construction test.
-    mock_task.deserialization_allowed_class_fields = ()
 
     mock_bag_instance.dags = {"super_basic": mock_dag}
     mock_dag.task_dict = {"a": mock_task}
-    mock_dag.tasks = [mock_task]
 
     what = StartupDetails(
         ti=TaskInstance(
@@ -322,7 +248,6 @@ def test_parse_dag_bag(mock_dagbag, mock_check_xcom_backend, test_dags_dir: Path
             run_id="c",
             try_number=1,
             dag_version_id=uuid7(),
-            queue="default",
         ),
         dag_rel_path="super_basic.py",
         bundle_info=BundleInfo(name="my-bundle", version=None),
@@ -347,7 +272,6 @@ def test_parse_dag_bag(mock_dagbag, mock_check_xcom_backend, test_dags_dir: Path
     ):
         parse(what, mock.Mock())
 
-    mock_check_xcom_backend.assert_called_once_with(mock_dag)
     mock_dagbag.assert_called_once_with(
         dag_folder=mock.ANY,
         safe_mode=False,
@@ -384,7 +308,6 @@ def test_parse_not_found(test_dags_dir: Path, make_ti_context, dag_id, task_id, 
             run_id="c",
             try_number=1,
             dag_version_id=uuid7(),
-            queue="default",
         ),
         dag_rel_path="super_basic.py",
         bundle_info=BundleInfo(name="my-bundle", version=None),
@@ -431,7 +354,6 @@ def test_parse_not_found_does_not_reschedule_when_max_attempts_reached(test_dags
             run_id="c",
             try_number=1,
             dag_version_id=uuid7(),
-            queue="default",
         ),
         dag_rel_path="super_basic.py",
         bundle_info=BundleInfo(name="my-bundle", version=None),
@@ -479,7 +401,7 @@ def test_main_sends_reschedule_task_when_startup_reschedules(
     If startup raises AirflowRescheduleException, the task runner should report a RescheduleTask
     message to the supervisor and exit cleanly (code 0).
     """
-    ts = datetime(2025, 1, 1, tzinfo=UTC)
+    ts = datetime(2025, 1, 1, tzinfo=dt_timezone.utc)
     reschedule_date = ts + timedelta(seconds=60)
 
     mock_comms_instance = mock.Mock()
@@ -493,7 +415,6 @@ def test_main_sends_reschedule_task_when_startup_reschedules(
             run_id="test_run",
             try_number=1,
             dag_version_id=uuid7(),
-            queue="default",
             context_carrier={},
         ),
         dag_rel_path="",
@@ -516,82 +437,6 @@ def test_main_sends_reschedule_task_when_startup_reschedules(
     assert mock_comms_instance.mock_calls == [
         call.send(msg=RescheduleTask(reschedule_date=reschedule_date, end_date=ts))
     ]
-
-
-@pytest.mark.parametrize(
-    ("state", "error", "expect_error_status"),
-    [
-        (TaskInstanceState.FAILED, RuntimeError("boom"), True),
-        (TaskInstanceState.SUCCESS, None, False),
-    ],
-)
-@mock.patch("airflow.sdk.execution_time.task_runner.finalize")
-@mock.patch("airflow.sdk.execution_time.task_runner.run")
-@mock.patch("airflow.sdk.execution_time.task_runner.BundleVersionLock")
-@mock.patch("airflow.sdk.execution_time.task_runner.startup")
-@mock.patch("airflow.sdk.execution_time.task_runner.get_startup_details")
-@mock.patch("airflow.sdk.execution_time.task_runner.CommsDecoder")
-def test_main_marks_worker_span_error_on_failure(
-    mock_comms_decoder_cls,
-    mock_get_startup_details,
-    mock_startup,
-    mock_bundle_lock,
-    mock_run,
-    mock_finalize,
-    make_ti_context,
-    state,
-    error,
-    expect_error_status,
-):
-    """main() marks the worker span ERROR when run() reports a failure, and leaves it unset otherwise.
-
-    run() funnels every failure into its returned ``error`` rather than re-raising, so the worker
-    span never sees the exception via propagation; main() must set the status from that return value.
-    """
-    mock_comms_instance = mock.Mock()
-    mock_comms_instance.socket = None
-    mock_comms_decoder_cls.__getitem__.return_value.return_value = mock_comms_instance
-
-    what = StartupDetails(
-        ti=TaskInstance(
-            id=uuid7(),
-            task_id="my_task",
-            dag_id="test_dag",
-            run_id="test_run",
-            try_number=1,
-            dag_version_id=uuid7(),
-            queue="default",
-            context_carrier={},
-        ),
-        dag_rel_path="",
-        bundle_info=BundleInfo(name="my-bundle", version=None),
-        ti_context=make_ti_context(),
-        start_date=timezone.utcnow(),
-        sentry_integration="",
-    )
-    mock_get_startup_details.return_value = what
-
-    ti = mock.Mock()
-    ti.bundle_instance.name = "my-bundle"
-    ti.bundle_instance.version = None
-    ti._terminal_state_send_failed = False
-    mock_startup.return_value = (ti, {}, mock.Mock())
-    mock_run.return_value = (state, mock.Mock(), error)
-
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    t = provider.get_tracer("test")
-
-    with mock.patch("airflow.sdk.execution_time.task_runner.tracer", t):
-        task_runner.main()
-
-    worker = {s.name: s for s in exporter.get_finished_spans()}["worker.my_task"]
-    if expect_error_status:
-        assert worker.status.status_code == trace.StatusCode.ERROR
-        assert any(e.name == "exception" for e in worker.events)
-    else:
-        assert worker.status.status_code != trace.StatusCode.ERROR
 
 
 def test_run_swallows_supervisor_terminal_send_failure(create_runtime_ti, mock_supervisor_comms):
@@ -630,86 +475,6 @@ def test_run_swallows_supervisor_terminal_send_failure(create_runtime_ti, mock_s
     assert error is None
 
 
-def test_run_signals_fail_closed_when_failure_terminal_send_fails(create_runtime_ti, mock_supervisor_comms):
-    """
-    When the task FAILS and the terminal-state send to the supervisor fails too
-    (e.g. broken Unix socket / supervisor crashed / IPC channel dead), `run()`
-    must signal to main() that the process should exit non-zero — otherwise
-    the supervisor's `final_state` property defaults exit_code-0-with-no-
-    terminal-state to SUCCESS, turning a transient IPC blip into a silent
-    data-quality bug downstream.
-
-    The signal is deferred to main() (via `_terminal_state_send_failed` on the
-    ti) so finalize() still runs first — on_failure_callback / listener hooks /
-    email_on_failure must observe the FAILED state before the process exits.
-    """
-
-    class FailingOperator(BaseOperator):
-        def execute(self, context):
-            raise RuntimeError("task body failed")
-
-    task = FailingOperator(task_id="failing")
-    runtime_ti = create_runtime_ti(task=task)
-    context = runtime_ti.get_template_context()
-    log = mock.MagicMock()
-
-    # Let the terminal-state send raise an IPC-level failure.
-    def send_side_effect(msg=None, **kwargs):
-        if isinstance(msg, TaskState):
-            raise BrokenPipeError("supervisor IPC broken")
-        return mock.DEFAULT
-
-    mock_supervisor_comms.send.side_effect = send_side_effect
-
-    # run() must not raise — fail-closed is signalled via the ti attribute
-    # so main() can sys.exit(1) only after finalize() has run.
-    state, _, _ = run(runtime_ti, context, log)
-
-    assert state == TaskInstanceState.FAILED
-    assert runtime_ti._terminal_state_send_failed is True
-
-
-@pytest.mark.parametrize(
-    ("state_when_send_fails", "should_fail_closed"),
-    [
-        (TaskInstanceState.SUCCESS, False),
-        (TaskInstanceState.SKIPPED, False),
-    ],
-)
-def test_run_does_not_signal_fail_closed_for_non_failed_states(
-    create_runtime_ti, mock_supervisor_comms, state_when_send_fails, should_fail_closed
-):
-    """
-    Only FAILED / UP_FOR_RETRY are fail-closed. SUCCESS is exempt (the existing
-    409-rejection softening). SKIPPED is also exempt: supervisor's final_state
-    misclassifies it either way, and exiting non-zero would map it to FAILED,
-    which is strictly worse than the default mapping.
-    """
-
-    class Op(BaseOperator):
-        def execute(self, context):
-            if state_when_send_fails == TaskInstanceState.SKIPPED:
-                raise AirflowSkipException("skip")
-            return "ok"
-
-    task = Op(task_id="op")
-    runtime_ti = create_runtime_ti(task=task)
-    context = runtime_ti.get_template_context()
-    log = mock.MagicMock()
-
-    def send_side_effect(msg=None, **kwargs):
-        if isinstance(msg, (TaskState, SucceedTask)):
-            raise BrokenPipeError("supervisor IPC broken")
-        return mock.DEFAULT
-
-    mock_supervisor_comms.send.side_effect = send_side_effect
-
-    state, _, _ = run(runtime_ti, context, log)
-
-    assert state == state_when_send_fails
-    assert getattr(runtime_ti, "_terminal_state_send_failed", False) is should_fail_closed
-
-
 def test_task_span_is_child_of_dag_run_span(make_ti_context):
     """Full trace hierarchy: dag_run → task_run.my_task (API server) → worker.my_task (task runner)."""
     # Single provider shared by all spans so contexts are compatible.
@@ -730,7 +495,7 @@ def test_task_span_is_child_of_dag_run_span(make_ti_context):
         ti_carrier = new_task_run_carrier(dag_run_carrier)
 
     # Extract the parent task span context (the stable span ID stored in ti_carrier).
-    parent_task_span_ctx = trace.get_current_span(
+    parent_task_span_ctx = otel_trace.get_current_span(
         context=TraceContextTextMapPropagator().extract(ti_carrier)
     ).get_span_context()
 
@@ -743,7 +508,6 @@ def test_task_span_is_child_of_dag_run_span(make_ti_context):
             run_id="test_run",
             try_number=1,
             dag_version_id=uuid7(),
-            queue="default",
             context_carrier=ti_carrier,
         ),
         dag_rel_path="",
@@ -765,17 +529,14 @@ def test_task_span_is_child_of_dag_run_span(make_ti_context):
     mock_ti.task_id = "my_task"
     mock_ti.run_id = "test_run"
     mock_ti.try_number = 1
-    mock_ti.region_id = UUID(int=0)
-    mock_ti.region_index = -1
+    mock_ti.map_index = -1
     mock_ti.queued_dttm = None
     mock_ti.start_date = timezone.utcnow()
     mock_ti.dag_run.context_carrier = dag_run_carrier
     mock_ti.context_carrier = ti_carrier
     api_tracer = provider.get_tracer("airflow.api_fastapi.execution_api.routes.task_instances")
-    resolver = mock.create_autospec(TaskCoordinateResolver, instance=True)
-    resolver.public_map_index.return_value = -1
     with mock.patch("airflow.api_fastapi.execution_api.routes.task_instances.tracer", api_tracer):
-        _emit_task_span(mock_ti, TaskInstanceState.SUCCESS, resolver=resolver)
+        _emit_task_span(mock_ti, TaskInstanceState.SUCCESS)
 
     finished = in_mem_exporter.get_finished_spans()
 
@@ -815,7 +576,6 @@ def test_task_span_no_parent_when_no_context_carrier(make_ti_context):
             run_id="test_run",
             try_number=1,
             dag_version_id=uuid7(),
-            queue="default",
             context_carrier=None,
         ),
         dag_rel_path="",
@@ -833,70 +593,6 @@ def test_task_span_no_parent_when_no_context_carrier(make_ti_context):
     finished = in_mem_exporter.get_finished_spans()
     assert len(finished) == 1
     assert finished[0].parent is None
-
-
-# The trace and parent ids from the W3C Trace Context specification's traceparent example; the trailing
-# flags byte is 00, "not sampled".
-UNSAMPLED_TRACE_ID = 0x4BF92F3577B34DA6A3CE929D0E0E4736
-UNSAMPLED_CARRIER = {"traceparent": f"00-{UNSAMPLED_TRACE_ID:032x}-00f067aa0ba902b7-00"}
-
-
-def _make_startup_with_carrier(make_ti_context, carrier: dict[str, str]) -> StartupDetails:
-    return StartupDetails(
-        ti=TaskInstance(
-            id=uuid7(),
-            task_id="my_task",
-            dag_id="test_dag",
-            run_id="test_run",
-            try_number=1,
-            dag_version_id=uuid7(),
-            queue="default",
-            context_carrier=carrier,
-        ),
-        dag_rel_path="",
-        bundle_info=BundleInfo(name="my-bundle", version=None),
-        ti_context=make_ti_context(),
-        start_date=timezone.utcnow(),
-        sentry_integration="",
-    )
-
-
-def test_with_no_tracer_provider_an_unsampled_parent_is_not_made_current(make_ti_context):
-    """A span the task code starts under its own provider must not inherit "not sampled"."""
-    task_code_exporter = InMemorySpanExporter()
-    task_code_provider = TracerProvider()
-    task_code_provider.add_span_processor(SimpleSpanProcessor(task_code_exporter))
-
-    with (
-        mock.patch("airflow.sdk.execution_time.task_runner.tracer", trace.NoOpTracer()),
-        mock.patch.object(trace, "get_tracer_provider", return_value=trace.ProxyTracerProvider()),
-        _make_task_span(_make_startup_with_carrier(make_ti_context, UNSAMPLED_CARRIER)),
-    ):
-        current = trace.get_current_span().get_span_context()
-        with task_code_provider.get_tracer("agent_framework").start_as_current_span("agent run"):
-            pass
-
-    assert not current.is_valid
-    recorded = task_code_exporter.get_finished_spans()
-    assert [span.name for span in recorded] == ["agent run"]
-    assert recorded[0].parent is None
-
-
-def test_with_a_tracer_provider_installed_the_dag_runs_sampling_decision_holds(make_ti_context):
-    """Core tracing or auto-instrumentation installed a provider: the run was sampled out, so stay out."""
-    installed = TracerProvider()
-    task_code_exporter = InMemorySpanExporter()
-    installed.add_span_processor(SimpleSpanProcessor(task_code_exporter))
-
-    with (
-        mock.patch("airflow.sdk.execution_time.task_runner.tracer", installed.get_tracer("airflow")),
-        mock.patch.object(trace, "get_tracer_provider", return_value=installed),
-        _make_task_span(_make_startup_with_carrier(make_ti_context, UNSAMPLED_CARRIER)),
-    ):
-        with installed.get_tracer("agent_framework").start_as_current_span("agent run"):
-            pass
-
-    assert task_code_exporter.get_finished_spans() == ()
 
 
 def test_parse_module_in_bundle_root(tmp_path: Path, make_ti_context):
@@ -921,7 +617,6 @@ def test_parse_module_in_bundle_root(tmp_path: Path, make_ti_context):
             run_id="c",
             try_number=1,
             dag_version_id=uuid7(),
-            queue="default",
         ),
         dag_rel_path="path_test.py",
         bundle_info=BundleInfo(name="my-bundle", version=None),
@@ -949,241 +644,54 @@ def test_parse_module_in_bundle_root(tmp_path: Path, make_ti_context):
     assert ti.task.dag.dag_id == "dag_name"
 
 
-@pytest.mark.parametrize(
-    ("use_startup", "expected_dag_id", "expected_task_id"),
-    [
-        pytest.param(True, "expected_dag", "my_task", id="startup"),
-        pytest.param(False, None, None, id="parse"),
-    ],
-)
-@mock.patch("airflow.sdk.execution_time.task_runner.get_listener_manager")
-@mock.patch("airflow.dag_processing.dagbag.BundleDagBag")
-@mock.patch("airflow.sdk.execution_time.bundles.DagBundlesManager")
-def test_bundle_initialize_parsing_context(
-    mock_manager_cls,
-    mock_bag_cls,
-    mock_listener_manager,
-    use_startup,
-    expected_dag_id,
-    expected_task_id,
-    make_ti_context,
-    tmp_path: Path,
-    monkeypatch,
-):
-    from airflow.sdk import get_parsing_context
-    from airflow.sdk.definitions.context import (
-        _AIRFLOW_PARSING_CONTEXT_DAG_ID,
-        _AIRFLOW_PARSING_CONTEXT_TASK_ID,
-    )
+def test_verify_bundle_access_raises_when_not_accessible(tmp_path: Path, make_ti_context):
+    """Test that _verify_bundle_access raises AirflowException when bundle path is not accessible."""
+    from airflow.sdk.execution_time.task_runner import _verify_bundle_access
 
-    captured: dict[str, str | None] = {}
+    # Create a directory that exists
+    bundle_path = tmp_path / "test_bundle"
+    bundle_path.mkdir()
+
+    # Create a mock bundle instance
     mock_bundle = mock.Mock()
-    mock_bundle.path = tmp_path
+    mock_bundle.path = bundle_path
+    mock_bundle.name = "test-bundle"
 
-    def capture_parsing_context():
-        ctx = get_parsing_context()
-        captured["dag_id"] = ctx.dag_id
-        captured["task_id"] = ctx.task_id
+    # Mock os.access to simulate permission denied (avoids root user issues in CI)
+    with patch("airflow.sdk.execution_time.task_runner.os.access", return_value=False):
+        with pytest.raises(AirflowException) as exc_info:
+            _verify_bundle_access(mock_bundle, mock.Mock())
 
-    mock_bundle.initialize.side_effect = capture_parsing_context
-    mock_manager = mock_manager_cls.return_value
-    mock_manager.get_bundle.return_value = mock_bundle
-
-    with DAG("expected_dag") as dag:
-        BaseOperator(task_id="my_task")
-    mock_bag_cls.return_value.dags = {"expected_dag": dag}
-
-    what = StartupDetails(
-        ti=TaskInstance(
-            id=uuid7(),
-            task_id="my_task",
-            dag_id="expected_dag",
-            run_id="test_run",
-            try_number=1,
-            dag_version_id=uuid7(),
-            queue="default",
-        ),
-        dag_rel_path="dag.py",
-        bundle_info=BundleInfo(name="my-bundle", version=None),
-        ti_context=make_ti_context(),
-        start_date=timezone.utcnow(),
-        sentry_integration="",
-    )
-
-    monkeypatch.delenv(_AIRFLOW_PARSING_CONTEXT_DAG_ID, raising=False)
-    monkeypatch.delenv(_AIRFLOW_PARSING_CONTEXT_TASK_ID, raising=False)
-
-    if use_startup:
-        startup(what)
-    else:
-        parse(what, mock.Mock())
-
-    assert captured == {"dag_id": expected_dag_id, "task_id": expected_task_id}
-    mock_bundle.initialize.assert_called_once()
+        assert "not accessible" in str(exc_info.value)
+        assert "test-bundle" in str(exc_info.value)
 
 
-class NativeDagImporter(CoordinatorDagImporter):
-    coordinator_classpath = f"{__name__}.NativeCoordinator"
-    artifact_suffix = ".native"
-    supported_extensions = [".native"]
+def test_verify_bundle_access_succeeds_when_readable(tmp_path: Path, make_ti_context):
+    """Test that _verify_bundle_access succeeds when bundle path is accessible."""
+    from airflow.sdk.execution_time.task_runner import _verify_bundle_access
 
-    def get_source_code(self, definition):
-        return DagSourceCode(source_code=definition.read_text(), language="native")
+    # Create a directory with read permissions
+    bundle_path = tmp_path / "accessible_bundle"
+    bundle_path.mkdir()
 
+    mock_bundle = mock.Mock()
+    mock_bundle.path = bundle_path
+    mock_bundle.name = "test-bundle"
 
-@attrs.define(kw_only=True)
-class NativeCoordinator(SubprocessCoordinator):
-    """A coordinator of the runtime whose Dag importer claims ``.native`` files in every bundle."""
-
-
-NATIVE_COORDINATOR_SPEC = {"classpath": f"{__name__}.NativeCoordinator", "kwargs": {}}
-
-
-@pytest.fixture
-def native_dag_startup(tmp_path: Path, make_ti_context):
-    tmp_path.joinpath("dag.native").write_text("{}")
-    bundle_config = [
-        {
-            "name": "my-bundle",
-            "classpath": "airflow.dag_processing.bundles.local.LocalDagBundle",
-            "kwargs": {"path": str(tmp_path), "refresh_interval": 1},
-        }
-    ]
-    with (
-        mock.patch(
-            "airflow.sdk.coordinators._dag_importer.COORDINATOR_DAG_IMPORTERS",
-            (f"{__name__}.NativeDagImporter",),
-        ),
-        conf_vars(
-            {
-                ("dag_processor", "dag_bundle_config_list"): json.dumps(bundle_config),
-                ("sdk", "coordinators"): json.dumps({"native": NATIVE_COORDINATOR_SPEC}),
-            }
-        ),
-    ):
-        yield StartupDetails(
-            ti=TaskInstance(
-                id=uuid7(),
-                task_id="a",
-                dag_id="native_dag",
-                run_id="c",
-                try_number=1,
-                dag_version_id=uuid7(),
-                queue="default",
-            ),
-            dag_rel_path="dag.native",
-            bundle_info=BundleInfo(name="my-bundle", version=None),
-            ti_context=make_ti_context(),
-            start_date=timezone.utcnow(),
-            sentry_integration="",
-        )
+    # Should not raise
+    _verify_bundle_access(mock_bundle, mock.Mock())
 
 
-@patch("airflow.dag_processing.dagbag.BundleDagBag", autospec=True)
-def test_parse_fails_a_task_of_a_native_dag_without_retries(
-    mock_bag, native_dag_startup, mock_supervisor_comms, time_machine
-):
-    instant = timezone.datetime(2024, 11, 22)
-    time_machine.move_to(instant, tick=False)
-    log = mock.Mock()
+def test_verify_bundle_access_skips_nonexistent_path(tmp_path: Path):
+    """Test that _verify_bundle_access does nothing when bundle path doesn't exist."""
+    from airflow.sdk.execution_time.task_runner import _verify_bundle_access
 
-    with pytest.raises(SystemExit) as ctx:
-        parse(native_dag_startup, log)
+    mock_bundle = mock.Mock()
+    mock_bundle.path = tmp_path / "nonexistent"
+    mock_bundle.name = "test-bundle"
 
-    assert ctx.value.code == 0
-    mock_bag.assert_not_called()
-    mock_supervisor_comms.send.assert_called_once_with(
-        TaskState(state=TaskInstanceState.FAILED, end_date=instant)
-    )
-    log.error.assert_called_once_with(
-        "This task belongs to a native Lang-SDK Dag and cannot run in Python. Give the Dag's tasks "
-        "their own queue and route it to a %s in [sdk] queue_to_coordinator",
-        "NativeCoordinator",
-        dag_id="native_dag",
-        task_id="a",
-        queue="default",
-        path="dag.native",
-    )
-
-
-class _StoreXCom(SerializeValueOnlyXCom):
-    @classmethod
-    def store_value(cls, coordinate, key, value):
-        return value
-
-
-def _make_dag(with_loop: bool) -> DAG:
-    @task_group
-    def body():
-        BaseOperator(task_id="work")
-
-    with DAG("xcom_backend_check", schedule=None) as dag:
-        if with_loop:
-            create_loop(body, max_iterations=2)
-        else:
-            body()
-    return dag
-
-
-@pytest.mark.parametrize(
-    ("backend", "with_loop"),
-    [
-        pytest.param(SerializeValueOnlyXCom, False, id="legacy-without-loop"),
-        pytest.param(_StoreXCom, True, id="store-value-with-loop"),
-    ],
-)
-def test_check_xcom_backend_supports_loops_accepts(backend, with_loop, monkeypatch):
-    monkeypatch.setattr("airflow.sdk.execution_time.task_runner.XCom", backend)
-
-    check_xcom_backend_supports_loops(_make_dag(with_loop))
-
-
-def test_check_xcom_backend_supports_loops_rejects_legacy_backend_in_loop_dag(monkeypatch):
-    monkeypatch.setattr("airflow.sdk.execution_time.task_runner.XCom", SerializeValueOnlyXCom)
-
-    with pytest.raises(TypeError, match="uses a loop"):
-        check_xcom_backend_supports_loops(_make_dag(with_loop=True))
-
-
-@patch("airflow.dag_processing.dagbag.BundleDagBag", autospec=True)
-def test_parse_exits_non_zero_when_the_failure_cannot_be_reported(
-    mock_bag, native_dag_startup, mock_supervisor_comms
-):
-    mock_supervisor_comms.send.side_effect = ConnectionError("supervisor gone")
-
-    with pytest.raises(SystemExit, match="1"):
-        parse(native_dag_startup, mock.Mock())
-
-
-@patch("airflow.dag_processing.dagbag.BundleDagBag", autospec=True)
-def test_parse_fails_a_task_of_a_native_dag_when_several_coordinators_could_parse_it(
-    mock_bag, native_dag_startup, mock_supervisor_comms
-):
-    coordinators = {"first": NATIVE_COORDINATOR_SPEC, "second": NATIVE_COORDINATOR_SPEC}
-    log = mock.Mock()
-
-    with conf_vars({("sdk", "coordinators"): json.dumps(coordinators)}), pytest.raises(SystemExit):
-        parse(native_dag_startup, log)
-
-    mock_bag.assert_not_called()
-    assert log.error.call_args.args[1] == "NativeCoordinator"
-
-
-@pytest.mark.usefixtures("native_dag_startup")
-@pytest.mark.parametrize(
-    ("file_name", "expected"),
-    [("dag.native", True), ("dag.py", False), ("dag.pyc", False), ("dags.zip", False)],
-)
-def test_find_native_dag_importer(file_name, expected):
-    importer = _find_native_dag_importer(f"/bundle/{file_name}", "my-bundle")
-
-    assert isinstance(importer, NativeDagImporter) is expected
-
-
-@pytest.mark.usefixtures("native_dag_startup")
-@patch("airflow.sdk.coordinators._dag_importer.COORDINATOR_DAG_IMPORTERS", ("nonexistent.module.Importer",))
-def test_find_native_dag_importer_when_the_importers_cannot_be_built():
-    assert _find_native_dag_importer("/bundle/dag.native", "my-bundle") is None
+    # Should not raise - nonexistent paths are handled by initialize()
+    _verify_bundle_access(mock_bundle, mock.Mock())
 
 
 @pytest.mark.parametrize("use_queues", [False, True])
@@ -1287,332 +795,6 @@ def test_defer_task_queue_assignment(
     )
 
 
-@pytest.mark.parametrize(
-    ("should_retry", "expected_state"),
-    [
-        (True, TaskInstanceState.UP_FOR_RETRY),
-        (False, TaskInstanceState.FAILED),
-    ],
-)
-def test_defer_with_unserializable_kwargs_honours_retries_and_callbacks(
-    should_retry, expected_state, create_runtime_ti, mock_supervisor_comms
-):
-    """
-    A task that defers with a non-serializable ``next_kwargs`` value must fail like any
-    other task, rather than taking the whole run down.
-
-    ``_defer_task`` runs ``serde_serialize`` on the deferral kwargs, which raises
-    ``TypeError`` for anything it has no serializer for (a file handle, a client object,
-    a lambda). That raise happens inside ``run()``'s ``except TaskDeferred`` handler, so
-    before the fix it escaped ``run()`` without evaluating retries or running callbacks,
-    skipping the retry decision and callbacks even without involving the API server at
-    all.
-    """
-    callbacks_run = []
-
-    class _DeferWithBadKwargs(BaseOperator):
-        def execute(self, context):
-            raise TaskDeferred(
-                trigger=DateTimeTrigger(moment=timezone.datetime(2024, 11, 22)),
-                method_name="next",
-                # A live handle is the realistic version of this mistake.
-                kwargs={"client": object()},
-            )
-
-    task = _DeferWithBadKwargs(
-        task_id="defer_bad_kwargs",
-        on_failure_callback=lambda context: callbacks_run.append("failure"),
-        on_retry_callback=lambda context: callbacks_run.append("retry"),
-    )
-    ti = create_runtime_ti(
-        dag_id="test_defer_with_unserializable_kwargs",
-        run_id="test_run",
-        task=task,
-        should_retry=should_retry,
-    )
-
-    log = mock.MagicMock(spec=structlog.typing.FilteringBoundLogger)
-    context = ti.get_template_context()
-
-    state, _, error = run(ti, context, log)
-
-    assert state == expected_state
-    assert isinstance(error, TypeError)
-
-    context["exception"] = error
-    finalize(ti, state, context, log, error)
-
-    assert callbacks_run == ["retry" if should_retry else "failure"]
-
-
-def test_handler_failure_keeps_non_retryable_exceptions_non_retryable(
-    create_runtime_ti, mock_supervisor_comms
-):
-    """
-    A handler that raises a non-retryable exception must still fail without retrying.
-
-    `AirflowFailException` means "do not retry" wherever it is raised. Routing handler
-    failures through `_handle_current_task_failed` would consult the retry count instead
-    and hand back UP_FOR_RETRY, so `_handle_handler_failure` keeps the main chain's
-    classification for these types.
-    """
-
-    class _FailingTrigger(DateTimeTrigger):
-        def serialize(self):
-            raise AirflowFailException("trigger cannot be serialized, do not retry")
-
-    class _DeferWithFailingTrigger(BaseOperator):
-        def execute(self, context):
-            raise TaskDeferred(
-                trigger=_FailingTrigger(moment=timezone.datetime(2024, 11, 22)),
-                method_name="next",
-            )
-
-    task = _DeferWithFailingTrigger(task_id="defer_fail_exc")
-    # Retries are available; the exception type must still win.
-    ti = create_runtime_ti(
-        dag_id="test_handler_failure_non_retryable",
-        run_id="test_run",
-        task=task,
-        should_retry=True,
-    )
-
-    log = mock.MagicMock(spec=structlog.typing.FilteringBoundLogger)
-
-    state, msg, error = run(ti, ti.get_template_context(), log)
-
-    assert state == TaskInstanceState.FAILED
-    assert isinstance(msg, TaskState)
-    assert isinstance(error, AirflowFailException)
-
-
-def test_handler_failure_lets_keyboard_interrupt_propagate(create_runtime_ti, mock_supervisor_comms):
-    """
-    A ``KeyboardInterrupt`` inside a handler must reach ``main()``, not become a task failure.
-
-    The supervisor's default termination signal is SIGINT, so swallowing it here would
-    convert an operator-initiated kill into an ordinary retry.
-    """
-
-    class _InterruptingTrigger(DateTimeTrigger):
-        def serialize(self):
-            raise KeyboardInterrupt
-
-    class _DeferWithInterrupt(BaseOperator):
-        def execute(self, context):
-            raise TaskDeferred(
-                trigger=_InterruptingTrigger(moment=timezone.datetime(2024, 11, 22)),
-                method_name="next",
-            )
-
-    task = _DeferWithInterrupt(task_id="defer_interrupt")
-    ti = create_runtime_ti(dag_id="test_handler_interrupt", run_id="test_run", task=task)
-
-    log = mock.MagicMock(spec=structlog.typing.FilteringBoundLogger)
-
-    with pytest.raises(KeyboardInterrupt):
-        run(ti, ti.get_template_context(), log)
-
-
-def test_handler_failure_fails_closed_when_failure_path_also_fails(create_runtime_ti, mock_supervisor_comms):
-    """
-    If the failure path itself raises, `run()` must still return a terminal state.
-
-    A `retry_policy` is user code and `RetryDecision` is an unvalidated dataclass, so a
-    policy handing back `retry_delay=30` (seconds, rather than a `timedelta`) reaches
-    `_finalize_task_failure`, which calls `.total_seconds()` on it. That `AttributeError`
-    is raised outside `_evaluate_retry_policy`'s own error handling, so it propagates out
-    of the failure path. Re-entering that path with its own exception would fail the same
-    way and escape `run()`, losing the callbacks this handling exists to preserve.
-    """
-
-    class _BadDelayPolicy(RetryPolicy):
-        def evaluate(self, exception, try_number, max_tries, context=None):
-            # Seconds as an int, not a timedelta.
-            return RetryDecision(action=RetryAction.RETRY, retry_delay=30)
-
-    class _AlwaysFails(BaseOperator):
-        def execute(self, context):
-            raise RuntimeError("boom")
-
-    task = _AlwaysFails(task_id="bad_delay_policy", retry_policy=_BadDelayPolicy())
-    ti = create_runtime_ti(
-        dag_id="test_handler_double_fault",
-        run_id="test_run",
-        task=task,
-        should_retry=True,
-    )
-
-    log = mock.MagicMock(spec=structlog.typing.FilteringBoundLogger)
-
-    state, msg, error = run(ti, ti.get_template_context(), log)
-
-    assert state == TaskInstanceState.FAILED
-    assert isinstance(msg, TaskState)
-    assert msg.state == TaskInstanceState.FAILED
-    # The terminal state must actually reach the supervisor, not merely be returned.
-    assert any(call.kwargs.get("msg") is msg for call in mock_supervisor_comms.send.call_args_list)
-    # `error` is the exception that actually ended the run, so a callback sees the broken
-    # policy rather than a misleadingly clean task error. The task's own failure stays
-    # reachable on the implicit exception chain.
-    assert isinstance(error, AttributeError)
-    assert isinstance(error.__context__, RuntimeError)
-
-
-def test_handler_failure_counts_the_failure_once(create_runtime_ti, mock_supervisor_comms):
-    """
-    One failure is one increment, even when the failure path runs twice.
-
-    The first pass through `_finalize_task_failure` records the counters before the broken
-    retry delay makes it raise, so counting again on the second pass would report two
-    failures for a single task run.
-    """
-
-    class _BadDelayPolicy(RetryPolicy):
-        def evaluate(self, exception, try_number, max_tries, context=None):
-            return RetryDecision(action=RetryAction.RETRY, retry_delay=30)
-
-    class _AlwaysFails(BaseOperator):
-        def execute(self, context):
-            raise RuntimeError("boom")
-
-    task = _AlwaysFails(task_id="count_once", retry_policy=_BadDelayPolicy())
-    ti = create_runtime_ti(
-        dag_id="test_handler_failure_counts_once",
-        run_id="test_run",
-        task=task,
-        should_retry=True,
-    )
-
-    log = mock.MagicMock(spec=structlog.typing.FilteringBoundLogger)
-    stats_backend = mock.MagicMock(spec=StatsLogger)
-
-    with mock.patch("airflow.sdk.execution_time.task_runner.stats", stats_backend):
-        run(ti, ti.get_template_context(), log)
-
-    counted = [call.args[0] for call in stats_backend.incr.call_args_list if call.args]
-    assert counted.count("ti_failures") == 1
-    assert counted.count("operator_failures") == 1
-
-
-def test_retry_policy_fail_persists_reason(create_runtime_ti, mock_supervisor_comms):
-    class _AlwaysFails(BaseOperator):
-        def execute(self, context):
-            raise RuntimeError("boom")
-
-    task = _AlwaysFails(
-        task_id="fail_with_reason",
-        retries=2,
-        retry_policy=ExceptionRetryPolicy(
-            rules=[RetryRule(exception=RuntimeError, action=RetryAction.FAIL, reason="do not retry")]
-        ),
-    )
-    ti = create_runtime_ti(task=task)
-
-    state, msg, error = run(ti, ti.get_template_context(), mock.MagicMock())
-
-    assert state == TaskInstanceState.FAILED
-    assert isinstance(msg, TaskState)
-    assert msg.retry_reason == "do not retry"
-
-
-@pytest.mark.parametrize(
-    ("task_id", "retries", "try_number"),
-    [
-        pytest.param("retry_exhausted", 2, 3, id="budget-exhausted"),
-        # `retries` defaults to 0, so this branch is reached on the very first attempt.
-        pytest.param("retry_no_budget", 0, 1, id="no-budget-configured"),
-    ],
-)
-def test_retry_policy_retry_without_budget_persists_policy_reason(
-    create_runtime_ti, mock_supervisor_comms, task_id, retries, try_number
-):
-    """A policy-chosen RETRY that cannot run fails, recording the reason with no counts appended."""
-
-    class _AlwaysFails(BaseOperator):
-        def execute(self, context):
-            raise RuntimeError("boom")
-
-    task = _AlwaysFails(
-        task_id=task_id,
-        retries=retries,
-        retry_policy=ExceptionRetryPolicy(
-            rules=[RetryRule(exception=RuntimeError, action=RetryAction.RETRY, reason="rate limit")]
-        ),
-    )
-    ti = create_runtime_ti(task=task, try_number=try_number)
-
-    state, msg, error = run(ti, ti.get_template_context(), mock.MagicMock())
-
-    assert state == TaskInstanceState.FAILED
-    assert isinstance(msg, TaskState)
-    assert msg.retry_reason == "rate limit"
-
-
-def test_retry_policy_retry_exhausted_reason_is_truncated(create_runtime_ti, mock_supervisor_comms):
-    """A long reason is truncated to the column width."""
-
-    class _AlwaysFails(BaseOperator):
-        def execute(self, context):
-            raise RuntimeError("boom")
-
-    long_reason = "z" * 600
-    task = _AlwaysFails(
-        task_id="retry_exhausted_long_reason",
-        retries=2,
-        retry_policy=ExceptionRetryPolicy(
-            rules=[RetryRule(exception=RuntimeError, action=RetryAction.RETRY, reason=long_reason)]
-        ),
-    )
-    ti = create_runtime_ti(task=task, try_number=3)
-
-    state, msg, error = run(ti, ti.get_template_context(), mock.MagicMock())
-
-    assert state == TaskInstanceState.FAILED
-    assert isinstance(msg, TaskState)
-    assert msg.retry_reason == "z" * 500
-
-
-@pytest.mark.enable_redact
-def test_retry_policy_reason_is_redacted_in_the_worker(create_runtime_ti, mock_supervisor_comms):
-    """The reason is masked where mask_secret() registered the value, not in the API server."""
-    _secrets_masker().add_mask("hunter2", None)
-
-    class _AlwaysFails(BaseOperator):
-        def execute(self, context):
-            raise RuntimeError("403 Forbidden: token hunter2 expired")
-
-    class _EchoPolicy(RetryPolicy):
-        def evaluate(self, exception, try_number, max_tries, context=None):
-            return RetryDecision(action=RetryAction.FAIL, reason=f"auth: {exception}")
-
-    task = _AlwaysFails(task_id="redacted_reason", retries=2, retry_policy=_EchoPolicy())
-    ti = create_runtime_ti(task=task)
-
-    state, msg, error = run(ti, ti.get_template_context(), mock.MagicMock())
-
-    assert state == TaskInstanceState.FAILED
-    assert isinstance(msg, TaskState)
-    assert msg.retry_reason == "auth: 403 Forbidden: token *** expired"
-
-
-def test_plain_retries_exhausted_has_no_reason(create_runtime_ti, mock_supervisor_comms):
-    """Without a retry policy, exhausting the retry budget must not synthesize a reason."""
-
-    class _AlwaysFails(BaseOperator):
-        def execute(self, context):
-            raise RuntimeError("boom")
-
-    task = _AlwaysFails(task_id="plain_exhausted", retries=2)
-    ti = create_runtime_ti(task=task, try_number=3)
-
-    state, msg, error = run(ti, ti.get_template_context(), mock.MagicMock())
-
-    assert state == TaskInstanceState.FAILED
-    assert isinstance(msg, TaskState)
-    assert msg.retry_reason is None
-
-
 def test_run_downstream_skipped(mocked_parse, create_runtime_ti, mock_supervisor_comms, listener_manager):
     listener = TestTaskRunnerCallsListeners.CustomListener()
     listener_manager(listener)
@@ -1688,260 +870,6 @@ def test_run_emits_post_execute_group_before_xcom_push(create_runtime_ti, mock_s
     assert call_order.index("::group::Post Execute") < call_order.index("Pushing xcom")
 
 
-def test_retry_policy_decision_logged_outside_post_execute_group(create_runtime_ti, mock_supervisor_comms):
-    """The retry policy decision log line closes the 'Post Execute' group instead of nesting inside it."""
-    call_order: list[str] = []
-    tracked = {"::group::Post Execute", "::endgroup::", "Retry policy decision"}
-
-    class _FailPolicy(RetryPolicy):
-        def evaluate(self, exception, try_number, max_tries, context=None):
-            return RetryDecision(action=RetryAction.FAIL, reason="auth error, do not retry")
-
-    class _AlwaysFails(BaseOperator):
-        def execute(self, context):
-            raise RuntimeError("boom")
-
-    task = _AlwaysFails(task_id="fail_policy_task", retry_policy=_FailPolicy())
-    ti = create_runtime_ti(task=task, should_retry=True)
-    log = mock.MagicMock(spec=["info", "debug", "warning", "error", "exception", "bind"])
-
-    def tracking_info(msg, *args, **kwargs):
-        if msg in tracked:
-            call_order.append(msg)
-
-    log.info.side_effect = tracking_info
-
-    state, msg, error = run(ti, context=ti.get_template_context(), log=log)
-    finalize(ti, state=state, context=ti.get_template_context(), log=log)
-
-    # No reopened "Post Execute", only finalize() ::endgroup:: follows the retry policy decision.
-    assert call_order == [
-        "::endgroup::",
-        "::group::Post Execute",
-        "::endgroup::",
-        "Retry policy decision",
-        "::endgroup::",
-    ]
-
-
-def test_exhausted_logs_about_retry_policy_decision(create_runtime_ti, mock_supervisor_comms):
-    class _AlwaysFails(BaseOperator):
-        def execute(self, context):
-            raise RuntimeError("boom")
-
-    task = _AlwaysFails(
-        task_id="retry_exhausted_logging",
-        retries=2,
-        retry_policy=ExceptionRetryPolicy(
-            rules=[RetryRule(exception=RuntimeError, action=RetryAction.RETRY, reason="rate limit")]
-        ),
-    )
-    ti = create_runtime_ti(task=task, try_number=3)
-    log = mock.MagicMock(spec=["info", "debug", "warning", "error", "exception", "bind"])
-
-    run(ti, context=ti.get_template_context(), log=log)
-
-    events = [call.args[0] for call in log.info.call_args_list if call.args]
-    assert events.count("Retry policy decision") == 1
-    assert log.info.call_args_list[-1] == mock.call(
-        "Retry policy requested a retry but no attempts remain",
-        reason="rate limit",
-        try_number=3,
-        max_tries=2,
-    )
-
-
-class _CapacityError(Exception):
-    """Stands in for a cluster rejecting a pod because its resource quota is full."""
-
-
-class _NoCapacityTask(BaseOperator):
-    def execute(self, context):
-        raise _CapacityError("exceeded quota")
-
-
-def _reschedule_policy(retry_delay: timedelta | None = timedelta(minutes=10), **bounds):
-    return ExceptionRetryPolicy(
-        rules=[
-            RetryRule(
-                exception=_CapacityError,
-                action=RetryAction.RESCHEDULE,
-                retry_delay=retry_delay,
-                reason="cluster full",
-                **bounds,
-            )
-        ]
-    )
-
-
-@pytest.mark.parametrize(
-    ("bounds", "task_reschedule_count", "first_rescheduled_ago"),
-    [
-        pytest.param({"max_reschedules": 3}, 0, timedelta(0), id="first-failure"),
-        pytest.param({"max_reschedules": 3}, 2, timedelta(minutes=20), id="below-max-reschedules"),
-        pytest.param(
-            {"reschedule_timeout": timedelta(hours=1)}, 2, timedelta(minutes=20), id="within-timeout"
-        ),
-    ],
-)
-def test_retry_policy_reschedule_does_not_use_a_retry(
-    time_machine,
-    create_runtime_ti,
-    mock_supervisor_comms,
-    bounds,
-    task_reschedule_count,
-    first_rescheduled_ago,
-):
-    """RESCHEDULE within its bounds reschedules the try, even with no retries configured."""
-    now = datetime(2026, 10, 14, 9, 0, tzinfo=UTC)
-    time_machine.move_to(now, tick=False)
-    task = _NoCapacityTask(task_id="no_capacity", retries=0, retry_policy=_reschedule_policy(**bounds))
-    ti = create_runtime_ti(task=task, task_reschedule_count=task_reschedule_count)
-    ti._ti_context_from_server.first_task_reschedule_start_date = now - first_rescheduled_ago
-
-    state, msg, error = run(ti, ti.get_template_context(), structlog.get_logger())
-
-    assert state == TaskInstanceState.UP_FOR_RESCHEDULE
-    assert msg == RescheduleTask(reschedule_date=now + timedelta(minutes=10), end_date=now)
-
-
-def test_retry_policy_reschedule_without_delay_uses_the_task_retry_delay(
-    time_machine, create_runtime_ti, mock_supervisor_comms
-):
-    now = datetime(2026, 10, 14, 9, 0, tzinfo=UTC)
-    time_machine.move_to(now, tick=False)
-    task = _NoCapacityTask(
-        task_id="no_capacity",
-        retry_delay=timedelta(minutes=7),
-        retry_policy=_reschedule_policy(retry_delay=None, max_reschedules=3),
-    )
-    ti = create_runtime_ti(task=task)
-
-    state, msg, error = run(ti, ti.get_template_context(), structlog.get_logger())
-
-    assert state == TaskInstanceState.UP_FOR_RESCHEDULE
-    assert msg.reschedule_date == now + timedelta(minutes=7)
-
-
-@pytest.mark.parametrize(
-    ("bounds", "task_reschedule_count", "first_rescheduled_ago", "limit"),
-    [
-        pytest.param(
-            {"max_reschedules": 3}, 3, timedelta(minutes=30), "max_reschedules=3", id="max-reschedules"
-        ),
-        pytest.param(
-            {"reschedule_timeout": timedelta(hours=1)},
-            5,
-            timedelta(hours=2),
-            "reschedule_timeout=1:00:00",
-            id="reschedule-timeout",
-        ),
-    ],
-)
-@pytest.mark.parametrize(
-    ("retries", "expected_state", "expected_msg"),
-    [
-        pytest.param(
-            1,
-            TaskInstanceState.UP_FOR_RETRY,
-            lambda now, reason: RetryTask(end_date=now, retry_reason=reason),
-            id="retry-left",
-        ),
-        pytest.param(
-            0,
-            TaskInstanceState.FAILED,
-            lambda now, reason: TaskState(state=TaskInstanceState.FAILED, end_date=now, retry_reason=reason),
-            id="no-retry-left",
-        ),
-    ],
-)
-def test_retry_policy_reschedule_past_its_bound_applies_the_standard_retry_logic(
-    time_machine,
-    create_runtime_ti,
-    mock_supervisor_comms,
-    bounds,
-    task_reschedule_count,
-    first_rescheduled_ago,
-    limit,
-    retries,
-    expected_state,
-    expected_msg,
-):
-    """Past its bound the task retries on its own retry_delay, not the reschedule delay, or fails."""
-    now = datetime(2026, 10, 14, 9, 0, tzinfo=UTC)
-    time_machine.move_to(now, tick=False)
-    task = _NoCapacityTask(task_id="no_capacity", retries=retries, retry_policy=_reschedule_policy(**bounds))
-    ti = create_runtime_ti(task=task, task_reschedule_count=task_reschedule_count)
-    ti._ti_context_from_server.first_task_reschedule_start_date = now - first_rescheduled_ago
-
-    state, msg, error = run(ti, ti.get_template_context(), structlog.get_logger())
-
-    assert state == expected_state
-    assert msg == expected_msg(now, f"Reschedule limit reached ({limit}): cluster full")
-
-
-def test_retry_policy_reschedule_runs_no_failure_callbacks_or_metrics(
-    create_runtime_ti, mock_supervisor_comms
-):
-    """A reschedule is waiting, not failing: no retry or failure callback runs and no failure is counted."""
-    called = []
-    task = _NoCapacityTask(
-        task_id="no_capacity",
-        retries=1,
-        retry_policy=_reschedule_policy(max_reschedules=3),
-        on_retry_callback=lambda context: called.append("on_retry_callback"),
-        on_failure_callback=lambda context: called.append("on_failure_callback"),
-    )
-    ti = create_runtime_ti(task=task)
-    context = ti.get_template_context()
-    log = structlog.get_logger()
-    stats_backend = mock.MagicMock(spec=StatsLogger)
-
-    with mock.patch("airflow.sdk.execution_time.task_runner.stats", stats_backend):
-        state, _, error = run(ti, context, log)
-        finalize(ti, state, context, log, error)
-
-    assert state == TaskInstanceState.UP_FOR_RESCHEDULE
-    assert called == []
-    counted = {call.args[0] for call in stats_backend.incr.call_args_list if call.args}
-    assert counted.isdisjoint({"ti_failures", "operator_failures"})
-
-
-class _SensorStyleReschedule(BaseOperator):
-    def execute(self, context):
-        raise AirflowRescheduleException(reschedule_date=datetime(2026, 10, 14, 10, 0, tzinfo=UTC))
-
-
-@pytest.mark.parametrize(
-    ("task", "should_fail_closed"),
-    [
-        pytest.param(
-            _NoCapacityTask(task_id="no_capacity", retry_policy=_reschedule_policy(max_reschedules=3)),
-            True,
-            id="policy-reschedule-after-an-exception",
-        ),
-        pytest.param(_SensorStyleReschedule(task_id="poke"), False, id="task-raised-reschedule"),
-    ],
-)
-def test_run_fails_closed_when_a_policy_reschedule_cannot_be_reported(
-    create_runtime_ti, mock_supervisor_comms, task, should_fail_closed
-):
-    """A task that raised must not exit 0 (and so count as SUCCESS) because its reschedule was lost."""
-    runtime_ti = create_runtime_ti(task=task)
-
-    def send_side_effect(msg=None, **kwargs):
-        if isinstance(msg, RescheduleTask):
-            raise BrokenPipeError("supervisor IPC broken")
-        return mock.DEFAULT
-
-    mock_supervisor_comms.send.side_effect = send_side_effect
-
-    state, _, _ = run(runtime_ti, runtime_ti.get_template_context(), structlog.get_logger())
-
-    assert state == TaskInstanceState.UP_FOR_RESCHEDULE
-    assert runtime_ti._terminal_state_send_failed is should_fail_closed
-
-
 def test_finalize_emits_endgroup(create_runtime_ti, mock_supervisor_comms):
     """finalize() closes the post-execute log group but does not open it."""
     task = BaseOperator(task_id="some_task")
@@ -2001,7 +929,6 @@ def test_run_basic_skipped(time_machine, create_runtime_ti, mock_supervisor_comm
     run(ti, context=ti.get_template_context(), log=mock.MagicMock())
 
     assert ti.state == TaskInstanceState.SKIPPED
-    assert ti.end_date == instant
 
     mock_supervisor_comms.send.assert_called_with(
         TaskState(state=TaskInstanceState.SKIPPED, end_date=instant)
@@ -2102,7 +1029,7 @@ def test_run_task_timeout(time_machine, create_runtime_ti, mock_supervisor_comms
     mock_supervisor_comms.send.assert_called_with(TaskState(state=TaskInstanceState.FAILED, end_date=instant))
 
 
-def test_execution_timeout(create_runtime_ti, mock_supervisor_comms):
+def test_execution_timeout(create_runtime_ti):
     def sleep_and_catch_other_exceptions():
         with contextlib.suppress(Exception):
             # Catching Exception should NOT catch AirflowTaskTimeout
@@ -2117,7 +1044,7 @@ def test_execution_timeout(create_runtime_ti, mock_supervisor_comms):
     ti = create_runtime_ti(task=op, dag_id="dag_execution_timeout")
 
     with pytest.raises(AirflowTaskTimeout):
-        _TaskRunner.run(ti, ti.get_template_context(), mock.MagicMock())
+        _execute_task(context=ti.get_template_context(), ti=ti, log=mock.MagicMock())
 
 
 def test_basic_templated_dag(mocked_parse, make_ti_context, mock_supervisor_comms, spy_agency):
@@ -2137,7 +1064,6 @@ def test_basic_templated_dag(mocked_parse, make_ti_context, mock_supervisor_comm
             run_id="c",
             try_number=1,
             dag_version_id=uuid7(),
-            queue="default",
         ),
         bundle_info=FAKE_BUNDLE,
         dag_rel_path="",
@@ -2191,7 +1117,7 @@ def test_basic_templated_dag(mocked_parse, make_ti_context, mock_supervisor_comm
         ),
         pytest.param(
             {"my_tup": (1, 2), "my_set": {1, 2, 3}},
-            {"my_tup": [1, 2], "my_set": [1, 2, 3]},
+            {"my_tup": [1, 2], "my_set": "{1, 2, 3}"},
             id="tuples_and_sets",
         ),
         pytest.param(
@@ -2254,7 +1180,6 @@ def test_startup_and_run_dag_with_rtif(
             run_id="c",
             try_number=1,
             dag_version_id=uuid7(),
-            queue="default",
         ),
         dag_rel_path="",
         bundle_info=FAKE_BUNDLE,
@@ -2303,7 +1228,6 @@ def test_task_run_with_user_impersonation(
             run_id="c",
             try_number=1,
             dag_version_id=uuid7(),
-            queue="default",
         ),
         dag_rel_path="",
         bundle_info=FAKE_BUNDLE,
@@ -2352,7 +1276,6 @@ def test_task_run_with_user_impersonation_default_user(
             run_id="c",
             try_number=1,
             dag_version_id=uuid7(),
-            queue="default",
         ),
         dag_rel_path="",
         bundle_info=FAKE_BUNDLE,
@@ -2393,7 +1316,6 @@ def test_task_run_with_user_impersonation_remove_krb5ccname_on_reexecuted_proces
             run_id="c",
             try_number=1,
             dag_version_id=uuid7(),
-            queue="default",
         ),
         dag_rel_path="",
         bundle_info=FAKE_BUNDLE,
@@ -2561,13 +1483,7 @@ def test_dag_parsing_context(make_ti_context, mock_supervisor_comms, monkeypatch
 
     what = StartupDetails(
         ti=TaskInstance(
-            id=uuid7(),
-            task_id=task_id,
-            dag_id=dag_id,
-            run_id="c",
-            try_number=1,
-            dag_version_id=uuid7(),
-            queue="default",
+            id=uuid7(), task_id=task_id, dag_id=dag_id, run_id="c", try_number=1, dag_version_id=uuid7()
         ),
         dag_rel_path="dag_parsing_context.py",
         bundle_info=BundleInfo(name="my-bundle", version=None),
@@ -2783,45 +1699,6 @@ def test_execute_success_task_with_rendered_map_index(create_runtime_ti, mock_su
     assert ti.rendered_map_index == "Hello! test_run"
 
 
-@pytest.mark.parametrize(
-    ("map_index_template", "expected"),
-    [
-        ("{{ ti.try_number }}", "1"),
-        ("index-{{ ti.try_number }}", "index-1"),
-        ("{{ '3.10' }}", "3.10"),
-    ],
-)
-@pytest.mark.parametrize("render_template_as_native_obj", [False, True])
-def test_execute_success_task_with_numeric_rendered_map_index(
-    create_runtime_ti,
-    mock_supervisor_comms,
-    map_index_template,
-    expected,
-    render_template_as_native_obj,
-):
-    """Test that numeric-looking map indices remain strings in both rendering modes."""
-
-    def test_function():
-        return "test function"
-
-    with DAG(
-        dag_id="dag_with_numeric_map_index_template",
-        schedule=None,
-        render_template_as_native_obj=render_template_as_native_obj,
-    ):
-        task = PythonOperator(
-            task_id="test_task",
-            python_callable=test_function,
-            map_index_template=map_index_template,
-        )
-
-    ti = create_runtime_ti(task)
-
-    run(ti, ti.get_template_context(), log=mock.MagicMock())
-
-    assert ti.rendered_map_index == expected
-
-
 def test_execute_failed_task_with_rendered_map_index(create_runtime_ti, mock_supervisor_comms):
     """Test that the map index is rendered in the task context."""
 
@@ -2854,43 +1731,6 @@ def test_rendered_map_index_updates_sent_progressively(create_runtime_ti, mock_s
 
     # Verify that rendered_map_index is set (existing behavior)
     assert ti.rendered_map_index == "Label: test_task"
-
-
-class TestSerializeOutletEvents:
-    """Tests for the wire format produced by ``_serialize_outlet_events``."""
-
-    def test_emits_single_event_when_no_partition_keys(self):
-        accessors = OutletEventAccessors()
-        accessors[Asset(name="a")].extra = {"x": 1}
-
-        events = list(_serialize_outlet_events(accessors))
-
-        assert events == [{"dest_asset_key": {"name": "a", "uri": "a"}, "extra": {"x": 1}}]
-
-    def test_emits_one_event_per_partition_key(self):
-        accessors = OutletEventAccessors()
-        accessors[Asset(name="a")].partition_keys = {"us", "eu"}
-
-        events = list(_serialize_outlet_events(accessors))
-
-        assert sorted(events, key=lambda e: e["partition_key"]) == [
-            {"dest_asset_key": {"name": "a", "uri": "a"}, "extra": {}, "partition_key": "eu"},
-            {"dest_asset_key": {"name": "a", "uri": "a"}, "extra": {}, "partition_key": "us"},
-        ]
-
-    def test_dedupes_partition_keys_at_serialization(self):
-        accessors = OutletEventAccessors()
-        accessor = accessors[Asset(name="a")]
-        accessor.add_partitions("us")
-        accessor.add_partitions("us")
-        accessor.add_partitions(["us", "eu"])
-
-        events = list(_serialize_outlet_events(accessors))
-
-        assert sorted(events, key=lambda e: e["partition_key"]) == [
-            {"dest_asset_key": {"name": "a", "uri": "a"}, "extra": {}, "partition_key": "eu"},
-            {"dest_asset_key": {"name": "a", "uri": "a"}, "extra": {}, "partition_key": "us"},
-        ]
 
 
 class TestRuntimeTaskInstance:
@@ -2941,70 +1781,9 @@ class TestRuntimeTaskInstance:
             "run_id": "test_run",
             "task": task,
             "task_instance": runtime_ti,
-            "task_state_store": TaskStateStoreAccessor(
-                ti_id=ti_id, scope=TaskScope(dag_id=dag_id, run_id="test_run", task_id="hello")
-            ),
+            "task_state": TaskStateAccessor(ti_id=ti_id),
             "ti": runtime_ti,
         }
-
-    def test_state_store_accessor_carries_stats_tags(self, create_runtime_ti):
-        runtime_ti = create_runtime_ti(task=BaseOperator(task_id="hello"))
-
-        accessor = runtime_ti.get_template_context()["task_state_store"]
-
-        assert accessor._stats_tags == {**runtime_ti.stats_tags, "operator": "BaseOperator"}
-
-    def test_task_state_store_scope_carries_region_coordinates(self, create_runtime_ti):
-        region_id = uuid7()
-        runtime_ti = create_runtime_ti(task=BaseOperator(task_id="hello"))
-        runtime_ti.region_id = region_id
-        runtime_ti.region_index = 4
-
-        accessor = runtime_ti.get_template_context()["task_state_store"]
-
-        assert accessor == TaskStateStoreAccessor(
-            ti_id=runtime_ti.id,
-            scope=TaskScope(
-                dag_id=runtime_ti.dag_id,
-                run_id=runtime_ti.run_id,
-                task_id="hello",
-                map_index=4,
-                region_id=region_id,
-            ),
-        )
-
-    def test_macros_in_context_are_scoped_to_the_tasks_team(self, create_runtime_ti, mock_supervisor_comms):
-        """The accessor placed in the context must carry the team the server reported."""
-        from airflow.sdk.plugins_manager import AirflowPlugin
-
-        from tests_common.test_utils.mock_plugins import mock_plugin_manager
-
-        def team_a_macro():
-            return "team-a"
-
-        class TeamAPlugin(AirflowPlugin):
-            name = "team_a_macros"
-            team_name = "team-a"
-            macros = [team_a_macro]
-
-        runtime_ti = create_runtime_ti(task=BaseOperator(task_id="hello"), dag_id="basic_task")
-        # Stand in for a multi-team server handing this task to a worker as team-b's.
-        runtime_ti._ti_context_from_server.multi_team = True
-        runtime_ti._ti_context_from_server.dag_run.team_name = "team-b"
-
-        dr = runtime_ti._ti_context_from_server.dag_run
-        mock_supervisor_comms.send.return_value = PrevSuccessfulDagRunResult(
-            data_interval_end=dr.logical_date - timedelta(hours=1),
-            data_interval_start=dr.logical_date - timedelta(hours=2),
-            start_date=dr.start_date - timedelta(hours=1),
-            end_date=dr.start_date,
-        )
-
-        with mock_plugin_manager(plugins=[TeamAPlugin]):
-            macros = runtime_ti.get_template_context()["macros"]
-
-            with pytest.raises(AttributeError, match="belong to team 'team-a'"):
-                macros.team_a_macros
 
     def test_get_context_with_ti_context_from_server(self, create_runtime_ti, mock_supervisor_comms):
         """Test the context keys are added when sent from API server (mocked)"""
@@ -3048,10 +1827,7 @@ class TestRuntimeTaskInstance:
             "run_id": "test_run",
             "task": task,
             "task_instance": runtime_ti,
-            "task_state_store": TaskStateStoreAccessor(
-                ti_id=runtime_ti.id,
-                scope=TaskScope(dag_id=runtime_ti.dag_id, run_id="test_run", task_id="hello"),
-            ),
+            "task_state": TaskStateAccessor(ti_id=runtime_ti.id),
             "ti": runtime_ti,
             "dag_run": dr,
             "data_interval_end": timezone.datetime(2024, 12, 1, 1, 0, 0),
@@ -3066,7 +1842,6 @@ class TestRuntimeTaskInstance:
             "ts_nodash": "20241201T010000",
             "ts_nodash_with_tz": "20241201T010000+0000",
             "partition_key": dr.partition_key,
-            "partition_date": dr.partition_date,
         }
 
     def test_partition_key_in_context(self, create_runtime_ti, mock_supervisor_comms):
@@ -3092,37 +1867,6 @@ class TestRuntimeTaskInstance:
         dr.partition_key = "some-partition"
         context = runtime_ti.get_template_context()
         assert context["partition_key"] == "some-partition"
-
-    def test_partition_date_in_context(self, create_runtime_ti, mock_supervisor_comms):
-        """Test that partition_date from dag_run is exposed in the template context."""
-        task = BaseOperator(task_id="hello")
-        runtime_ti = create_runtime_ti(task=task, dag_id="basic_task")
-
-        dr = runtime_ti._ti_context_from_server.dag_run
-
-        mock_supervisor_comms.send.return_value = PrevSuccessfulDagRunResult(
-            data_interval_end=dr.logical_date - timedelta(hours=1),
-            data_interval_start=dr.logical_date - timedelta(hours=2),
-            start_date=dr.start_date - timedelta(hours=1),
-            end_date=dr.start_date,
-        )
-
-        context = runtime_ti.get_template_context()
-
-        # Default: partition_date is None
-        assert context["partition_date"] is None
-
-        # Set partition_date on dag_run and verify it surfaces in context
-        partition_date = timezone.datetime(2026, 5, 20, 1, 0, 0)
-        dr.partition_date = partition_date
-        context = runtime_ti.get_template_context()
-        assert context["partition_date"] == partition_date
-
-        # Naive datetime is coerced to tz-aware so Jinja `| ds` / `| ts` filters
-        # operate on a real awareness boundary.
-        dr.partition_date = datetime(2026, 5, 20, 1, 0, 0)
-        context = runtime_ti.get_template_context()
-        assert context["partition_date"].tzinfo is not None
 
     def test_lazy_loading_not_triggered_until_accessed(self, create_runtime_ti, mock_supervisor_comms):
         """Ensure lazy-loaded attributes are not resolved until accessed."""
@@ -3232,7 +1976,6 @@ class TestRuntimeTaskInstance:
             password="passwordvalue",
             schema="schemavalues",
             extra='{"extra__asana__workspace": "extra1"}',
-            port=None,
         )
 
         mock_supervisor_comms.send.return_value = conn
@@ -3337,10 +2080,8 @@ class TestRuntimeTaskInstance:
         test_task_id = "pull_task"
         task = CustomOperator(task_id=test_task_id)
 
-        # In case of the specific map_index we should check it is passed to TI.
-        # ``None`` is not a valid TaskInstance.map_index value, but xcom_pull's
-        # behaviour with ``map_indexes=None`` is independent of the TI's own map_index.
-        extra_for_ti = {"map_index": map_indexes} if isinstance(map_indexes, int) else {}
+        # In case of the specific map_index or None we should check it is passed to TI
+        extra_for_ti = {"map_index": map_indexes} if map_indexes in (1, None) else {}
         runtime_ti = create_runtime_ti(task=task, **extra_for_ti)
 
         ser_value = BaseXCom.serialize_value(xcom_values)
@@ -3391,39 +2132,6 @@ class TestRuntimeTaskInstance:
                             map_index=expected_map_index,
                         ),
                     )
-
-    @pytest.mark.asyncio
-    async def test_axcom_pull(
-        self,
-        create_runtime_ti,
-        mock_supervisor_comms,
-        spy_agency,
-    ):
-        """
-        Test that a task makes an expected call to the Supervisor to pull an XCom value asynchronously.
-        """
-        spy_agency.spy_on(deserialize)
-
-        task = BaseOperator(task_id="pull_task")
-        runtime_ti = create_runtime_ti(task=task)
-
-        xcom_value = "hello"
-        ser_value = BaseXCom.serialize_value(xcom_value)
-        mock_supervisor_comms.asend.return_value = XComResult(key="key", value=ser_value)
-
-        value = await runtime_ti.axcom_pull(key="key", task_ids="push_task", map_indexes=-1)
-
-        assert value == xcom_value
-        spy_agency.assert_spy_called_with(deserialize, ser_value)
-        mock_supervisor_comms.asend.assert_called_once_with(
-            GetXCom(
-                key="key",
-                dag_id="test_dag",
-                run_id="test_run",
-                task_id="push_task",
-                map_index=-1,
-            ),
-        )
 
     @pytest.mark.parametrize(
         ("task_ids", "map_indexes", "expected_value"),
@@ -3541,123 +2249,6 @@ class TestRuntimeTaskInstance:
                 step=None,
             ),
         )
-
-    @staticmethod
-    def _make_loop_dag():
-        @task_group
-        def body():
-            BaseOperator(task_id="first") >> BaseOperator(task_id="second")
-
-        with DAG("loop_dag", schedule=None) as dag:
-            create_loop(body, max_iterations=3) >> BaseOperator(task_id="after")
-        return dag
-
-    def test_xcom_pull_of_a_loop_task_from_outside_the_loop_returns_every_iteration(
-        self, create_runtime_ti, mock_supervisor_comms
-    ):
-        dag = self._make_loop_dag()
-        runtime_ti = create_runtime_ti(task=dag.get_task("after"))
-        mock_supervisor_comms.send.return_value = XComSequenceSliceResult(root=[1, 2, 3])
-
-        result = runtime_ti.xcom_pull(key="test_key", task_ids="body.first")
-
-        assert isinstance(result, LazyXComSequence)
-        mock_supervisor_comms.send.assert_not_called()
-        assert result[:] == [1, 2, 3]
-        sent = mock_supervisor_comms.send.call_args.args[0]
-        assert (sent.task_id, sent.key, sent.previous_iteration) == ("body.first", "test_key", False)
-
-    @pytest.mark.parametrize(
-        ("task_id", "pull_kwargs"),
-        [
-            pytest.param("body.second", {"task_ids": "body.first"}, id="caller inside the loop"),
-            pytest.param("after", {"task_ids": "body.first", "include_prior_dates": True}, id="prior dates"),
-            pytest.param("after", {"task_ids": "body.first", "run_id": "other_run"}, id="other run"),
-            pytest.param("after", {"task_ids": "body.first", "map_indexes": -1}, id="explicit map index"),
-            pytest.param("after", {"task_ids": ["body.first"]}, id="several task ids"),
-            pytest.param("after", {"task_ids": "removed"}, id="task missing from the dag"),
-            pytest.param("after", {"task_ids": "after"}, id="task outside any loop"),
-        ],
-    )
-    def test_xcom_pull_keeps_pulling_values_unless_an_outside_caller_reads_a_loop_task(
-        self, create_runtime_ti, mock_supervisor_comms, task_id, pull_kwargs
-    ):
-        dag = self._make_loop_dag()
-        runtime_ti = create_runtime_ti(task=dag.get_task(task_id))
-        mock_supervisor_comms.send.return_value = XComSequenceSliceResult(root=[1, 2, 3])
-
-        with patch.object(XCom, "get_one", return_value=7):
-            result = runtime_ti.xcom_pull(key="test_key", **pull_kwargs)
-
-        assert not isinstance(result, LazyXComSequence)
-
-    @pytest.mark.asyncio
-    async def test_axcom_pull_of_a_loop_task_from_outside_the_loop_returns_a_list_for_one_iteration(
-        self, create_runtime_ti, mock_supervisor_comms
-    ):
-        dag = self._make_loop_dag()
-        runtime_ti = create_runtime_ti(task=dag.get_task("after"))
-        mock_supervisor_comms.asend.return_value = XComSequenceSliceResult(root=["only"])
-
-        result = await runtime_ti.axcom_pull(key="test_key", task_ids="body.first")
-
-        assert result == ["only"]
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("pull_method", "get_all_method"),
-        [
-            pytest.param("xcom_pull", "get_all", id="sync"),
-            pytest.param("axcom_pull", "aget_all", id="async"),
-        ],
-    )
-    @pytest.mark.parametrize(
-        ("pull_kwargs", "expected"),
-        [
-            pytest.param({"default": "fallback_value"}, "fallback_value", id="default passed"),
-            pytest.param({}, None, id="default not passed"),
-        ],
-    )
-    async def test_xcom_pull_uses_default_when_no_map_indexes_and_no_xcom(
-        self, create_runtime_ti, mock_supervisor_comms, pull_method, get_all_method, pull_kwargs, expected
-    ):
-        runtime_ti = create_runtime_ti(task=BaseOperator(task_id="pull_task"))
-
-        with patch.object(XCom, get_all_method, autospec=True, return_value=None):
-            result = getattr(runtime_ti, pull_method)(key="missing_key", task_ids="task_a", **pull_kwargs)
-            if inspect.isawaitable(result):
-                result = await result
-
-        assert result == expected
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("pull_method", "get_all_method"),
-        [
-            pytest.param("xcom_pull", "get_all", id="sync"),
-            pytest.param("axcom_pull", "aget_all", id="async"),
-        ],
-    )
-    async def test_xcom_pull_default_fills_correct_position_with_multiple_task_ids(
-        self, create_runtime_ti, mock_supervisor_comms, pull_method, get_all_method
-    ):
-        runtime_ti = create_runtime_ti(task=BaseOperator(task_id="pull_task"))
-
-        def get_all_side_effect(*, run_id, key, task_id, dag_id, include_prior_dates):
-            if task_id == "task_with_xcom":
-                return ["stored_value"]
-            return None
-
-        with patch.object(XCom, get_all_method, autospec=True, side_effect=get_all_side_effect):
-            result = getattr(runtime_ti, pull_method)(
-                key="my_key",
-                task_ids=["task_with_xcom", "task_without_xcom"],
-                default="my_default",
-            )
-            if inspect.isawaitable(result):
-                result = await result
-
-        assert result == ["stored_value", "my_default"]
 
     def test_get_param_from_context(
         self, mocked_parse, make_ti_context, mock_supervisor_comms, create_runtime_ti
@@ -3943,7 +2534,7 @@ class TestRuntimeTaskInstance:
     def test_get_first_reschedule_date(
         self, create_runtime_ti, mock_supervisor_comms, task_reschedule_count, expected_date
     ):
-        """Test that the first reschedule date falls back to the Supervisor."""
+        """Test that the first reschedule date is fetched from the Supervisor."""
         task = BaseOperator(task_id="hello")
         runtime_ti = create_runtime_ti(task=task, task_reschedule_count=task_reschedule_count)
 
@@ -3953,22 +2544,6 @@ class TestRuntimeTaskInstance:
 
         context = runtime_ti.get_template_context()
         assert runtime_ti.get_first_reschedule_date(context=context) == expected_date
-
-    def test_get_first_reschedule_date_uses_context_from_server(
-        self, create_runtime_ti, make_ti_context, mock_supervisor_comms
-    ):
-        """Test that first reschedule date from server context avoids a Supervisor request."""
-        first_reschedule_date = timezone.datetime(2025, 1, 1)
-        task = BaseOperator(task_id="hello")
-        runtime_ti = create_runtime_ti(task=task, task_reschedule_count=1)
-        runtime_ti._ti_context_from_server = make_ti_context(
-            task_reschedule_count=1,
-            first_task_reschedule_start_date=first_reschedule_date,
-        )
-
-        context = runtime_ti.get_template_context()
-        assert runtime_ti.get_first_reschedule_date(context=context) == first_reschedule_date
-        mock_supervisor_comms.send.assert_not_called()
 
     def test_get_ti_count(self, mock_supervisor_comms):
         """Test that get_ti_count sends the correct request and returns the count."""
@@ -4065,10 +2640,6 @@ class TestRuntimeTaskInstance:
             run_type="scheduled",
             state="success",
             consumed_asset_events=[],
-            data_interval_start=None,
-            data_interval_end=None,
-            end_date=None,
-            partition_key=None,
         )
 
         mock_supervisor_comms.send.return_value = PreviousDagRunResult(dag_run=dag_run_data)
@@ -4081,25 +2652,6 @@ class TestRuntimeTaskInstance:
         assert dr.dag_id == "test_dag"
         assert dr.run_id == "prev_run"
         assert dr.state == "success"
-
-    def test_update_dagrun_note(self, create_runtime_ti, mock_supervisor_comms):
-        task = BaseOperator(task_id="hello")
-        runtime_ti = create_runtime_ti(task=task)
-
-        runtime_ti.update_dagrun_note("Updated from task runtime")
-
-        mock_supervisor_comms.send.assert_called_once_with(
-            msg=UpdateDagRunNote(ti_id=runtime_ti.id, note="Updated from task runtime")
-        )
-
-    def test_update_dagrun_note_none_skips_request(self, create_runtime_ti, mock_supervisor_comms):
-        """A null note is a server-side no-op, so don't spend a round-trip on it."""
-        task = BaseOperator(task_id="hello")
-        runtime_ti = create_runtime_ti(task=task)
-
-        runtime_ti.update_dagrun_note(None)
-
-        mock_supervisor_comms.send.assert_not_called()
 
     def test_get_previous_dagrun_with_state(self, create_runtime_ti, mock_supervisor_comms):
         """Test that get_previous_dagrun sends the correct request with state filter."""
@@ -4117,10 +2669,6 @@ class TestRuntimeTaskInstance:
             run_type="scheduled",
             state="success",
             consumed_asset_events=[],
-            data_interval_start=None,
-            data_interval_end=None,
-            end_date=None,
-            partition_key=None,
         )
 
         mock_supervisor_comms.send.return_value = PreviousDagRunResult(dag_run=dag_run_data)
@@ -4455,77 +3003,6 @@ class TestRuntimeTaskInstance:
         assert "***" in env_vars_value  # secrets are redacted before truncation
 
     @pytest.mark.enable_redact
-    def test_rendered_templates_mask_nested_keys_with_truncation(
-        self, create_runtime_ti, mock_supervisor_comms, monkeypatch
-    ):
-        """Nested sensitive-key masking applies consistently across the truncation path.
-
-        A value under a documented sensitive key (``password``, ``token``, ``secret``,
-        ``api_key``) is masked recursively by ``redact()`` when the structured value
-        is walked. The oversized branch must redact while still structured so that
-        nested-key context is preserved before stringification — otherwise the post-
-        stringify ``redact()`` call only sees the outer field name and the recursive
-        walker cannot reach the inner key.
-        """
-        from airflow.sdk._shared.secrets_masker import _secrets_masker
-
-        # Earlier tests in this file (e.g. test_get_connection_from_context) call
-        # mask_secret(conn.password) where the fixture's password value is the literal
-        # "password"; that registers "password" as a regex pattern in the singleton
-        # masker. Without isolation, str(redacted) gets that regex applied and the
-        # dict KEY name "password" itself becomes "***", obscuring whether the
-        # structured nested-key walk fired. Reset the regex patterns for this test
-        # (monkeypatch restores them on teardown) so the assertion can distinguish
-        # value-masking (what we are testing) from key-token replacement.
-        masker = _secrets_masker()
-        monkeypatch.setattr(masker, "patterns", set())
-        monkeypatch.setattr(masker, "replacer", None)
-        # The SDK masker starts with an empty sensitive-fields list in the test runtime
-        # (settings.py has not run); register `password` explicitly so the structured
-        # walker has something to match. Production workers get this from settings.py.
-        monkeypatch.setattr(
-            masker,
-            "sensitive_variables_fields",
-            list(masker.sensitive_variables_fields) + ["password"],
-        )
-
-        nested_value = "REGRESSION-FIXTURE-NESTED-PASSWORD-VALUE"
-
-        class CustomOperator(BaseOperator):
-            template_fields = ("env_vars",)
-
-            def __init__(self, env_vars, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                self.env_vars = env_vars
-
-            def execute(self, context):
-                pass
-
-        # Nested 'password' key under enough padding to exceed default 4096-char limit.
-        env_vars = {
-            "DB": {"password": nested_value, "host": "db.internal", "zz_pad": "A" * 5000},
-        }
-
-        task = CustomOperator(task_id="test_nested_truncation_masking", env_vars=env_vars)
-
-        runtime_ti = create_runtime_ti(task=task, dag_id="test_nested_truncation_masking_dag")
-        run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
-
-        msg = next(
-            c.kwargs["msg"]
-            for c in mock_supervisor_comms.send.mock_calls
-            if c.kwargs.get("msg") and getattr(c.kwargs["msg"], "type", None) == "SetRenderedFields"
-        )
-        env_vars_value = msg.rendered_fields["env_vars"]
-
-        assert isinstance(env_vars_value, str)
-        assert env_vars_value.startswith(
-            "Truncated. You can change this behaviour in [core]max_templated_field_length. "
-        )
-        assert nested_value not in env_vars_value
-        assert "'password': '***'" in env_vars_value
-
-    @pytest.mark.enable_redact
     def test_rendered_templates_masks_secrets_in_complex_objects(
         self, create_runtime_ti, mock_supervisor_comms
     ):
@@ -4565,13 +3042,10 @@ class TestRuntimeTaskInstance:
 
         rendered_fields = mock_supervisor_comms.send.mock_calls[0].kwargs["msg"].rendered_fields
         assert rendered_fields is not None
-        # K8s V1EnvVar objects expose .to_dict(); the recursive walk normalizes the list of objects
-        # into a list of plain dicts so the result is directly JSON-encodable and redact can mask secrets in nested values.
-        assert rendered_fields["env_vars"] == [
-            {"name": "var1", "value": "This is a test phrase.", "value_from": None},
-            {"name": "var2", "value": "***", "value_from": None},
-            {"name": "var3", "value": "***", "value_from": None},
-        ]
+        assert (
+            rendered_fields["env_vars"]
+            == '[{"name": "var1", "value": "This is a test phrase.", "value_from": null}, {"name": "var2", "value": "***", "value_from": null}, {"name": "var3", "value": "***", "value_from": null}]'
+        )
 
     def test_nested_template_field_renderer_respects_redaction(
         self, create_runtime_ti, mock_supervisor_comms
@@ -4655,7 +3129,7 @@ class TestRuntimeTaskInstance:
             relative_fileloc="dags/example.py",
             owners="owner_1",
             tags=["a_tag", "z_tag"],
-            next_dagrun=datetime(2026, 4, 13, tzinfo=UTC),
+            next_dagrun=datetime(2026, 4, 13, tzinfo=dt_timezone.utc),
         )
 
         response = RuntimeTaskInstance.get_dag(
@@ -4751,22 +3225,18 @@ class TestXComAfterTaskExecution:
 
         runtime_ti = create_runtime_ti(task=task)
 
-        with mock.patch.object(XCom, "_push", autospec=True) as mock_xcom_push:
+        with mock.patch.object(XCom, "set") as mock_xcom_set:
             _xcom_push(runtime_ti, BaseXCom.XCOM_RETURN_KEY, result, mapped_length=7)
-            mock_xcom_push.assert_called_once_with(
-                runtime_ti, BaseXCom.XCOM_RETURN_KEY, result, dag_result=False, mapped_length=7
+            mock_xcom_set.assert_called_once_with(
+                key=BaseXCom.XCOM_RETURN_KEY,
+                value=result,
+                dag_id=runtime_ti.dag_id,
+                task_id=runtime_ti.task_id,
+                run_id=runtime_ti.run_id,
+                map_index=runtime_ti.map_index,
+                dag_result=False,
+                _mapped_length=7,
             )
-
-    @pytest.mark.asyncio
-    async def test_axcom_push_passes_the_task_instance(self, create_runtime_ti):
-        runtime_ti = create_runtime_ti(task=BaseOperator(task_id="push_task"))
-
-        with mock.patch.object(XCom, "_apush", autospec=True) as mock_xcom_apush:
-            await _axcom_push(runtime_ti, "key", "value")
-
-        mock_xcom_apush.assert_awaited_once_with(
-            runtime_ti, "key", "value", dag_result=False, mapped_length=None
-        )
 
     def test_xcom_with_multiple_outputs_and_no_mapping_result(self, create_runtime_ti, spy_agency):
         """Test that error is raised when multiple outputs are returned without mapping."""
@@ -4826,12 +3296,15 @@ class TestXComAfterTaskExecution:
 
         run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
 
-        mock_xcom_backend._push.assert_called_once_with(
-            runtime_ti,
-            BaseXCom.XCOM_RETURN_KEY,
-            "pushing to xcom backend!",
+        mock_xcom_backend.set.assert_called_once_with(
+            key=BaseXCom.XCOM_RETURN_KEY,
+            value="pushing to xcom backend!",
+            dag_id="test_dag",
+            task_id="pull_task",
+            run_id="test_run",
+            map_index=-1,
             dag_result=False,
-            mapped_length=None,
+            _mapped_length=None,
         )
 
         # assert that we didn't call the API when XCom backend is configured
@@ -4909,35 +3382,6 @@ class TestXComAfterTaskExecution:
         ]
         assert result == expected
 
-    def test_xcom_pull_with_explicit_dag_id_and_run_id(self, create_runtime_ti, mock_supervisor_comms):
-        task = BaseOperator(task_id="parent_task")
-        runtime_ti = create_runtime_ti(task=task, dag_id="parent_dag", run_id="parent_run")
-        value = {"child_result": "hello world"}
-        ser_value = BaseXCom.serialize_value(value)
-
-        mock_supervisor_comms.send.return_value = XComSequenceSliceResult(root=[ser_value])
-
-        assert (
-            runtime_ti.xcom_pull(
-                task_ids="child_task",
-                dag_id="child_dag",
-                run_id="child_run",
-            )
-            == value
-        )
-        mock_supervisor_comms.send.assert_called_once_with(
-            msg=GetXComSequenceSlice(
-                key="return_value",
-                dag_id="child_dag",
-                run_id="child_run",
-                task_id="child_task",
-                start=None,
-                stop=None,
-                step=None,
-                include_prior_dates=False,
-            ),
-        )
-
     @pytest.mark.parametrize(
         ("include_prior_dates", "expected_value"),
         [
@@ -4988,122 +3432,6 @@ class TestXComAfterTaskExecution:
                 include_prior_dates=expected_value,
             ),
         )
-
-
-def _recording_email_backend(
-    to: list[str] | Iterable[str],
-    subject: str,
-    html_content: str,
-    files: list[str] | None = None,
-    dryrun: bool = False,
-    cc: str | Iterable[str] | None = None,
-    bcc: str | Iterable[str] | None = None,
-    mime_subtype: str = "mixed",
-    mime_charset: str = "utf-8",
-    conn_id: str | None = None,
-    custom_headers: dict[str, Any] | None = None,
-    **kwargs,
-) -> None:
-    """
-    Legacy ``[email] email_backend`` stub, patched with an autospecced mock in tests.
-
-    Mirrors the ``airflow.utils.email.send_email`` signature so the autospec enforces the
-    calling convention ``_LegacyEmailBackendNotifier`` has to honour. Duplicated here rather
-    than imported because the Task SDK must not depend on ``airflow-core``.
-    """
-    raise AssertionError("should be patched in the test")
-
-
-class _ClearTargetOperator(BaseOperator):
-    """Points a clear at ``child.wait`` on the rendered ``target_date``."""
-
-    template_fields = ("target_date",)
-
-    def __init__(self, *, target_date: str | None, **kwargs):
-        super().__init__(**kwargs)
-        self.target_date = target_date
-
-    def execute(self, context):
-        pass
-
-    def get_external_clear_target(self, context):
-        logical_date = None if self.target_date is None else datetime.fromisoformat(self.target_date)
-        return ExternalClearTarget(dag_id="child", task_id="wait", logical_date=logical_date)
-
-
-class TestExternalClearTarget:
-    @staticmethod
-    def _run(runtime_ti):
-        return run(
-            runtime_ti,
-            context=runtime_ti.get_template_context(),
-            log=mock.MagicMock(spec=structlog.typing.FilteringBoundLogger),
-        )
-
-    def test_reports_target_resolved_from_rendered_templates(self, create_runtime_ti, mock_supervisor_comms):
-        task = _ClearTargetOperator(
-            task_id="mark", target_date="{{ logical_date.replace(hour=0).isoformat() }}"
-        )
-        runtime_ti = create_runtime_ti(task=task, logical_date=timezone.datetime(2026, 10, 1, 5))
-
-        state, msg, _ = self._run(runtime_ti)
-
-        assert state == TaskInstanceState.SUCCESS
-        assert isinstance(msg, SucceedTask)
-        assert msg.external_clear_target == ExternalClearTargetPayload(
-            dag_id="child", task_id="wait", logical_date=timezone.datetime(2026, 10, 1), recursion_depth=10
-        )
-
-    def test_target_without_a_date_points_at_the_run_logical_date(
-        self, create_runtime_ti, mock_supervisor_comms
-    ):
-        task = _ClearTargetOperator(task_id="mark", target_date=None)
-        runtime_ti = create_runtime_ti(task=task, logical_date=timezone.datetime(2026, 10, 1, 5))
-
-        _, msg, _ = self._run(runtime_ti)
-
-        assert msg.external_clear_target.logical_date == timezone.datetime(2026, 10, 1, 5)
-
-    def test_target_without_a_date_reports_nothing_in_a_run_without_one(
-        self, create_runtime_ti, mock_supervisor_comms
-    ):
-        task = _ClearTargetOperator(task_id="mark", target_date=None)
-        runtime_ti = create_runtime_ti(task=task, logical_date=None)
-
-        state, msg, _ = self._run(runtime_ti)
-
-        assert state == TaskInstanceState.SUCCESS
-        assert msg.external_clear_target is None
-
-    @pytest.mark.parametrize("declares_target", [False, True], ids=["no-method", "returns-none"])
-    def test_operator_without_target_reports_nothing(
-        self, create_runtime_ti, mock_supervisor_comms, declares_target
-    ):
-        class PlainOperator(BaseOperator):
-            def execute(self, context):
-                pass
-
-        class NoTargetThisRun(PlainOperator):
-            def get_external_clear_target(self, context):
-                return None
-
-        task_class = NoTargetThisRun if declares_target else PlainOperator
-        runtime_ti = create_runtime_ti(task=task_class(task_id="plain"))
-
-        state, msg, _ = self._run(runtime_ti)
-
-        assert state == TaskInstanceState.SUCCESS
-        assert msg.external_clear_target is None
-
-    def test_target_that_cannot_be_resolved_fails_the_task(self, create_runtime_ti, mock_supervisor_comms):
-        task = _ClearTargetOperator(task_id="mark", target_date="{{ params.get('missing', '') }}")
-        runtime_ti = create_runtime_ti(task=task)
-
-        state, msg, error = self._run(runtime_ti)
-
-        assert state == TaskInstanceState.FAILED
-        assert isinstance(msg, TaskState)
-        assert isinstance(error, ValueError)
 
 
 class TestEmailNotifications:
@@ -5271,77 +3599,6 @@ class TestEmailNotifications:
                     == "<h1>Custom Template</h1><p>Task: {{ti.task_id}}</p><p>Error: {{exception_html}}</p>"
                 )
                 assert kwargs["from_email"] == self.FROM
-
-    def test_custom_email_backend_is_used(self, create_runtime_ti, mock_supervisor_comms):
-        """A custom ``[email] email_backend`` is wrapped and invoked with rendered fields."""
-        backend = mock.create_autospec(_recording_email_backend)
-
-        class FailingOperator(BaseOperator):
-            def execute(self, context):
-                raise AirflowFailException("Task failed on purpose")
-
-        task = FailingOperator(
-            task_id="legacy_backend_task",
-            email=["test@example.com"],
-            email_on_failure=True,
-        )
-
-        runtime_ti = create_runtime_ti(task=task)
-        context = runtime_ti.get_template_context()
-        log = mock.MagicMock()
-
-        with conf_vars(
-            {
-                ("email", "email_backend"): f"{__name__}._recording_email_backend",
-                ("email", "email_conn_id"): "my_smtp",
-                ("email", "from_email"): self.FROM,
-            }
-        ):
-            with mock.patch(f"{__name__}._recording_email_backend", backend):
-                with mock.patch(
-                    "airflow.providers.smtp.notifications.smtp.SmtpNotifier", autospec=True
-                ) as mock_smtp_notifier:
-                    state, _, error = run(runtime_ti, context, log)
-                    finalize(runtime_ti, state, context, log, error)
-
-        # The default SMTP notifier must not be used when a custom backend is configured.
-        mock_smtp_notifier.assert_not_called()
-        backend.assert_called_once()
-        args, kwargs = backend.call_args
-        # send_email(to, subject, html_content, conn_id=..., from_email=...)
-        assert args[0] == ["test@example.com"]
-        assert kwargs["conn_id"] == "my_smtp"
-        assert kwargs["from_email"] == self.FROM
-
-    def test_unresolvable_email_backend_is_logged(self, create_runtime_ti, mock_supervisor_comms):
-        """An unimportable custom backend is logged, and does not silently fall back to SMTP."""
-
-        class FailingOperator(BaseOperator):
-            def execute(self, context):
-                raise AirflowFailException("Task failed on purpose")
-
-        task = FailingOperator(
-            task_id="bad_backend_task",
-            email=["test@example.com"],
-            email_on_failure=True,
-        )
-
-        runtime_ti = create_runtime_ti(task=task)
-        context = runtime_ti.get_template_context()
-        log = mock.MagicMock()
-
-        with conf_vars({("email", "email_backend"): "airflow.does.not.Exist"}):
-            # SmtpNotifier is patched to succeed, so a logged exception can only come from
-            # resolving the custom backend -- without that, this would pass pre-fix too.
-            with mock.patch(
-                "airflow.providers.smtp.notifications.smtp.SmtpNotifier", autospec=True
-            ) as mock_smtp_notifier:
-                state, _, error = run(runtime_ti, context, log)
-                # Must not raise even though the backend cannot be loaded.
-                finalize(runtime_ti, state, context, log, error)
-
-        mock_smtp_notifier.assert_not_called()
-        log.exception.assert_called()
 
     @pytest.mark.enable_redact
     def test_rendered_templates_mask_secrets(self, create_runtime_ti, mock_supervisor_comms):
@@ -5579,7 +3836,6 @@ class TestTaskRunnerCallsListeners:
             self.state = []
             self.component = None
             self.error = None
-            self.end_date = None
 
         @hookimpl
         def on_starting(self, component):
@@ -5601,7 +3857,6 @@ class TestTaskRunnerCallsListeners:
         @hookimpl
         def on_task_instance_skipped(self, previous_state, task_instance):
             self.state.append(TaskInstanceState.SKIPPED)
-            self.end_date = task_instance.end_date
 
         @hookimpl
         def before_stopping(self, component):
@@ -5654,7 +3909,6 @@ class TestTaskRunnerCallsListeners:
                 run_id="c",
                 try_number=1,
                 dag_version_id=uuid7(),
-                queue="default",
             ),
             dag_rel_path="",
             bundle_info=FAKE_BUNDLE,
@@ -5748,53 +4002,6 @@ class TestTaskRunnerCallsListeners:
         assert listener.state == [TaskInstanceState.RUNNING, TaskInstanceState.FAILED]
         assert listener.error == error
 
-    def test_task_runner_calls_listeners_failed_when_terminal_send_fails(
-        self, mocked_parse, mock_supervisor_comms, listener_manager
-    ):
-        """Callbacks/listeners must still fire when the FAILED terminal-state
-        IPC send to the supervisor fails. The fail-closed exit is deferred to
-        main() (signalled via `_terminal_state_send_failed` on the ti) so
-        finalize() runs first.
-        """
-        listener = self.CustomListener()
-        listener_manager(listener)
-
-        class CustomOperator(BaseOperator):
-            def execute(self, context):
-                raise RuntimeError("task body failed")
-
-        task = CustomOperator(task_id="failing_with_broken_ipc")
-        dag = get_inline_dag(dag_id="test_dag", task=task)
-        ti = TaskInstance(
-            id=uuid7(),
-            task_id=task.task_id,
-            dag_id=dag.dag_id,
-            run_id="test_run",
-            try_number=1,
-            dag_version_id=uuid7(),
-        )
-
-        runtime_ti = RuntimeTaskInstance.model_construct(
-            **ti.model_dump(exclude_unset=True), task=task, start_date=timezone.utcnow()
-        )
-
-        def send_side_effect(msg=None, **kwargs):
-            if isinstance(msg, TaskState):
-                raise BrokenPipeError("supervisor IPC broken")
-            return mock.DEFAULT
-
-        mock_supervisor_comms.send.side_effect = send_side_effect
-
-        log = mock.MagicMock()
-        context = runtime_ti.get_template_context()
-        state, _, error = run(runtime_ti, context, log)
-        finalize(runtime_ti, state, context, log, error)
-
-        assert state == TaskInstanceState.FAILED
-        assert runtime_ti._terminal_state_send_failed is True
-        assert listener.state == [TaskInstanceState.RUNNING, TaskInstanceState.FAILED]
-        assert listener.error == error
-
     def test_task_runner_calls_listeners_skipped(self, mocked_parse, mock_supervisor_comms, listener_manager):
         listener = self.CustomListener()
         listener_manager(listener)
@@ -5821,12 +4028,10 @@ class TestTaskRunnerCallsListeners:
         )
         log = mock.MagicMock()
         context = runtime_ti.get_template_context()
-        state, msg, _ = run(runtime_ti, context, log)
+        state, _, _ = run(runtime_ti, context, log)
         finalize(runtime_ti, state, context, log)
 
         assert listener.state == [TaskInstanceState.RUNNING, TaskInstanceState.SKIPPED]
-        assert listener.end_date is not None
-        assert listener.end_date == msg.end_date
 
     def test_listener_access_outlet_event_on_running_and_success(
         self, mocked_parse, mock_supervisor_comms, listener_manager
@@ -6059,22 +4264,6 @@ class TestTaskRunnerCallsCallbacks:
             log_url = runtime_ti.log_url
             assert log_url == expected_url
 
-    @pytest.mark.parametrize(("map_index", "mapped_path"), [(-1, ""), (1, "/mapped/1")])
-    def test_runtime_task_instance_log_url_selects_a_task_instance_in_a_region_by_its_region(
-        self, create_runtime_ti, map_index, mapped_path
-    ):
-        task = BaseOperator(task_id="test_task")
-        runtime_ti = create_runtime_ti(
-            task=task, dag_id="test_dag", run_id="test_run", try_number=2, map_index=map_index
-        )
-        runtime_ti.region_id, runtime_ti.region_index = uuid7(), 1
-
-        with conf_vars({("api", "base_url"): "http://localhost:8080/"}):
-            assert runtime_ti.log_url == (
-                f"http://localhost:8080/dags/test_dag/runs/test_run/tasks/test_task{mapped_path}"
-                f"?region_id={runtime_ti.region_id}&region_index=1&try_number=2"
-            )
-
     def test_task_runner_on_failure_callback_context(self, create_runtime_ti):
         """Test that on_failure_callback context has end_date and duration."""
 
@@ -6131,40 +4320,6 @@ class TestTaskRunnerCallsCallbacks:
             f"duration should not be None, got {callback_data['duration']}"
         )
         assert callback_data["duration"] >= 0, f"duration should be >= 0, got {callback_data['duration']}"
-
-    @pytest.mark.parametrize(
-        ("callback_kind", "expected_state"),
-        [
-            pytest.param("on_success_callback", TaskInstanceState.SUCCESS, id="success"),
-            pytest.param("on_failure_callback", TaskInstanceState.FAILED, id="failure"),
-        ],
-    )
-    def test_task_callback_context_has_callback_meta(self, create_runtime_ti, callback_kind, expected_state):
-        """Task-level callbacks should receive callback.source=TASK in the context."""
-        from airflow.sdk.definitions.context import CallbackSource
-
-        captured = {}
-
-        def capture_callback(context):
-            captured["callback"] = context.get("callback")
-
-        succeeds = callback_kind == "on_success_callback"
-
-        class CustomOperator(BaseOperator):
-            def execute(self, context):
-                if succeeds:
-                    return "ok"
-                raise RuntimeError("boom")
-
-        task = CustomOperator(task_id="cb_task", **{callback_kind: capture_callback})
-        runtime_ti = create_runtime_ti(dag_id="dag", task=task)
-        log = mock.MagicMock()
-        context = runtime_ti.get_template_context()
-        state, _, error = run(runtime_ti, context, log)
-        finalize(runtime_ti, state, context, log, error)
-
-        assert state == expected_state
-        assert captured["callback"].source is CallbackSource.TASK
 
     def test_task_runner_both_callbacks_have_timing_info(self, create_runtime_ti):
         """Test that both success and failure callbacks receive accurate timing information."""
@@ -6424,8 +4579,6 @@ class TestTriggerDagRunOperator:
 
         assert state == expected_state
         assert msg.state == expected_state
-        assert ti.end_date is not None
-        assert ti.end_date == msg.end_date
 
         expected_calls = [
             mock.call.send(
@@ -6438,117 +4591,6 @@ class TestTriggerDagRunOperator:
             ),
         ]
         mock_supervisor_comms.assert_has_calls(expected_calls)
-
-    @time_machine.travel("2025-01-01 00:00:00", tick=False)
-    def test_handle_trigger_dag_run_surfaces_original_error(self, create_runtime_ti, mock_supervisor_comms):
-        """
-        When an ``except`` handler in ``run()`` raises, the original exception must be
-        surfaced as the task failure, not an ``UnboundLocalError`` on ``state``.
-        """
-        from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
-
-        class _TriggerSendError(Exception):
-            pass
-
-        task = TriggerDagRunOperator(
-            task_id="test_task",
-            trigger_dag_id="missing_dag",
-            trigger_run_id="test_run_id",
-        )
-        ti = create_runtime_ti(
-            dag_id="test_handle_trigger_dag_run_surfaces_original_error",
-            run_id="test_run",
-            task=task,
-        )
-
-        def _send(msg=None, **kwargs):
-            # Fail only the TriggerDagRun comms (the call that would 404 for a
-            # missing DAG); let every earlier send behave as the default mock.
-            if isinstance(msg, TriggerDagRun):
-                raise _TriggerSendError("simulated 404 for missing target DAG")
-            return mock.DEFAULT
-
-        mock_supervisor_comms.send.side_effect = _send
-
-        log = mock.MagicMock(spec=structlog.typing.FilteringBoundLogger)
-
-        state, _, error = run(ti, ti.get_template_context(), log)
-
-        assert state == TaskInstanceState.FAILED
-        assert isinstance(error, _TriggerSendError)
-
-    @pytest.mark.parametrize(
-        ("should_retry", "expected_state"),
-        [
-            (True, TaskInstanceState.UP_FOR_RETRY),
-            (False, TaskInstanceState.FAILED),
-        ],
-    )
-    @time_machine.travel("2025-01-01 00:00:00", tick=False)
-    def test_handle_trigger_dag_run_missing_dag_honours_retries_and_callbacks(
-        self, should_retry, expected_state, create_runtime_ti, mock_supervisor_comms
-    ):
-        """
-        A 404 from the API server for a missing target Dag must be handled like any other
-        task failure: the retry decision is made and ``finalize()`` fires the callbacks.
-
-        Regression test for https://github.com/apache/airflow/issues/70683 -- the
-        ``AirflowRuntimeError`` was raised from inside ``run()``'s
-        ``except DagRunTriggerException`` handler, so it escaped ``run()`` without
-        evaluating retries or running ``on_failure_callback`` / ``on_retry_callback``.
-        """
-        callbacks_run = []
-
-        task = TriggerDagRunOperator(
-            task_id="test_task",
-            trigger_dag_id="this_dag_does_not_exist",
-            trigger_run_id="test_run_id",
-            on_failure_callback=lambda context: callbacks_run.append("failure"),
-            on_retry_callback=lambda context: callbacks_run.append("retry"),
-        )
-        ti = create_runtime_ti(
-            dag_id="test_handle_trigger_dag_run_missing_dag",
-            run_id="test_run",
-            task=task,
-            should_retry=should_retry,
-        )
-
-        not_found = AirflowRuntimeError(
-            error=ErrorResponse(
-                error=ErrorType.API_SERVER_ERROR,
-                detail={
-                    "status_code": 404,
-                    "message": "Client error message: Dag with dag_id: 'this_dag_does_not_exist' not found",
-                },
-            )
-        )
-
-        def _send(msg=None, **kwargs):
-            if isinstance(msg, TriggerDagRun):
-                raise not_found
-            return mock.DEFAULT
-
-        mock_supervisor_comms.send.side_effect = _send
-
-        log = mock.MagicMock(spec=structlog.typing.FilteringBoundLogger)
-        context = ti.get_template_context()
-
-        state, msg, error = run(ti, context, log)
-
-        assert state == expected_state
-        assert error is not_found
-        # The terminal message is what the server acts on, so assert the shape too:
-        # RetryTask drives UP_FOR_RETRY, TaskState(FAILED) ends the try.
-        if should_retry:
-            assert isinstance(msg, RetryTask)
-        else:
-            assert isinstance(msg, TaskState)
-            assert msg.state == TaskInstanceState.FAILED
-
-        context["exception"] = error
-        finalize(ti, state, context, log, error)
-
-        assert callbacks_run == ["retry" if should_retry else "failure"]
 
     @pytest.mark.parametrize(
         ("allowed_states", "failed_states", "target_dr_state", "expected_task_state"),
@@ -6594,8 +4636,6 @@ class TestTriggerDagRunOperator:
         mock_supervisor_comms.send.side_effect = [
             # Set RTIF
             None,
-            # Account for the extra link XCom message sent by TriggerDagRunLink
-            None,
             # Successful Dag Run trigger
             OKResponse(ok=True),
             # Set XCOM,
@@ -6614,16 +4654,6 @@ class TestTriggerDagRunOperator:
         assert msg.state == expected_task_state
 
         expected_calls = [
-            mock.call.send(
-                msg=SetXCom(
-                    key="_link_TriggerDagRunLink",
-                    value="/dags/test_dag/runs/test_run_id",
-                    dag_id="test_handle_trigger_dag_run_wait_for_completion",
-                    task_id="test_task",
-                    run_id="test_run",
-                    map_index=-1,
-                ),
-            ),
             mock.call.send(
                 msg=TriggerDagRun(
                     dag_id="test_dag",
@@ -6655,146 +4685,6 @@ class TestTriggerDagRunOperator:
             ),
         ]
         mock_supervisor_comms.assert_has_calls(expected_calls)
-
-    def test_handle_trigger_dag_run_wait_for_completion_failed_state_retries(
-        self, create_runtime_ti, mock_supervisor_comms
-    ):
-        """When triggered DAG reaches a failed state, task should honor retry eligibility."""
-        from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
-
-        task = TriggerDagRunOperator(
-            task_id="test_task",
-            trigger_dag_id="test_dag",
-            trigger_run_id="test_run_id",
-            poke_interval=5,
-            wait_for_completion=True,
-            allowed_states=[DagRunState.SUCCESS],
-            failed_states=[DagRunState.FAILED],
-            deferrable=False,
-        )
-        ti = create_runtime_ti(
-            dag_id="test_handle_trigger_dag_run_wait_for_completion_failed_state_retries",
-            run_id="test_run",
-            task=task,
-            should_retry=True,
-        )
-
-        def _send_side_effect(*args, **kwargs):
-            msg = kwargs.get("msg")
-            if msg is None and args:
-                msg = args[0]
-            if isinstance(msg, TriggerDagRun):
-                return OKResponse(ok=True)
-            if isinstance(msg, GetDagRunState):
-                return DagRunStateResult(state=DagRunState.FAILED)
-            return None
-
-        mock_supervisor_comms.send.side_effect = _send_side_effect
-
-        log = mock.MagicMock()
-        with mock.patch("time.sleep", return_value=None):
-            state, _, _ = run(ti, ti.get_template_context(), log)
-
-        assert state == TaskInstanceState.UP_FOR_RETRY
-
-    def test_handle_trigger_dag_run_wait_for_completion_failed_state_retry_policy_fail(
-        self, create_runtime_ti, mock_supervisor_comms
-    ):
-        """A retry_policy returning FAIL fails the task even when retries are still available.
-
-        This mirrors the deferrable path, where DagStateTrigger -> execute_complete raises
-        AirflowException and the configured retry_policy is consulted via run()'s handler.
-        """
-        task = TriggerDagRunOperator(
-            task_id="test_task",
-            trigger_dag_id="test_dag",
-            trigger_run_id="test_run_id",
-            poke_interval=5,
-            wait_for_completion=True,
-            allowed_states=[DagRunState.SUCCESS],
-            failed_states=[DagRunState.FAILED],
-            deferrable=False,
-            retry_policy=ExceptionRetryPolicy(
-                rules=[
-                    RetryRule(exception=AirflowException, action=RetryAction.FAIL, reason="not retryable")
-                ],
-            ),
-        )
-        ti = create_runtime_ti(
-            dag_id="test_handle_trigger_dag_run_wait_for_completion_failed_state_retry_policy_fail",
-            run_id="test_run",
-            task=task,
-            should_retry=True,
-        )
-
-        def _send_side_effect(*args, **kwargs):
-            msg = kwargs.get("msg")
-            if msg is None and args:
-                msg = args[0]
-            if isinstance(msg, TriggerDagRun):
-                return OKResponse(ok=True)
-            if isinstance(msg, GetDagRunState):
-                return DagRunStateResult(state=DagRunState.FAILED)
-            return None
-
-        mock_supervisor_comms.send.side_effect = _send_side_effect
-
-        log = mock.MagicMock()
-        with mock.patch("time.sleep", return_value=None):
-            state, _, _ = run(ti, ti.get_template_context(), log)
-
-        assert state == TaskInstanceState.FAILED
-
-    def test_handle_trigger_dag_run_wait_for_completion_failed_state_retry_policy_delay(
-        self, create_runtime_ti, mock_supervisor_comms
-    ):
-        """A retry_policy returning RETRY forwards its custom delay and reason on the RetryTask."""
-        task = TriggerDagRunOperator(
-            task_id="test_task",
-            trigger_dag_id="test_dag",
-            trigger_run_id="test_run_id",
-            poke_interval=5,
-            wait_for_completion=True,
-            allowed_states=[DagRunState.SUCCESS],
-            failed_states=[DagRunState.FAILED],
-            deferrable=False,
-            retry_policy=ExceptionRetryPolicy(
-                rules=[
-                    RetryRule(
-                        exception=AirflowException,
-                        action=RetryAction.RETRY,
-                        retry_delay=timedelta(minutes=7),
-                        reason="backing off",
-                    ),
-                ],
-            ),
-        )
-        ti = create_runtime_ti(
-            dag_id="test_handle_trigger_dag_run_wait_for_completion_failed_state_retry_policy_delay",
-            run_id="test_run",
-            task=task,
-            should_retry=True,
-        )
-
-        def _send_side_effect(*args, **kwargs):
-            msg = kwargs.get("msg")
-            if msg is None and args:
-                msg = args[0]
-            if isinstance(msg, TriggerDagRun):
-                return OKResponse(ok=True)
-            if isinstance(msg, GetDagRunState):
-                return DagRunStateResult(state=DagRunState.FAILED)
-            return None
-
-        mock_supervisor_comms.send.side_effect = _send_side_effect
-
-        log = mock.MagicMock()
-        with mock.patch("time.sleep", return_value=None):
-            state, msg, _ = run(ti, ti.get_template_context(), log)
-
-        assert state == TaskInstanceState.UP_FOR_RETRY
-        assert msg.retry_delay_seconds == timedelta(minutes=7).total_seconds()
-        assert msg.retry_reason == "backing off"
 
     @pytest.mark.parametrize(
         ("allowed_states", "failed_states", "intermediate_state"),
@@ -6899,11 +4789,11 @@ class TestTaskInstanceMetrics:
             run(ti, context=ti.get_template_context(), log=mock.MagicMock())
 
             # verify ti.start was called in legacy format
-            backend.incr.assert_any_call(f"ti.start.{ti.dag_id}.{ti.task_id}", tags={"run_type": "manual"})
+            backend.incr.assert_any_call(f"ti.start.{ti.dag_id}.{ti.task_id}")
             # verify ti.start was called in tagged format
             backend.incr.assert_any_call(
                 "ti.start",
-                tags={"dag_id": ti.dag_id, "task_id": ti.task_id, "run_type": "manual"},
+                tags={"dag_id": ti.dag_id, "task_id": ti.task_id},
             )
 
     @pytest.mark.parametrize(
@@ -6928,18 +4818,11 @@ class TestTaskInstanceMetrics:
             run(ti, context=ti.get_template_context(), log=mock.MagicMock())
 
             # verify ti.finish was called in legacy format
-            backend.incr.assert_any_call(
-                f"ti.finish.{ti.dag_id}.{ti.task_id}.{expected_state}", tags={"run_type": "manual"}
-            )
+            backend.incr.assert_any_call(f"ti.finish.{ti.dag_id}.{ti.task_id}.{expected_state}")
             # verify ti.finish was called in tagged format
             backend.incr.assert_any_call(
                 "ti.finish",
-                tags={
-                    "dag_id": ti.dag_id,
-                    "task_id": ti.task_id,
-                    "run_type": "manual",
-                    "state": expected_state,
-                },
+                tags={"dag_id": ti.dag_id, "task_id": ti.task_id, "state": expected_state},
             )
 
     def test_operator_successes_metrics_emitted(self, create_runtime_ti, mock_supervisor_comms):
@@ -6952,7 +4835,7 @@ class TestTaskInstanceMetrics:
             mock_get_backend.return_value = backend
             run(ti, context=ti.get_template_context(), log=mock.MagicMock())
 
-            stats_tags = {"dag_id": ti.dag_id, "task_id": ti.task_id, "run_type": "manual"}
+            stats_tags = {"dag_id": ti.dag_id, "task_id": ti.task_id}
 
             # verify operator_successes in legacy format
             backend.incr.assert_any_call("operator_successes_PythonOperator", tags=stats_tags)
@@ -6973,7 +4856,7 @@ class TestTaskInstanceMetrics:
             mock_get_backend.return_value = backend
             run(ti, context=ti.get_template_context(), log=mock.MagicMock())
 
-            stats_tags = {"dag_id": ti.dag_id, "task_id": ti.task_id, "run_type": "manual"}
+            stats_tags = {"dag_id": ti.dag_id, "task_id": ti.task_id}
 
             # verify operator_failures in legacy format
             backend.incr.assert_any_call("operator_failures_PythonOperator", tags=stats_tags)
@@ -6983,205 +4866,6 @@ class TestTaskInstanceMetrics:
                 tags={**stats_tags, "operator_name": "PythonOperator"},
             )
             backend.incr.assert_any_call("ti_failures", tags=stats_tags)
-
-    @pytest.mark.parametrize(
-        ("team_name", "expected_tags_extra"),
-        [
-            pytest.param("my_team", {"team_name": "my_team"}, id="with_team"),
-            pytest.param(None, {}, id="without_team"),
-        ],
-    )
-    def test_ti_start_metric_respects_team_name(
-        self, team_name, expected_tags_extra, create_runtime_ti, mock_supervisor_comms
-    ):
-        task = PythonOperator(task_id="test", python_callable=lambda: "success")
-        ti = create_runtime_ti(task=task)
-        if team_name:
-            ti._ti_context_from_server.dag_run.team_name = team_name
-
-        with mock.patch("airflow.sdk._shared.observability.metrics.stats._get_backend") as mock_get_backend:
-            backend = mock.MagicMock(spec=StatsLogger)
-            mock_get_backend.return_value = backend
-            run(ti, context=ti.get_template_context(), log=mock.MagicMock())
-
-            expected = {
-                "dag_id": ti.dag_id,
-                "task_id": ti.task_id,
-                "run_type": "manual",
-                **expected_tags_extra,
-            }
-            backend.incr.assert_any_call("ti.start", tags=expected)
-
-    @pytest.mark.parametrize(
-        ("task_callable", "operator_metric", "ti_metric"),
-        [
-            pytest.param(lambda: "success", "operator_successes", "ti_successes", id="success"),
-            pytest.param(lambda: 1 / 0, "operator_failures", "ti_failures", id="failure"),
-        ],
-    )
-    def test_operator_metrics_respect_team_name(
-        self, task_callable, operator_metric, ti_metric, create_runtime_ti, mock_supervisor_comms
-    ):
-        task = PythonOperator(task_id="test", python_callable=task_callable)
-        ti = create_runtime_ti(task=task)
-        ti._ti_context_from_server.dag_run.team_name = "team_a"
-
-        with mock.patch("airflow.sdk._shared.observability.metrics.stats._get_backend") as mock_get_backend:
-            backend = mock.MagicMock(spec=StatsLogger)
-            mock_get_backend.return_value = backend
-            run(ti, context=ti.get_template_context(), log=mock.MagicMock())
-
-            stats_tags = {
-                "dag_id": ti.dag_id,
-                "task_id": ti.task_id,
-                "run_type": "manual",
-                "team_name": "team_a",
-            }
-            backend.incr.assert_any_call(
-                operator_metric,
-                tags={**stats_tags, "operator_name": "PythonOperator"},
-            )
-            backend.incr.assert_any_call(ti_metric, tags=stats_tags)
-
-
-class TestRunExecuteCallable:
-    """Tests for ``_run_execute_callable``.
-
-    It runs the task's execute callable inside an isolated contextvars copy (with
-    the ExecutorSafeguard tracker set), applies the execution timeout when one is
-    configured, and wraps the call in a ``task.execute`` detail span.
-    """
-
-    @pytest.fixture(autouse=True)
-    def _sampled_carrier_provider(self):
-        """Make new_dagrun_trace_carrier produce a SAMPLED carrier (see TestDetailSpan)."""
-        provider = TracerProvider()
-        with mock.patch(
-            "airflow._shared.observability.traces.trace.get_tracer_provider",
-            return_value=provider,
-        ):
-            yield
-
-    @staticmethod
-    def _make_task(execution_timeout=None):
-        task = mock.MagicMock(spec=BaseOperator)
-        task.execution_timeout = execution_timeout
-        return task
-
-    def test_runs_in_isolated_context_with_safeguard_tracker_set(self, mock_supervisor_comms):
-        """The callable runs in an internal context copy that has the safeguard tracker set and does not leak."""
-        var = contextvars.ContextVar("marker")
-        var.set("outer")
-        task = self._make_task()
-        seen = {}
-
-        def execute(context):
-            var.set("inner")
-            seen["tracker"] = ExecutorSafeguard.tracker.get(None)
-            return context["value"] * 2
-
-        result = _run_execute_callable(context={"value": 21}, execute=execute, task=task)
-
-        assert result == 42
-        # The safeguard tracker is set to the task inside the copy used to run execute.
-        assert seen["tracker"] is task
-        # The mutation happened inside the copy, so it does not leak to the caller's context.
-        assert var.get() == "outer"
-        # The .set was confined to the copy, so the tracker never leaked to the caller's context.
-        assert ExecutorSafeguard.tracker.get(None) is not task
-        task.on_kill.assert_not_called()
-        mock_supervisor_comms.send.assert_not_called()
-
-    def test_applies_execution_timeout(self, mock_supervisor_comms):
-        """When a timeout is set and the callable overruns, AirflowTaskTimeout is raised and on_kill is called."""
-        task = self._make_task(execution_timeout=timedelta(milliseconds=10))
-
-        def execute(context):
-            time.sleep(0.2)
-
-        with pytest.raises(AirflowTaskTimeout):
-            _run_execute_callable(context={}, execute=execute, task=task)
-
-        task.on_kill.assert_called_once()
-        mock_supervisor_comms.send.assert_called_once_with(SetExecutionTimeout(timeout_seconds=0.01))
-
-    def test_fast_fails_when_timeout_already_elapsed(self, mock_supervisor_comms):
-        """A non-positive timeout fast-fails before running the callable and still calls on_kill."""
-        task = self._make_task(execution_timeout=timedelta(seconds=-1))
-        execute = mock.MagicMock()
-
-        with pytest.raises(AirflowTaskTimeout):
-            _run_execute_callable(context={}, execute=execute, task=task)
-
-        execute.assert_not_called()
-        task.on_kill.assert_called_once()
-        mock_supervisor_comms.send.assert_not_called()
-
-    def test_emits_task_execute_span_at_detail_level_2(self):
-        """At detail level 2, running the callable produces a recorded ``task.execute`` span."""
-        exporter = InMemorySpanExporter()
-        provider = TracerProvider()
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
-        t = provider.get_tracer("test")
-        carrier = new_dagrun_trace_carrier(task_span_detail_level=2)
-        parent_ctx = TraceContextTextMapPropagator().extract(carrier)
-
-        task = self._make_task()
-
-        with mock.patch("airflow.sdk.execution_time.tracing.tracer", t):
-            with t.start_as_current_span("parent", context=parent_ctx):
-                result = _run_execute_callable(context={}, execute=lambda context: "ok", task=task)
-
-        assert result == "ok"
-        names = [s.name for s in exporter.get_finished_spans()]
-        assert "task.execute" in names
-
-    def test_operator_child_spans_nest_under_task_execute(self):
-        """Spans the operator emits during execute nest under ``task.execute``, not its caller.
-
-        The contextvars snapshot is taken inside ``_run_execute_callable`` after the
-        ``task.execute`` span is current, so a span started during execute parents to
-        ``task.execute`` rather than to the surrounding span.
-        """
-        exporter = InMemorySpanExporter()
-        provider = TracerProvider()
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
-        t = provider.get_tracer("test")
-        carrier = new_dagrun_trace_carrier(task_span_detail_level=2)
-        parent_ctx = TraceContextTextMapPropagator().extract(carrier)
-
-        task = self._make_task()
-
-        def execute(context):
-            with t.start_as_current_span("operator_child"):
-                return "ok"
-
-        with mock.patch("airflow.sdk.execution_time.tracing.tracer", t):
-            with t.start_as_current_span("parent", context=parent_ctx):
-                result = _run_execute_callable(context={}, execute=execute, task=task)
-
-        assert result == "ok"
-        spans = {s.name: s for s in exporter.get_finished_spans()}
-        assert spans["operator_child"].parent.span_id == spans["task.execute"].context.span_id
-
-    def test_no_task_execute_span_at_detail_level_1(self):
-        """At detail level 1, no ``task.execute`` span is recorded but the callable still runs."""
-        exporter = InMemorySpanExporter()
-        provider = TracerProvider()
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
-        t = provider.get_tracer("test")
-        carrier = new_dagrun_trace_carrier(task_span_detail_level=1)
-        parent_ctx = TraceContextTextMapPropagator().extract(carrier)
-
-        task = self._make_task()
-
-        with mock.patch("airflow.sdk.execution_time.tracing.tracer", t):
-            with t.start_as_current_span("parent", context=parent_ctx):
-                result = _run_execute_callable(context={}, execute=lambda context: "ok", task=task)
-
-        assert result == "ok"
-        names = [s.name for s in exporter.get_finished_spans()]
-        assert "task.execute" not in names
 
 
 def test_dag_add_result(create_runtime_ti, mock_supervisor_comms):
@@ -7208,125 +4892,53 @@ def test_dag_add_result(create_runtime_ti, mock_supervisor_comms):
 class TestTaskInstanceStateOperations:
     """Tests to verify that tasks can perform state operations (task / asset) via the supervisor."""
 
-    def test_task_can_set_and_get_state(self, create_runtime_ti, mock_supervisor_comms, time_machine):
+    def test_task_can_set_and_get_state(self, create_runtime_ti, mock_supervisor_comms):
         class MyOperator(BaseOperator):
             def execute(self, context):
-                ts = context["task_state_store"]
+                ts = context["task_state"]
                 ts.set("job_id", "spark_app_001")
                 return ts.get("job_id")
 
         task = MyOperator(task_id="t")
         runtime_ti = create_runtime_ti(task=task)
-        frozen_dt = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
-        time_machine.move_to(frozen_dt, tick=False)
-
-        with conf_vars({("state_store", "default_retention_days"): "30"}):
-            run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
-
-        mock_supervisor_comms.send.assert_any_call(
-            SetTaskStateStore(
-                ti_id=runtime_ti.id,
-                key="job_id",
-                value="spark_app_001",
-                expires_at=frozen_dt + timedelta(days=30),
-            )
-        )
-        mock_supervisor_comms.send.assert_any_call(GetTaskStateStore(ti_id=runtime_ti.id, key="job_id"))
-
-    def test_task_state_get_returns_default_when_key_missing(self, create_runtime_ti, mock_supervisor_comms):
-        captured = {}
-
-        class MyOperator(BaseOperator):
-            def execute(self, context):
-                captured["result"] = context["task_state_store"].get(
-                    "watermark", default="2026-01-01T00:00:00+00:00"
-                )
-
-        mock_supervisor_comms.send.return_value = ErrorResponse(
-            error=ErrorType.TASK_STORE_NOT_FOUND, detail={"key": "watermark"}
-        )
-        task = MyOperator(task_id="t")
-        runtime_ti = create_runtime_ti(task=task)
-        run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
-
-        assert captured["result"] == "2026-01-01T00:00:00+00:00"
-
-    def test_task_state_set_sends_typed_values(self, create_runtime_ti, mock_supervisor_comms, time_machine):
-        """set() accepts any JsonValue — dict, int, list — not just strings."""
-
-        class MyOperator(BaseOperator):
-            def execute(self, context):
-                ts = context["task_state_store"]
-                ts.set("retry_count", 3)
-                ts.set("poll_result", {"status": "succeeded", "rows": 1234})
-                ts.set("checkpoints", [1, 2, 3])
-
-        frozen_dt = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
-        time_machine.move_to(frozen_dt, tick=False)
-        task = MyOperator(task_id="t")
-        runtime_ti = create_runtime_ti(task=task)
-
-        with conf_vars({("state_store", "default_retention_days"): "30"}):
-            run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
-
-        expires_at = frozen_dt + timedelta(days=30)
-        mock_supervisor_comms.send.assert_any_call(
-            SetTaskStateStore(ti_id=runtime_ti.id, key="retry_count", value=3, expires_at=expires_at)
-        )
-        mock_supervisor_comms.send.assert_any_call(
-            SetTaskStateStore(
-                ti_id=runtime_ti.id,
-                key="poll_result",
-                value={"status": "succeeded", "rows": 1234},
-                expires_at=expires_at,
-            )
-        )
-        mock_supervisor_comms.send.assert_any_call(
-            SetTaskStateStore(ti_id=runtime_ti.id, key="checkpoints", value=[1, 2, 3], expires_at=expires_at)
-        )
-
-    def test_task_can_set_state_with_retention(self, create_runtime_ti, mock_supervisor_comms, time_machine):
-        class MyOperator(BaseOperator):
-            def execute(self, context):
-                context["task_state_store"].set("job_id", "spark_app_001", retention=timedelta(days=7))
-
-        task = MyOperator(task_id="t")
-        runtime_ti = create_runtime_ti(task=task)
-        frozen_dt = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
-        time_machine.move_to(frozen_dt, tick=False)
 
         run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
 
         mock_supervisor_comms.send.assert_any_call(
-            SetTaskStateStore(
-                ti_id=runtime_ti.id,
-                key="job_id",
-                value="spark_app_001",
-                expires_at=frozen_dt + timedelta(days=7),
-            )
+            SetTaskState(ti_id=runtime_ti.id, key="job_id", value="spark_app_001")
         )
+        mock_supervisor_comms.send.assert_any_call(GetTaskState(ti_id=runtime_ti.id, key="job_id"))
 
     def test_task_can_delete_state(self, create_runtime_ti, mock_supervisor_comms):
         class MyOperator(BaseOperator):
             def execute(self, context):
-                context["task_state_store"].delete("job_id")
+                context["task_state"].delete("job_id")
 
         task = MyOperator(task_id="t")
         runtime_ti = create_runtime_ti(task=task)
 
         run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
 
-        mock_supervisor_comms.send.assert_any_call(DeleteTaskStateStore(ti_id=runtime_ti.id, key="job_id"))
+        mock_supervisor_comms.send.assert_any_call(DeleteTaskState(ti_id=runtime_ti.id, key="job_id"))
 
-    def test_task_can_clear_state(self, create_runtime_ti, mock_supervisor_comms):
+    @pytest.mark.parametrize(
+        ("call_kwargs", "expected_flag"),
+        [
+            pytest.param({}, False, id="default"),
+            pytest.param({"all_map_indices": True}, True, id="fleet-wipe"),
+        ],
+    )
+    def test_task_can_clear_state(self, call_kwargs, expected_flag, create_runtime_ti, mock_supervisor_comms):
         class MyOperator(BaseOperator):
             def execute(self, context):
-                context["task_state_store"].clear()
+                context["task_state"].clear(**call_kwargs)
 
         task = MyOperator(task_id="t")
         runtime_ti = create_runtime_ti(task=task)
         run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
-        mock_supervisor_comms.send.assert_any_call(ClearTaskStateStore(ti_id=runtime_ti.id))
+        mock_supervisor_comms.send.assert_any_call(
+            ClearTaskState(ti_id=runtime_ti.id, all_map_indices=expected_flag)
+        )
 
     @staticmethod
     def _watcher_side_effect(msg=None, *args, **kwargs):
@@ -7339,13 +4951,13 @@ class TestTaskInstanceStateOperations:
             return AssetResult(name=actual.uri, uri=actual.uri, group="asset")
         return OKResponse(ok=True)
 
-    def test_asset_state_store_get_and_set(self, create_runtime_ti, mock_supervisor_comms):
+    def test_asset_state_get_and_set(self, create_runtime_ti, mock_supervisor_comms):
         watched = Asset(name="my_asset", uri="s3://bucket/data")
 
         class WatcherOperator(BaseOperator):
             def execute(self, context):
-                context["asset_state_store"].set("watermark", "2026-04-30")
-                context["asset_state_store"].get("watermark")
+                context["asset_state"].set("watermark", "2026-04-30")
+                context["asset_state"].get("watermark")
 
         task = WatcherOperator(task_id="t", inlets=[watched])
         runtime_ti = create_runtime_ti(task=task)
@@ -7354,39 +4966,16 @@ class TestTaskInstanceStateOperations:
         run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
 
         mock_supervisor_comms.send.assert_any_call(
-            SetAssetStateStoreByName(name="my_asset", key="watermark", value="2026-04-30")
+            SetAssetStateByName(name="my_asset", key="watermark", value="2026-04-30")
         )
-        mock_supervisor_comms.send.assert_any_call(GetAssetStateStoreByName(name="my_asset", key="watermark"))
+        mock_supervisor_comms.send.assert_any_call(GetAssetStateByName(name="my_asset", key="watermark"))
 
-    def test_asset_state_store_get_returns_default_when_key_missing(
-        self, create_runtime_ti, mock_supervisor_comms
-    ):
-        watched = Asset(name="my_asset", uri="s3://bucket/data")
-        captured = {}
-
-        class WatcherOperator(BaseOperator):
-            def execute(self, context):
-                captured["result"] = context["asset_state_store"].get(
-                    "watermark", default="2026-01-01T00:00:00+00:00"
-                )
-
-        task = WatcherOperator(task_id="t", inlets=[watched])
-        runtime_ti = create_runtime_ti(task=task)
-        mock_supervisor_comms.send.side_effect = lambda msg: (
-            ErrorResponse(error=ErrorType.ASSET_STORE_NOT_FOUND, detail={"key": "watermark"})
-            if isinstance(msg, GetAssetStateStoreByName)
-            else TestTaskInstanceStateOperations._watcher_side_effect(msg)
-        )
-        run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
-
-        assert captured["result"] == "2026-01-01T00:00:00+00:00"
-
-    def test_asset_state_store_delete(self, create_runtime_ti, mock_supervisor_comms):
+    def test_asset_state_delete(self, create_runtime_ti, mock_supervisor_comms):
         watched = Asset(name="my_asset", uri="s3://bucket/data")
 
         class WatcherOperator(BaseOperator):
             def execute(self, context):
-                context["asset_state_store"].delete("watermark")
+                context["asset_state"].delete("watermark")
 
         task = WatcherOperator(task_id="t", inlets=[watched])
         runtime_ti = create_runtime_ti(task=task)
@@ -7394,16 +4983,14 @@ class TestTaskInstanceStateOperations:
 
         run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
 
-        mock_supervisor_comms.send.assert_any_call(
-            DeleteAssetStateStoreByName(name="my_asset", key="watermark")
-        )
+        mock_supervisor_comms.send.assert_any_call(DeleteAssetStateByName(name="my_asset", key="watermark"))
 
-    def test_asset_state_store_clear(self, create_runtime_ti, mock_supervisor_comms):
+    def test_asset_state_clear(self, create_runtime_ti, mock_supervisor_comms):
         watched = Asset(name="my_asset", uri="s3://bucket/data")
 
         class WatcherOperator(BaseOperator):
             def execute(self, context):
-                context["asset_state_store"].clear()
+                context["asset_state"].clear()
 
         task = WatcherOperator(task_id="t", inlets=[watched])
         runtime_ti = create_runtime_ti(task=task)
@@ -7411,15 +4998,15 @@ class TestTaskInstanceStateOperations:
 
         run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
 
-        mock_supervisor_comms.send.assert_any_call(ClearAssetStateStoreByName(name="my_asset"))
+        mock_supervisor_comms.send.assert_any_call(ClearAssetStateByName(name="my_asset"))
 
-    def test_asset_state_store_uri_ref_inlet(self, create_runtime_ti, mock_supervisor_comms):
+    def test_asset_state_uri_ref_inlet(self, create_runtime_ti, mock_supervisor_comms):
         watched = AssetUriRef(uri="s3://bucket/data")
 
         class WatcherOperator(BaseOperator):
             def execute(self, context):
-                context["asset_state_store"].set("watermark", "2026-04-30")
-                context["asset_state_store"].get("watermark")
+                context["asset_state"].set("watermark", "2026-04-30")
+                context["asset_state"].get("watermark")
 
         task = WatcherOperator(task_id="t", inlets=[watched])
         runtime_ti = create_runtime_ti(task=task)
@@ -7428,19 +5015,19 @@ class TestTaskInstanceStateOperations:
         run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
 
         mock_supervisor_comms.send.assert_any_call(
-            SetAssetStateStoreByUri(uri="s3://bucket/data", key="watermark", value="2026-04-30")
+            SetAssetStateByUri(uri="s3://bucket/data", key="watermark", value="2026-04-30")
         )
         mock_supervisor_comms.send.assert_any_call(
-            GetAssetStateStoreByUri(uri="s3://bucket/data", key="watermark")
+            GetAssetStateByUri(uri="s3://bucket/data", key="watermark")
         )
 
-    def test_asset_state_store_alias_as_inlet(self, create_runtime_ti, mock_supervisor_comms):
+    def test_asset_state_alias_as_inlet(self, create_runtime_ti, mock_supervisor_comms):
         alias = AssetAlias(name="my_alias")
         resolved = Asset(name="resolved_asset", uri="s3://bucket/resolved")
 
         class WatcherOperator(BaseOperator):
             def execute(self, context):
-                context["asset_state_store"][resolved].set("watermark", "2026-05-01")
+                context["asset_state"][resolved].set("watermark", "2026-05-01")
 
         def side_effect(msg):
             if isinstance(msg, GetAssetsByAlias):
@@ -7456,16 +5043,16 @@ class TestTaskInstanceStateOperations:
         run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
 
         mock_supervisor_comms.send.assert_any_call(
-            SetAssetStateStoreByName(name="resolved_asset", key="watermark", value="2026-05-01")
+            SetAssetStateByName(name="resolved_asset", key="watermark", value="2026-05-01")
         )
 
-    def test_asset_state_store_alias_inlet_no_resolved_assets(self, create_runtime_ti, mock_supervisor_comms):
+    def test_asset_state_alias_inlet_no_resolved_assets(self, create_runtime_ti, mock_supervisor_comms):
         alias = AssetAlias(name="empty_alias")
 
         class WatcherOperator(BaseOperator):
             def execute(self, context):
                 # asset_state is in context but it is empty because alias resolved to nothing
-                assert "asset_state_store" in context
+                assert "asset_state" in context
 
         def side_effect(msg):
             if isinstance(msg, GetAssetsByAlias):
@@ -7478,13 +5065,13 @@ class TestTaskInstanceStateOperations:
 
         run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
 
-    def test_asset_state_store_keyed_access_single_inlet(self, create_runtime_ti, mock_supervisor_comms):
+    def test_asset_state_keyed_access_single_inlet(self, create_runtime_ti, mock_supervisor_comms):
         watched = Asset(name="my_asset", uri="s3://bucket/data")
 
         class WatcherOperator(BaseOperator):
             def execute(self, context):
                 # accessing via asset name key
-                context["asset_state_store"][watched].set("watermark", "2026-05-01")
+                context["asset_state"][watched].set("watermark", "2026-05-01")
 
         task = WatcherOperator(task_id="t", inlets=[watched])
         runtime_ti = create_runtime_ti(task=task)
@@ -7493,17 +5080,17 @@ class TestTaskInstanceStateOperations:
         run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
 
         mock_supervisor_comms.send.assert_any_call(
-            SetAssetStateStoreByName(name="my_asset", key="watermark", value="2026-05-01")
+            SetAssetStateByName(name="my_asset", key="watermark", value="2026-05-01")
         )
 
-    def test_asset_state_store_multi_inlet(self, create_runtime_ti, mock_supervisor_comms):
+    def test_asset_state_multi_inlet(self, create_runtime_ti, mock_supervisor_comms):
         asset_a = Asset(name="asset_a", uri="s3://bucket/a")
         asset_b = Asset(name="asset_b", uri="s3://bucket/b")
 
         class MultiInletOperator(BaseOperator):
             def execute(self, context):
-                context["asset_state_store"][asset_a].set("watermark_a", "2026-05-01")
-                context["asset_state_store"][asset_b].set("watermark_b", "2026-05-02")
+                context["asset_state"][asset_a].set("watermark_a", "2026-05-01")
+                context["asset_state"][asset_b].set("watermark_b", "2026-05-02")
 
         task = MultiInletOperator(task_id="t", inlets=[asset_a, asset_b])
         runtime_ti = create_runtime_ti(task=task)
@@ -7512,337 +5099,8 @@ class TestTaskInstanceStateOperations:
         run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
 
         mock_supervisor_comms.send.assert_any_call(
-            SetAssetStateStoreByName(name="asset_a", key="watermark_a", value="2026-05-01")
+            SetAssetStateByName(name="asset_a", key="watermark_a", value="2026-05-01")
         )
         mock_supervisor_comms.send.assert_any_call(
-            SetAssetStateStoreByName(name="asset_b", key="watermark_b", value="2026-05-02")
+            SetAssetStateByName(name="asset_b", key="watermark_b", value="2026-05-02")
         )
-
-    def test_asset_state_store_set_sends_reference_via_custom_backend(
-        self, create_runtime_ti, mock_supervisor_comms
-    ):
-        """When a worker backend is configured, asset state set() sends a reference, not the actual value."""
-        watched = Asset(name="my_asset", uri="s3://bucket/data")
-
-        class WatcherOperator(BaseOperator):
-            def execute(self, context):
-                context["asset_state_store"].set("watermark", "2026-05-01")
-
-        task = WatcherOperator(task_id="t", inlets=[watched])
-        runtime_ti = create_runtime_ti(task=task)
-        mock_supervisor_comms.send.side_effect = TestTaskInstanceStateOperations._watcher_side_effect
-
-        mock_backend = mock.MagicMock()
-        mock_backend.serialize_asset_state_store_to_ref.return_value = "mem://my_asset/watermark"
-
-        with mock.patch(
-            "airflow.sdk.execution_time.context._get_worker_state_store_backend", return_value=mock_backend
-        ):
-            run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
-
-        mock_backend.serialize_asset_state_store_to_ref.assert_called_once_with(
-            value="2026-05-01", key="watermark", scope=AssetScope(name="my_asset", uri=None)
-        )
-        mock_supervisor_comms.send.assert_any_call(
-            SetAssetStateStoreByName(
-                name="my_asset",
-                key="watermark",
-                value=_wrap_external_ref("mem://my_asset/watermark"),
-            )
-        )
-
-    def test_task_state_set_sends_reference_via_custom_backend(
-        self, create_runtime_ti, mock_supervisor_comms, time_machine
-    ):
-        """When a worker backend is configured, task state set() sends a reference, not the actual value."""
-
-        class MyOperator(BaseOperator):
-            def execute(self, context):
-                context["task_state_store"].set("job_id", "app_001")
-
-        frozen_dt = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
-        time_machine.move_to(frozen_dt, tick=False)
-        task = MyOperator(task_id="t")
-        runtime_ti = create_runtime_ti(task=task)
-        mock_supervisor_comms.send.side_effect = TestTaskInstanceStateOperations._watcher_side_effect
-
-        mock_backend = mock.MagicMock()
-        scope = TaskScope(
-            dag_id=runtime_ti.dag_id,
-            run_id=runtime_ti.run_id,
-            task_id=runtime_ti.task_id,
-            map_index=runtime_ti.map_index,
-        )
-        ref = f"mem://{scope.dag_id}/{scope.run_id}/{scope.task_id}/{scope.map_index}/job_id"
-        mock_backend.serialize_task_state_store_to_ref.return_value = ref
-
-        with mock.patch(
-            "airflow.sdk.execution_time.context._get_worker_state_store_backend", return_value=mock_backend
-        ):
-            run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
-
-        mock_backend.serialize_task_state_store_to_ref.assert_called_once_with(
-            value="app_001", key="job_id", scope=scope
-        )
-        mock_supervisor_comms.send.assert_any_call(
-            SetTaskStateStore(
-                ti_id=runtime_ti.id,
-                key="job_id",
-                value=_wrap_external_ref(ref),
-                expires_at=frozen_dt + timedelta(days=30),
-            )
-        )
-
-    @conf_vars({("state_store", "clear_on_success"): "True"})
-    def test_clear_on_success_skips_backend_clear_when_no_custom_backend(
-        self, create_runtime_ti, mock_supervisor_comms
-    ):
-        """clear_on_success does not call backend.clear() when no custom backend is configured."""
-
-        class MyOperator(BaseOperator):
-            def execute(self, context):
-                pass
-
-        task = MyOperator(task_id="t")
-        runtime_ti = create_runtime_ti(task=task)
-
-        # no need to patch because default of _get_worker_state_store_backend() is None
-        run(runtime_ti, context=runtime_ti.get_template_context(), log=mock.MagicMock())
-
-        sent_types = [
-            type(call.kwargs.get("msg") or (call.args[0] if call.args else None))
-            for call in mock_supervisor_comms.send.call_args_list
-        ]
-        assert ClearTaskStateStore not in sent_types
-
-    @staticmethod
-    @contextlib.contextmanager
-    def _patch_state_backend(backend):
-        # Both modules resolve the backend independently, so both lookups need patching.
-        with (
-            mock.patch(
-                "airflow.sdk.execution_time.context._get_worker_state_store_backend",
-                return_value=backend,
-            ),
-            mock.patch(
-                "airflow.sdk.execution_time.task_runner._get_worker_state_store_backend",
-                return_value=backend,
-            ),
-        ):
-            yield backend
-
-    @staticmethod
-    def _run_and_finalize(runtime_ti, log):
-        # The clear lives at the tail of finalize(), so run() alone would not reach it.
-        context = runtime_ti.get_template_context()
-        state, msg, error = run(runtime_ti, context=context, log=log)
-        finalize(runtime_ti, state, context, log, error)
-        return state, msg, error
-
-    @conf_vars({("state_store", "clear_on_success"): "True"})
-    def test_clear_on_success_clears_db_refs_before_backend(self, create_runtime_ti, mock_supervisor_comms):
-        """clear_on_success sends ClearTaskStateStore before deleting from the backend."""
-        backend = mock.create_autospec(BaseStoreBackend, instance=True)
-        order = []
-        mock_supervisor_comms.send.side_effect = lambda msg, **kwargs: order.append(type(msg).__name__)
-        backend.clear.side_effect = lambda *a, **kw: order.append("clear")
-
-        class MyOperator(BaseOperator):
-            def execute(self, context):
-                pass
-
-        runtime_ti = create_runtime_ti(task=MyOperator(task_id="t"))
-
-        with self._patch_state_backend(backend):
-            self._run_and_finalize(runtime_ti, mock.MagicMock())
-
-        backend.clear.assert_called_once()
-        assert order.index("ClearTaskStateStore") < order.index("clear")
-
-    @conf_vars({("state_store", "clear_on_success"): "True"})
-    def test_clear_on_success_runs_after_success_is_reported(self, create_runtime_ti, mock_supervisor_comms):
-        """The backend is cleared only after SucceedTask is reported and the success callbacks have run."""
-        backend = mock.create_autospec(BaseStoreBackend, instance=True)
-        order = []
-        mock_supervisor_comms.send.side_effect = lambda msg, **kwargs: order.append(type(msg).__name__)
-        backend.clear.side_effect = lambda *a, **kw: order.append("clear")
-
-        class MyOperator(BaseOperator):
-            def execute(self, context):
-                pass
-
-        task = MyOperator(task_id="t", on_success_callback=lambda context: order.append("callback"))
-        runtime_ti = create_runtime_ti(task=task)
-
-        with self._patch_state_backend(backend):
-            state, _, _ = self._run_and_finalize(runtime_ti, mock.MagicMock())
-
-        assert state == TaskInstanceState.SUCCESS
-        assert order.index("SucceedTask") < order.index("callback") < order.index("clear")
-
-    @conf_vars({("state_store", "clear_on_success"): "True"})
-    def test_clear_on_success_failure_does_not_fail_the_task(self, create_runtime_ti, mock_supervisor_comms):
-        """A backend that cannot be cleared leaves the task successful and logs where the orphans are."""
-        backend = mock.create_autospec(BaseStoreBackend, instance=True)
-        backend.clear.side_effect = ConnectionError("object storage is down")
-
-        class MyOperator(BaseOperator):
-            def execute(self, context):
-                pass
-
-        runtime_ti = create_runtime_ti(task=MyOperator(task_id="t"))
-        log = mock.MagicMock()
-
-        with self._patch_state_backend(backend):
-            state, msg, error = self._run_and_finalize(runtime_ti, log)
-
-        backend.clear.assert_called_once()
-        assert state == TaskInstanceState.SUCCESS
-        assert error is None
-        assert isinstance(msg, SucceedTask)
-        assert runtime_ti._terminal_state_send_failed is False
-        log.exception.assert_called_once()
-        scope = runtime_ti.get_template_context()["task_state_store"]._scope
-        log.info.assert_any_call(
-            "Clearing task state as clear_on_success is enabled.",
-            dag_id=scope.dag_id,
-            run_id=scope.run_id,
-            task_id=scope.task_id,
-            region_id=str(scope.region_id),
-            region_index=scope.region_index,
-        )
-
-    @conf_vars({("state_store", "clear_on_success"): "True"})
-    @pytest.mark.parametrize("outcome", ["task_raised", "success_send_raised"])
-    def test_clear_on_success_skipped_when_success_was_not_delivered(
-        self, outcome, create_runtime_ti, mock_supervisor_comms
-    ):
-        """A task that did not report success keeps its state, so its retry can resume from it."""
-        backend = mock.create_autospec(BaseStoreBackend, instance=True)
-
-        class MyOperator(BaseOperator):
-            def execute(self, context):
-                if outcome == "task_raised":
-                    raise RuntimeError("training blew up")
-
-        if outcome == "success_send_raised":
-
-            def send(msg, **kwargs):
-                if isinstance(msg, SucceedTask):
-                    raise ConnectionError("supervisor socket gone")
-                return None
-
-            mock_supervisor_comms.send.side_effect = send
-
-        runtime_ti = create_runtime_ti(task=MyOperator(task_id="t"))
-
-        with self._patch_state_backend(backend):
-            state, _, _ = self._run_and_finalize(runtime_ti, mock.MagicMock())
-
-        assert state == (
-            TaskInstanceState.SUCCESS if outcome == "success_send_raised" else TaskInstanceState.FAILED
-        )
-        assert runtime_ti._state_store_clear_owed is False
-        backend.clear.assert_not_called()
-
-
-class _WalkerModelA(BaseModel):
-    a: int
-
-
-class _WalkerModelB(BaseModel):
-    b: int
-
-
-class _WalkerOperator(BaseOperator):
-    """Operator that declares a Pydantic ``output_type`` for deserialization."""
-
-    deserialization_allowed_class_fields = ("output_type",)
-
-    def __init__(self, *, output_type=str, value=None, **kwargs):
-        super().__init__(**kwargs)
-        self.output_type = output_type
-        self.value = value
-
-    def execute(self, context):
-        return None
-
-
-class TestRegisterDeserializationAllowedClasses:
-    """The worker-side walk registers operator-declared XCom classes for the whole DAG.
-
-    ``allow_class`` is patched to a spy so these assert the walk *extracts* the right
-    classes from both real and mapped operators; ``allow_class``'s own import
-    validation is covered by the serde tests.
-    """
-
-    def test_registers_real_and_mapped_operators(self):
-        with DAG("walker_dag") as dag:
-            # Non-mapped producer: output_type is a plain attribute.
-            _WalkerOperator(task_id="real", output_type=_WalkerModelA)
-            # Mapped producer: output_type lives in partial_kwargs and __init__ never
-            # runs at parse -- the case the old __init__ registration could not reach.
-            _WalkerOperator.partial(task_id="mapped", output_type=_WalkerModelB).expand(value=[1, 2])
-
-        registered: list[type] = []
-        with patch("airflow.sdk.execution_time.task_runner.allow_class", side_effect=registered.append):
-            _register_deserialization_allowed_classes(dag, structlog.get_logger())
-
-        assert _WalkerModelA in registered, "real operator output_type not registered"
-        assert _WalkerModelB in registered, "mapped operator output_type not registered"
-
-    def test_default_operator_registers_nothing(self):
-        with DAG("walker_dag_plain") as dag:
-            BaseOperator(task_id="plain")
-
-        registered: list[type] = []
-        with patch("airflow.sdk.execution_time.task_runner.allow_class", side_effect=registered.append):
-            _register_deserialization_allowed_classes(dag, structlog.get_logger())
-        assert registered == []
-
-    def test_bad_declaration_is_skipped_not_fatal(self):
-        """A class that fails ``allow_class`` validation is logged and skipped, not raised."""
-
-        with DAG("walker_dag_bad") as dag:
-            _WalkerOperator(task_id="real", output_type=_WalkerModelA)
-
-        with patch("airflow.sdk.execution_time.task_runner.allow_class", side_effect=ValueError("nope")):
-            # Must not raise -- the walk swallows per-class registration errors.
-            _register_deserialization_allowed_classes(dag, structlog.get_logger())
-
-
-def _make_dag_tagged_ti(create_runtime_ti, tags):
-    """Build a RuntimeTaskInstance whose in-memory Dag carries the given tags."""
-    from airflow.sdk import DAG
-    from airflow.sdk.bases.operator import BaseOperator
-
-    with DAG("tagged_dag", tags=tags):
-        task = BaseOperator(task_id="t")
-    return create_runtime_ti(task=task)
-
-
-def test_stats_tags_dag_tags_disabled_by_default(create_runtime_ti):
-    """With the flag off (the default), dag tags must not leak into metrics."""
-    ti = _make_dag_tagged_ti(create_runtime_ti, ["env:prod", "validation"])
-    assert ti.stats_tags == {"dag_id": "tagged_dag", "task_id": "t", "run_type": "manual"}
-
-
-@conf_vars({("metrics", "dag_tags_in_metrics"): "True"})
-def test_stats_tags_without_dag_tags(create_runtime_ti):
-    tags = _make_dag_tagged_ti(create_runtime_ti, []).stats_tags
-    assert tags == {"dag_id": "tagged_dag", "task_id": "t", "run_type": "manual"}
-    # run_type must be a plain str, not a DagRunType enum member: DagRunType is a str-enum, so the
-    # dict equality above passes either way, but the enum serializes as "dagruntype.manual" on the wire.
-    assert type(tags["run_type"]) is str
-
-
-@conf_vars({("metrics", "dag_tags_in_metrics"): "True"})
-def test_stats_tags_with_standalone_and_key_value_tags(create_runtime_ti):
-    ti = _make_dag_tagged_ti(create_runtime_ti, ["env:prod", "validation"])
-    assert ti.stats_tags == {
-        "env": "prod",
-        "validation": "",
-        "dag_id": "tagged_dag",
-        "task_id": "t",
-        "run_type": "manual",
-    }

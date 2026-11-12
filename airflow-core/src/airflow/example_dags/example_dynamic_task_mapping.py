@@ -24,9 +24,7 @@ from datetime import datetime
 
 from airflow.sdk import DAG, task, task_group
 
-with DAG(
-    dag_id="example_dynamic_task_mapping", schedule=None, start_date=datetime(2022, 3, 4), tags=["example"]
-):
+with DAG(dag_id="example_dynamic_task_mapping", schedule=None, start_date=datetime(2022, 3, 4)):
 
     @task
     def add_one(x: int):
@@ -45,7 +43,6 @@ with DAG(
     schedule=None,
     catchup=False,
     start_date=datetime(2022, 3, 4),
-    tags=["example"],
 ):
 
     @task
@@ -69,7 +66,6 @@ with DAG(
     schedule=None,
     catchup=False,
     start_date=datetime(2022, 3, 4),
-    tags=["example"],
 ):
 
     @task_group

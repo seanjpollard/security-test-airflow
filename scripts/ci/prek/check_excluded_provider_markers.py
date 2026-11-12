@@ -17,7 +17,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # /// script
-# requires-python = ">=3.11,<3.12"
+# requires-python = ">=3.10,<3.11"
 # dependencies = [
 #   "packaging>=25",
 #   "pyyaml",
@@ -25,25 +25,22 @@
 # ]
 # ///
 """
-Validate that every dependency on an excluded provider in pyproject.toml carries
-the correct environment marker.
+Validate that every dependency on a Python-version-excluded provider
+in pyproject.toml carries the correct ``python_version`` environment marker.
 
 Provider exclusions are authoritative in each provider's ``provider.yaml``
-(``excluded-python-versions`` and ``excluded-platforms`` fields).  Any dependency
-string in the meta-package ``pyproject.toml`` that names an excluded provider without
-a matching ``python_version != "X.Y"`` or ``python_full_version != "X.Y.Z.*"``
-(per excluded Python version) or ``platform_machine != "MACHINE"``
-(per excluded platform) marker is flagged as an error.
+(``excluded-python-versions`` field).  Any dependency string in the
+meta-package ``pyproject.toml`` that names an excluded provider without a
+matching ``python_version != "X.Y"`` marker is flagged as an error.
 """
 
 from __future__ import annotations
 
 import sys
-import tomllib
 from pathlib import Path
 
 import yaml
-from common_prek_utils import AIRFLOW_PROVIDERS_ROOT_PATH, AIRFLOW_ROOT_PATH, EXCLUDED_PLATFORM_MACHINES
+from common_prek_utils import AIRFLOW_PROVIDERS_ROOT_PATH, AIRFLOW_ROOT_PATH
 from packaging.requirements import InvalidRequirement, Requirement
 from rich.console import Console
 
@@ -53,33 +50,28 @@ PYPROJECT_TOML_PATH = AIRFLOW_ROOT_PATH / "pyproject.toml"
 
 
 def _load_toml(path: Path) -> dict:
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib  # type: ignore[no-redef]
     return tomllib.loads(path.read_text())
 
 
-def _get_excluded_providers() -> dict[str, dict[str, list[str]]]:
-    """Return {normalized-package-name: {"python": [versions], "machines": [machines]}}.
-
-    ``python`` holds the excluded Python versions; ``machines`` holds the
-    ``platform_machine`` values derived from the provider's excluded platforms.
-    """
-    excluded: dict[str, dict[str, list[str]]] = {}
+def _get_excluded_providers() -> dict[str, list[str]]:
+    """Return {normalized-package-name: [excluded python versions]} from provider.yaml files."""
+    excluded: dict[str, list[str]] = {}
     for provider_yaml in AIRFLOW_PROVIDERS_ROOT_PATH.rglob("provider.yaml"):
         if provider_yaml.is_relative_to(AIRFLOW_PROVIDERS_ROOT_PATH / "src"):
             continue
         data = yaml.safe_load(provider_yaml.read_text())
-        versions = [str(v) for v in data.get("excluded-python-versions", [])]
-        machines = [
-            machine
-            for platform in data.get("excluded-platforms", [])
-            for machine in EXCLUDED_PLATFORM_MACHINES.get(platform, [])
-        ]
-        if versions or machines:
+        versions = data.get("excluded-python-versions", [])
+        if versions:
             package_name = data["package-name"].lower().replace("_", "-")
-            excluded[package_name] = {"python": versions, "machines": machines}
+            excluded[package_name] = [str(v) for v in versions]
     return excluded
 
 
-def _check_dependency(dep_str: str, excluded_providers: dict[str, dict[str, list[str]]]) -> list[str]:
+def _check_dependency(dep_str: str, excluded_providers: dict[str, list[str]]) -> list[str]:
     """Check a single dependency string.  Return list of error messages."""
     try:
         req = Requirement(dep_str)
@@ -89,41 +81,11 @@ def _check_dependency(dep_str: str, excluded_providers: dict[str, dict[str, list
     if package_name not in excluded_providers:
         return []
     errors = []
-    exclusions = excluded_providers[package_name]
-    for version in exclusions.get("python", []):
-        parts = version.split(".")
-        is_patch = len(parts) == 3
-        marker_name = "python_full_version" if is_patch else "python_version"
-        marker_version = f"{version}.*" if is_patch else version
-        env = {
-            "python_version": ".".join(parts[:2]),
-            "python_full_version": version if is_patch else f"{version}.0",
-            "platform_machine": "__other__",
-        }
-        excluded_environments = [env]
-        if is_patch:
-            excluded_environments.append({**env, "python_full_version": f"{version}.post1"})
-        if req.marker is None or any(req.marker.evaluate(excluded) for excluded in excluded_environments):
-            errors.append(
-                f'Dependency on "{package_name}" is missing {marker_name} !="{marker_version}" marker: {dep_str}'
-            )
-        if is_patch and req.marker is not None:
-            adjacent_patches = [int(parts[2]) + 1]
-            if int(parts[2]):
-                adjacent_patches.append(int(parts[2]) - 1)
-            for patch in adjacent_patches:
-                adjacent = f"{parts[0]}.{parts[1]}.{patch}"
-                if adjacent in exclusions["python"] or ".".join(parts[:2]) in exclusions["python"]:
-                    continue
-                if not req.marker.evaluate({**env, "python_full_version": adjacent}):
-                    errors.append(
-                        f'Dependency on "{package_name}" excludes supported Python {adjacent}: {dep_str}'
-                    )
-    for machine in exclusions.get("machines", []):
-        env = {"platform_machine": machine}
+    for version in excluded_providers[package_name]:
+        env = {"python_version": version}
         if req.marker is None or req.marker.evaluate(env):
             errors.append(
-                f'Dependency on "{package_name}" is missing platform_machine !="{machine}" marker: {dep_str}'
+                f'Dependency on "{package_name}" is missing python_version !="{version}" marker: {dep_str}'
             )
     return errors
 
@@ -134,13 +96,8 @@ def main() -> int:
         return 0
 
     console.print("[bright_blue]Checking excluded-provider markers in pyproject.toml")
-    for pkg, exclusions in sorted(excluded_providers.items()):
-        details = []
-        if exclusions["python"]:
-            details.append(f"Python {', '.join(exclusions['python'])}")
-        if exclusions["machines"]:
-            details.append(f"machine {', '.join(exclusions['machines'])}")
-        console.print(f"  [bright_blue]{pkg}[/] excluded for {'; '.join(details)}")
+    for pkg, versions in sorted(excluded_providers.items()):
+        console.print(f"  [bright_blue]{pkg}[/] excluded for Python {', '.join(versions)}")
 
     toml_data = _load_toml(PYPROJECT_TOML_PATH)
     all_errors: list[str] = []
@@ -159,13 +116,9 @@ def main() -> int:
         for error in all_errors:
             console.print(f"  [red]✗[/] {error}")
         console.print(
-            "\n[yellow]Each dependency on a provider with excluded-python-versions or "
-            "excluded-platforms in provider.yaml must have a matching marker.[/]\n"
-            "[yellow]Example: 'apache-airflow-providers-amazon>=9.0.0; python_version !=\"3.14\"'[/]\n"
-            "[yellow]Example: 'apache-airflow-providers-example>=1.0.0; "
-            'python_full_version !="3.10.0.*"\'[/]\n'
-            '[yellow]Example: \'apache-airflow-providers-ibm-mq>=0.1.0; platform_machine !="aarch64" '
-            'and platform_machine !="arm64"\'[/]'
+            "\n[yellow]Each dependency on a provider with excluded-python-versions in "
+            "provider.yaml must have a matching python_version marker.[/]\n"
+            "[yellow]Example: 'apache-airflow-providers-amazon>=9.0.0; python_version !=\"3.14\"'[/]"
         )
         return 1
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import os
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stdout
 from io import StringIO
 
 import pytest
@@ -32,7 +32,6 @@ from airflow.cli.commands import variable_command
 from airflow.models import Variable
 from airflow.utils.session import create_session
 
-from tests_common.test_utils.config import conf_vars
 from tests_common.test_utils.db import clear_db_variables
 
 pytestmark = pytest.mark.db_test
@@ -121,7 +120,7 @@ def create_variable_file(tmp_path):
 class TestCliVariables:
     @classmethod
     def setup_class(cls):
-        cls.dagbag = models.DagBag()
+        cls.dagbag = models.DagBag(include_examples=True)
         cls.parser = cli_parser.get_parser()
 
     def setup_method(self):
@@ -325,30 +324,6 @@ class TestCliVariables:
             if item["key"] in ["empty_var", "none_var", "normal_var"]:
                 assert item["val"] == "***"
 
-    def test_variables_list_warns_about_env_var_variables(self, monkeypatch):
-        """An `AIRFLOW_VAR_*` environment variable should trigger a stderr warning."""
-        monkeypatch.setenv("AIRFLOW_VAR_MY_HIDDEN_VAR", "hidden_value")
-        args = self.parser.parse_args(["variables", "list", "--output", "json"])
-        with redirect_stderr(StringIO()) as stderr_io:
-            variable_command.variables_list(args)
-            stderr = stderr_io.getvalue()
-        assert "AIRFLOW_VAR_" in stderr
-        assert "metadata database" in stderr
-
-    def test_variables_list_does_not_warn_by_default(self, monkeypatch):
-        """With no env-var variables or secrets backend configured, no warning is printed."""
-        for key in list(os.environ):
-            if key.startswith("AIRFLOW_VAR_"):
-                monkeypatch.delenv(key, raising=False)
-        args = self.parser.parse_args(["variables", "list", "--output", "json"])
-        with (
-            conf_vars({("secrets", "backend"): "", ("workers", "secrets_backend"): ""}),
-            redirect_stderr(StringIO()) as stderr_io,
-        ):
-            variable_command.variables_list(args)
-            stderr = stderr_io.getvalue()
-        assert stderr == ""
-
     def test_variables_delete(self):
         """Test variable_delete command"""
         variable_command.variables_set(self.parser.parse_args(["variables", "set", "foo", "bar"]))
@@ -384,40 +359,6 @@ class TestCliVariables:
     def test_variables_export(self):
         """Test variables_export command"""
         variable_command.variables_export(self.parser.parse_args(["variables", "export", os.devnull]))
-
-    @pytest.mark.parametrize(
-        ("stored_value", "expected_export"),
-        [
-            pytest.param(
-                '{"value": "a", "description": "b"}',
-                {"value": {"value": "a", "description": "b"}, "description": None},
-                id="envelope_lookalike",
-            ),
-            pytest.param(
-                '{"value": 1, "other": 2}',
-                {"value": {"value": 1, "other": 2}, "description": None},
-                id="envelope_lookalike_with_extra_keys",
-            ),
-            pytest.param('"hello"', '"hello"', id="json_string"),
-        ],
-    )
-    def test_variables_export_survives_reimport(self, tmp_path, stored_value, expected_export):
-        """Values that collide with the export format must round-trip through export/import."""
-        path = tmp_path / "variables.json"
-        variable_command.variables_set(self.parser.parse_args(["variables", "set", "k", stored_value]))
-        variable_command.variables_export(self.parser.parse_args(["variables", "export", os.fspath(path)]))
-
-        assert json.loads(path.read_text()) == {"k": expected_export}
-
-        variable_command.variables_delete(self.parser.parse_args(["variables", "delete", "k"]))
-        with create_session() as session:
-            variable_command.variables_import(
-                self.parser.parse_args(["variables", "import", os.fspath(path)]), session=session
-            )
-
-        assert Variable.get("k", deserialize_json=True) == json.loads(stored_value)
-        with create_session() as session:
-            assert session.scalar(select(Variable.description).where(Variable.key == "k")) is None
 
     def test_variables_isolation(self, tmp_path):
         """Test isolation of variables"""
@@ -532,37 +473,6 @@ class TestCliVariables:
                 == "Complex variable"
             )
             assert session.scalar(select(Variable.description).where(Variable.key == "var3")) is None
-
-    @pytest.mark.parametrize(
-        ("value", "deserialize_json"),
-        [
-            ("", False),
-            (0, True),
-            (False, True),
-            (None, True),
-        ],
-        ids=["empty_string", "zero", "false", "null"],
-    )
-    def test_variables_import_with_structured_falsy_values(
-        self, create_variable_file, value, deserialize_json
-    ):
-        """Test variables_import preserves structured falsy values and descriptions."""
-        file = create_variable_file(
-            {"falsy_key": {"value": value, "description": "Falsy value description"}},
-            format="json",
-        )
-
-        with create_session() as session:
-            variable_command.variables_import(
-                self.parser.parse_args(["variables", "import", os.fspath(file)]), session=session
-            )
-
-        assert Variable.get("falsy_key", deserialize_json=deserialize_json) == value
-        with create_session() as session:
-            assert (
-                session.scalar(select(Variable.description).where(Variable.key == "falsy_key"))
-                == "Falsy value description"
-            )
 
     def test_variables_import_env(self, create_variable_file, env_variable_data):
         """Test variables_import with ENV format"""

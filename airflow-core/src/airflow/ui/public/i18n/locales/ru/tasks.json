@@ -1,10 +1,10 @@
 {
-  "mapped": "С маппингом",
-  "notMapped": "Без маппинга",
+  "mapped": "Отображено",
+  "notMapped": "Не отображено",
   "retries": "Повторные попытки",
   "searchTasks": "Поиск задач",
-  "selectMapped": "Выбрать по маппингу",
+  "selectMapped": "Выбрать отображенные",
   "selectOperator": "Выбрать операторы",
-  "selectRetryValues": "Выбрать число повторных попыток",
+  "selectRetryValues": "Выбрать значения повторов",
   "selectTriggerRules": "Выбрать правила триггера"
 }

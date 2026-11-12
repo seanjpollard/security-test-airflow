@@ -86,8 +86,6 @@ class CassandraToGCSOperator(BaseOperator):
         "filename",
         "schema_filename",
         "impersonation_chain",
-        "cassandra_conn_id",
-        "gcp_conn_id",
     )
     template_ext: Sequence[str] = (".cql",)
     ui_color = "#a0e08c"

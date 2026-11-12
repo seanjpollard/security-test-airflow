@@ -89,9 +89,8 @@ This file contains:
 * description of the distribution that is available in the documentation
 * list of versions of distribution that have been released so far
 * list of integrations, operators, hooks, sensors, transfers provided by the provider (useful for documentation generation)
-* list of connection types, extra-links, secret backends, auth backends, email backends, and logging
-  handlers (useful to both register them as they are needed by Airflow and to include them in
-  documentation automatically).
+* list of connection types, extra-links, secret backends, auth backends, and logging handlers (useful to both
+  register them as they are needed by Airflow and to include them in documentation automatically).
 
 Note that the ``provider.yaml`` file is regenerated automatically when the provider is released so you should
 not modify it - except updating dependencies, as your changes will be lost.
@@ -117,118 +116,6 @@ you should do it before you make a PR with such changed dependency changes
 
 Also, you should rebuild the image ``breeze ci-image build`` or answer ``y`` when you are asked to rebuild the
 image for the new dependencies to be used in the Breeze CI environment.
-
-Non-default provider extras
----------------------------
-
-Some providers depend on packages that cannot be installed in CI by default. There are two
-distinct shapes of this problem, and they need different solutions:
-
-**Shape A: the Python package builds fine but needs a system library available via apt**
-(e.g. Google's ``leveldb``/``plyvel`` needs ``libleveldb-dev``). Use the ``ci-image`` group:
-
-1. **In the provider's ``pyproject.toml``** — keep the package under ``[project.optional-dependencies]``
-   so users can opt in with ``pip install apache-airflow-providers-<id>[<extra>]``.
-
-2. **In the root ``pyproject.toml``** — add a dedicated entry under ``[dependency-groups]``,
-   then include it from the ``ci-image`` aggregate group. The ``ci-image`` group is the single
-   source of truth referenced by ``Dockerfile``, ``Dockerfile.ci``,
-   ``scripts/docker/install_airflow_when_building_images.sh``, and the breeze constraints
-   checker — adding your group there is the only change required for the CI image to pick it up:
-
-   .. code:: toml
-
-       [dependency-groups]
-       my-non-default-extra = [
-           "some-package>=1.2.3",
-       ]
-
-       ci-image = [
-           {include-group = "dev"},
-           {include-group = "docs"},
-           {include-group = "docs-gen"},
-           {include-group = "leveldb"},
-           {include-group = "my-non-default-extra"},
-       ]
-
-3. **Add the apt prerequisite** to ``scripts/docker/install_os_dependencies.sh`` so the CI image
-   has the system library before ``uv sync`` runs.
-
-Because the new group is *not* part of ``dev``, a plain ``uv sync`` on a contributor's machine
-will not try to install it. The CI image installs it via ``ci-image``.
-
-**Shape B: the Python package's wheel build needs a proprietary SDK that cannot live in the
-base CI image** (e.g. ``ibmmq`` releases before 2.1.0 were sdist-only and needed the IBM MQ
-Redistributable Client headers and ``MQ_FILE_PATH`` set at build time). First check whether
-raising the lower bound to a release that ships wheels avoids the build — a download at test
-time makes the job depend on the upstream host being reachable. Bundling such SDKs in the base image has licence,
-maintenance, and image-size costs that the project does not want to pay on every CI run.
-The lowest-direct-dependency provider tests still ``uv sync`` every extra of the provider inside the
-provider directory, so simply mocking the package in tests is not enough — the sync itself
-must succeed first. Use the per-provider pre-extras-install manifest:
-
-1. **Keep the package under ``[project.optional-dependencies]``** on the provider so end users
-   still install it with ``pip install apache-airflow-providers-<id>[<extra>]``. **Do not add it
-   to the ``ci-image`` group** — the base image should not carry the SDK.
-
-2. **Register the provider** in ``PROVIDERS_NEEDING_PRE_EXTRAS_INSTALL`` in
-   ``scripts/docker/entrypoint_ci.sh``. The hook runs immediately before
-   ``check_force_lowest_dependencies`` calls ``uv sync`` with every extra of that provider. The
-   list is explicit on purpose so maintainers see when a new provider takes on this shape of
-   cost, and so the surface for "drive-by privileged code" stays small.
-
-3. **Ship a declarative manifest** at ``providers/<id>/pre_extras_install.yaml``. The
-   manifest is *data, not code*: it is interpreted by
-   ``scripts/in_container/run_pre_extras_install.py``, which restricts what providers can do
-   to pinned-checksum HTTPS downloads, archive extraction under ``/opt`` or ``/tmp``, and
-   env-var exports. Maintainers reviewing the manifest only need to verify that the URL and
-   ``sha256`` belong to a trusted upstream — the provider cannot run arbitrary shell, pipe
-   ``curl`` into ``bash``, exfiltrate secrets, or write outside the allowlisted prefixes:
-
-   .. code:: yaml
-
-       # providers/<id>/pre_extras_install.yaml
-       downloads:
-         - url: https://public.dhe.ibm.com/.../9.4.0.0-IBM-MQC-Redist-LinuxX64.tar.gz
-           sha256: <64 lowercase hex chars>
-           extract_to: /opt/mqm
-           fallback_ips:                # optional, see schema below
-             - 170.225.126.18
-       env:
-         MQ_FILE_PATH: /opt/mqm
-
-   Schema (all fields required where listed):
-
-   - ``downloads`` (optional list): each entry has ``url`` (must start with ``https://``),
-     ``sha256`` (64 lowercase hex chars), and ``extract_to`` (must start with ``/opt/`` or
-     ``/tmp/`` and may not contain ``..``). Supported archive formats are ``.tar``,
-     ``.tar.gz``/``.tgz`` and ``.zip``; the extractor refuses any entry whose resolved path
-     escapes ``extract_to``.
-
-     Each ``downloads`` entry may also include ``fallback_ips`` (optional list of IPv4 or
-     IPv6 address strings). The interpreter tries the URL with normal DNS resolution first;
-     only on connection or resolution failure does it retry the same URL with each listed
-     IP, in order, by temporarily overriding ``socket.getaddrinfo`` for the hostname. Every
-     attempt uses a short socket timeout, and the whole set of routes is retried in rounds
-     (see ``DOWNLOAD_TIMEOUT_SECONDS`` and ``DOWNLOAD_ROUNDS`` in the interpreter), so an
-     unreachable or stalled upstream costs seconds per attempt rather than the kernel's
-     multi-minute TCP connect timeout. A checksum mismatch is never retried. The
-     TLS SNI and certificate verification stay bound to the URL hostname, and the
-     ``sha256`` check still runs end-to-end on whichever attempt succeeds, so a fallback
-     entry only changes *which IP is dialled*, not what is trusted. Use this when the
-     upstream publishes anycast IPs (e.g. IBM's notice at
-     https://www.ibm.com/support/pages/node/6826677) and the CI test container has been
-     observed to fail DNS resolution for that host.
-   - ``env`` (optional mapping): each name must match ``^[A-Z][A-Z0-9_]*$``, each value must
-     be a string. The interpreter writes ``export NAME='value'`` lines that the entrypoint
-     hook sources into the shell that subsequently runs ``uv sync``.
-
-   Any unknown top-level or per-entry key is a hard error.
-
-4. **Mock the module in unit tests** by injecting ``sys.modules["<module>"] = MagicMock()`` in
-   the provider's ``tests/conftest.py`` before the provider's hooks/operators get imported.
-   Regular CI does not install the real package, so the mock is what makes import-time
-   ``from <module> import …`` succeed during normal test runs.
 
 Provider's cross-dependencies
 -----------------------------

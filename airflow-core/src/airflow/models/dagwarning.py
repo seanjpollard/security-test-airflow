@@ -19,17 +19,20 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Annotated
+from typing import TYPE_CHECKING
 
-from pydantic import StringConstraints, TypeAdapter
-from sqlalchemy import ForeignKeyConstraint, Index, String, Text
+from sqlalchemy import ForeignKeyConstraint, Index, String, Text, delete, select, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from airflow._shared.timezones import timezone
 from airflow.models.base import Base, StringID
-from airflow.utils.sqlalchemy import UtcDateTime
+from airflow.models.dag import DagModel
+from airflow.utils.retries import retry_db_transaction
+from airflow.utils.session import NEW_SESSION, provide_session
+from airflow.utils.sqlalchemy import UtcDateTime, get_dialect_name
 
-WARNING_TYPE_MAX_LENGTH = 50
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 
 class DagWarning(Base):
@@ -42,7 +45,7 @@ class DagWarning(Base):
     """
 
     dag_id: Mapped[str] = mapped_column(StringID(), primary_key=True)
-    warning_type: Mapped[str] = mapped_column(String(WARNING_TYPE_MAX_LENGTH), primary_key=True)
+    warning_type: Mapped[str] = mapped_column(String(50), primary_key=True)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     timestamp: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=timezone.utcnow)
 
@@ -62,7 +65,7 @@ class DagWarning(Base):
     def __init__(self, dag_id: str, warning_type: str, message: str, **kwargs):
         super().__init__(**kwargs)
         self.dag_id = dag_id
-        self.warning_type = get_warning_type_value(warning_type)
+        self.warning_type = DagWarningType(warning_type).value  # make sure valid type
         self.message = message
 
     def __eq__(self, other) -> bool:
@@ -70,6 +73,24 @@ class DagWarning(Base):
 
     def __hash__(self) -> int:
         return hash((self.dag_id, self.warning_type))
+
+    @classmethod
+    @provide_session
+    @retry_db_transaction
+    def purge_inactive_dag_warnings(cls, session: Session = NEW_SESSION) -> None:
+        """
+        Deactivate DagWarning records for inactive dags.
+
+        :return: None
+        """
+        if get_dialect_name(session) == "sqlite":
+            dag_ids_stmt = select(DagModel.dag_id).where(DagModel.is_stale == true())
+            query = delete(cls).where(cls.dag_id.in_(dag_ids_stmt.scalar_subquery()))
+        else:
+            query = delete(cls).where(cls.dag_id == DagModel.dag_id, DagModel.is_stale == true())
+
+        session.execute(query.execution_options(synchronize_session=False))
+        session.commit()
 
 
 class DagWarningType(str, Enum):
@@ -81,29 +102,5 @@ class DagWarningType(str, Enum):
     """
 
     ASSET_CONFLICT = "asset conflict"
-    DUPLICATE_DAG_ID = "duplicate dag id"
     NONEXISTENT_POOL = "non-existent pool"
     RUNTIME_VARYING_VALUE = "runtime varying value"
-    TASK_GROUP_CYCLE = "task group cycle"
-
-
-ImporterWarningType = Annotated[
-    str,
-    StringConstraints(pattern=r"^[a-z][a-z0-9_]*:[a-z0-9_.\-]+$", max_length=WARNING_TYPE_MAX_LENGTH),
-]
-"""Warning type reported by a Dag importer, prefixed with its namespace (e.g. ``yaml:deprecated_field``)."""
-
-DagWarningTypeValue = DagWarningType | ImporterWarningType
-"""Any valid ``warning_type``: a built-in :class:`DagWarningType` or an :data:`ImporterWarningType`."""
-
-_warning_type_adapter: TypeAdapter[DagWarningTypeValue] = TypeAdapter(DagWarningTypeValue)
-
-
-def get_warning_type_value(warning_type: str) -> str:
-    """
-    Return the value to store for ``warning_type``.
-
-    :raises ValueError: if it is neither a :class:`DagWarningType` nor an :data:`ImporterWarningType`.
-    """
-    validated = _warning_type_adapter.validate_python(warning_type)
-    return validated.value if isinstance(validated, DagWarningType) else validated

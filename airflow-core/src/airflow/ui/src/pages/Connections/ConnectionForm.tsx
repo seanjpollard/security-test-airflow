@@ -16,23 +16,21 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useEffect, useState } from "react";
-
-import { Input, Button, Box, Spacer, HStack, Field, Heading, Stack, VStack, Spinner } from "@chakra-ui/react";
+import { Input, Button, Box, Spacer, HStack, Field, Stack, VStack, Spinner } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
+import { useEffect, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { FiSave } from "react-icons/fi";
-
-import { Accordion } from "src/system-components";
 
 import { ErrorAlert } from "src/components/ErrorAlert";
 import { FlexibleForm } from "src/components/FlexibleForm";
 import { JsonEditor } from "src/components/JsonEditor";
 import { TeamSelector } from "src/components/TeamSelector.tsx";
-
+import { Accordion } from "src/components/ui";
 import { useConfig } from "src/queries/useConfig.tsx";
 import { useConnectionTypeMeta } from "src/queries/useConnectionTypeMeta";
+import type { ParamsSpec } from "src/queries/useDagParams";
 import { useParamStore } from "src/queries/useParamStore";
 
 import StandardFields from "./ConnectionStandardFields";
@@ -75,10 +73,7 @@ const ConnectionForm = ({
   const { t: translate } = useTranslation(["admin", "common"]);
   const selectedConnType = watch("conn_type"); // Get the selected connection type
   const standardFields = connectionTypeMeta[selectedConnType]?.standard_fields ?? {};
-  const paramsDic = { paramsDict: connectionTypeMeta[selectedConnType]?.extra_fields ?? {} };
-  const connectionTypeFieldsSection = translate("connections.form.connectionTypeFields", {
-    connectionType: hookNameMap[selectedConnType] ?? selectedConnType,
-  });
+  const paramsDic = { paramsDict: connectionTypeMeta[selectedConnType]?.extra_fields ?? ({} as ParamsSpec) };
 
   const [formErrors, setFormErrors] = useState(false);
   const multiTeamEnabled = Boolean(useConfig("multi_team"));
@@ -87,11 +82,7 @@ const ConnectionForm = ({
     setValue("conn_type", selectedConnType, {
       shouldDirty: true,
     });
-    try {
-      setConf(JSON.stringify(JSON.parse(initialConnection.extra), undefined, 2));
-    } catch {
-      setConf(initialConnection.extra);
-    }
+    setConf(JSON.stringify(JSON.parse(initialConnection.extra), undefined, 2));
   }, [selectedConnType, initialConnection, setConf, setValue]);
 
   // Automatically reset form when conf is fetched
@@ -135,8 +126,7 @@ const ConnectionForm = ({
 
       return formattedJson;
     } catch (error_) {
-      const errorMessage =
-        error_ instanceof Error ? error_.message : translate("common:error.defaultMessage");
+      const errorMessage = error_ instanceof Error ? error_.message : translate("common:error.unknown");
 
       setErrors((prev) => ({
         ...prev,
@@ -173,7 +163,8 @@ const ConnectionForm = ({
           )}
           rules={{
             required: translate("connections.form.connectionIdRequired"),
-            validate: (value) => value.trim() !== "" || translate("connections.form.connectionIdRequirement"),
+            validate: (value) =>
+              value.trim() === "" ? translate("connections.form.connectionIdRequirement") : true,
           }}
         />
 
@@ -210,50 +201,58 @@ const ConnectionForm = ({
           }}
         />
 
-        {selectedConnType && !isMetaPending ? (
-          <Stack gap={6} key={selectedConnType} mb={4} mt={4} width="100%">
-            <Stack gap={2}>
-              <Heading size="lg">{translate("connections.form.standardFields")}</Heading>
-              <StandardFields control={control} standardFields={standardFields} />
-            </Stack>
+        {selectedConnType ? (
+          <Accordion.Root
+            collapsible
+            defaultValue={["standardFields"]}
+            mb={4}
+            mt={4}
+            size="lg"
+            variant="enclosed"
+          >
+            <Accordion.Item key="standardFields" value="standardFields">
+              <Accordion.ItemTrigger>{translate("connections.form.standardFields")}</Accordion.ItemTrigger>
+              <Accordion.ItemContent>
+                <StandardFields control={control} standardFields={standardFields} />
+              </Accordion.ItemContent>
+            </Accordion.Item>
             <FlexibleForm
-              flexibleFormDefaultSection={connectionTypeFieldsSection}
+              flexibleFormDefaultSection={translate("connections.form.extraFields")}
               initialParamsDict={paramsDic}
+              key={selectedConnType}
               setError={setFormErrors}
               subHeader={isEditMode ? translate("connections.form.helperTextForRedactedFields") : undefined}
             />
-            <Accordion.Root collapsible overflow="visible" size="lg" variant="enclosed">
-              <Accordion.Item key="extraJson" value="extraJson">
-                <Accordion.ItemTrigger cursor="button">
-                  {translate("connections.form.extraFieldsJson")}
-                </Accordion.ItemTrigger>
-                <Accordion.ItemContent>
-                  <Controller
-                    control={control}
-                    name="extra"
-                    render={({ field }) => (
-                      <Field.Root invalid={Boolean(errors.conf)}>
-                        <JsonEditor
-                          onBlur={() => {
-                            field.onChange(validateAndPrettifyJson(field.value));
-                            field.onBlur();
-                          }}
-                          onChange={field.onChange}
-                          value={field.value}
-                        />
-                        {Boolean(errors.conf) ? <Field.ErrorText>{errors.conf}</Field.ErrorText> : undefined}
-                        {isEditMode ? (
-                          <Field.HelperText>
-                            {translate("connections.form.helperTextForRedactedFields")}
-                          </Field.HelperText>
-                        ) : undefined}
-                      </Field.Root>
-                    )}
-                  />
-                </Accordion.ItemContent>
-              </Accordion.Item>
-            </Accordion.Root>
-          </Stack>
+            <Accordion.Item key="extraJson" value="extraJson">
+              <Accordion.ItemTrigger cursor="button">
+                {translate("connections.form.extraFieldsJson")}
+              </Accordion.ItemTrigger>
+              <Accordion.ItemContent>
+                <Controller
+                  control={control}
+                  name="extra"
+                  render={({ field }) => (
+                    <Field.Root invalid={Boolean(errors.conf)}>
+                      <JsonEditor
+                        onBlur={() => {
+                          field.onChange(validateAndPrettifyJson(field.value));
+                          field.onBlur();
+                        }}
+                        onChange={field.onChange}
+                        value={field.value}
+                      />
+                      {Boolean(errors.conf) ? <Field.ErrorText>{errors.conf}</Field.ErrorText> : undefined}
+                      {isEditMode ? (
+                        <Field.HelperText>
+                          {translate("connections.form.helperTextForRedactedFields")}
+                        </Field.HelperText>
+                      ) : undefined}
+                    </Field.Root>
+                  )}
+                />
+              </Accordion.ItemContent>
+            </Accordion.Item>
+          </Accordion.Root>
         ) : undefined}
 
         {multiTeamEnabled ? <TeamSelector control={control} /> : undefined}
@@ -263,6 +262,7 @@ const ConnectionForm = ({
         <HStack w="full">
           <Spacer />
           <Button
+            colorPalette="brand"
             disabled={
               Boolean(errors.conf) || formErrors || isPending || !isValid || (!isDirty && !isExtraFieldsDirty)
             }

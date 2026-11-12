@@ -16,10 +16,7 @@
 # under the License.
 from __future__ import annotations
 
-import json
-
 import pytest
-from packaging.version import Version
 
 
 def date_param():
@@ -57,18 +54,12 @@ TEST_COMMANDS = [
     "auth list-envs",
     # Assets commands
     "assets list",
-    "assets get 1",
+    "assets get --asset-id=1",
     "assets create-event --asset-id=1",
-    "assets set-state-store 1 test_key test_value",
-    "assets get-state-store 1 test_key",
-    "assets list-state-store 1",
-    "assets delete-state-store 1 test_key",
-    "assets set-state-store 1 clear_key value",
-    "assets clear-state-store 1",
     # Backfill commands
-    "backfill list example_bash_operator",
+    "backfill list",
     # Config commands
-    "config get core executor",
+    "config get --section core --option executor",
     "config list",
     "config lint",
     # Connections commands
@@ -76,106 +67,66 @@ TEST_COMMANDS = [
     "connections list",
     "connections list -o yaml",
     "connections list -o table",
-    "connections get test_con",
-    "connections get test_con -o json",
+    "connections get --conn-id=test_con",
+    "connections get --conn-id=test_con -o json",
     "connections update --connection-id=test_con --conn-type=postgres",
     "connections import tests/airflowctl_tests/fixtures/test_connections.json",
-    "connections delete test_con",
-    "connections delete test_import_conn",
+    "connections delete --conn-id=test_con",
+    "connections delete --conn-id=test_import_conn",
     # Dags commands
     "dags list",
-    "dags get example_bash_operator",
-    "dags get-details example_bash_operator",
-    "dags get-stats example_bash_operator",
-    "dags get-tags",
-    "dags get-version example_bash_operator 1",
+    "dags get --dag-id=example_bash_operator",
+    "dags get-details --dag-id=example_bash_operator",
+    "dags get-stats --dag-ids=example_bash_operator",
+    "dags get-version --dag-id=example_bash_operator --version-number=1",
     "dags list-import-errors",
-    "dags list-version example_bash_operator",
+    "dags list-version --dag-id=example_bash_operator",
     "dags list-warning",
-    # Order of trigger, state, and pause/unpause is important for test stability
-    "dags trigger example_bash_operator --logical-date={date_param} --run-after={date_param}",
-    'dags state example_bash_operator "manual__{date_param}"',
-    'dags state example_bash_operator --logical-date "{date_param}"',
+    # Order of trigger and pause/unpause is important for test stability because state checked
+    "dags trigger --dag-id=example_bash_operator --logical-date={date_param} --run-after={date_param}",
     # Test trigger without logical-date (should default to now)
-    "dags trigger example_bash_operator",
-    "dags next-execution example_bash_operator",
+    "dags trigger --dag-id=example_bash_operator",
     "dags pause example_bash_operator",
     "dags unpause example_bash_operator",
     # Dag Run commands
-    'dagrun get example_bash_operator "manual__{date_param}"',
-    "dags update example_bash_operator --no-is-paused",
+    'dagrun get --dag-id=example_bash_operator --dag-run-id="manual__{date_param}"',
+    "dags update --dag-id=example_bash_operator --no-is-paused",
     # Dag Run commands
     "dagrun list --dag-id example_bash_operator --state success --limit=1",
-    # Tasks commands
-    "tasks get example_bash_operator runme_0",
-    "tasks list example_bash_operator",
-    'tasks failed-deps example_bash_operator runme_0 "manual__{date_param}"',
-    'tasks failed-deps example_bash_operator runme_0 --logical-date "{date_param}"',
-    'tasks states-for-dag-run example_bash_operator "manual__{date_param}"',
-    'tasks states-for-dag-run example_bash_operator --logical-date "{date_param}"',
-    'tasks state example_bash_operator runme_0 "manual__{date_param}"',
-    'tasks state example_bash_operator runme_0 --logical-date "{date_param}"',
-    'tasks logs example_bash_operator "manual__{date_param}" runme_0 --try-number 1',
-    'tasks clear example_bash_operator --dag-run-id "manual__{date_param}" --task-ids runme_0 -o json',
-    # Task Instances commands
-    'taskinstances get example_bash_operator "manual__{date_param}" runme_0',
-    'taskinstances get-dependencies example_bash_operator "manual__{date_param}" runme_0',
-    'taskinstances logs example_bash_operator "manual__{date_param}" runme_0 1',
-    'taskinstances list example_bash_operator "manual__{date_param}"',
-    'taskinstances state-store set example_bash_operator "manual__{date_param}" runme_0 test_key test_value',
-    'taskinstances state-store get example_bash_operator "manual__{date_param}" runme_0 test_key',
-    'taskinstances state-store list example_bash_operator "manual__{date_param}" runme_0',
-    'taskinstances state-store update example_bash_operator "manual__{date_param}" runme_0 test_key new_value',
-    'taskinstances state-store delete example_bash_operator "manual__{date_param}" runme_0 test_key',
-    'taskinstances state-store set example_bash_operator "manual__{date_param}" runme_0 clear_key value',
-    'taskinstances state-store clear example_bash_operator "manual__{date_param}" runme_0',
     # XCom commands - need a Dag run with completed tasks
-    'xcom add example_bash_operator "manual__{date_param}" runme_0 {xcom_key} \'{{"test": "value"}}\'',
-    'xcom get example_bash_operator "manual__{date_param}" runme_0 {xcom_key}',
-    'xcom list example_bash_operator "manual__{date_param}" runme_0',
-    'xcom edit example_bash_operator "manual__{date_param}" runme_0 {xcom_key} \'{{"updated": "value"}}\'',
-    'xcom delete example_bash_operator "manual__{date_param}" runme_0 {xcom_key}',
-    # Delete Dag run command - needs to run after xcom ops
-    'dagrun delete example_bash_operator "manual__{date_param}"',
+    'xcom add --dag-id=example_bash_operator --dag-run-id="manual__{date_param}" --task-id=runme_0 --key={xcom_key} --value=\'{{"test": "value"}}\'',
+    'xcom get --dag-id=example_bash_operator --dag-run-id="manual__{date_param}" --task-id=runme_0 --key={xcom_key}',
+    'xcom list --dag-id=example_bash_operator --dag-run-id="manual__{date_param}" --task-id=runme_0',
+    'xcom edit --dag-id=example_bash_operator --dag-run-id="manual__{date_param}" --task-id=runme_0 --key={xcom_key} --value=\'{{"updated": "value"}}\'',
+    'xcom delete --dag-id=example_bash_operator --dag-run-id="manual__{date_param}" --task-id=runme_0 --key={xcom_key}',
     # Jobs commands
     "jobs list",
     # Pools commands
     "pools create --name=test_pool --slots=5",
     "pools list",
-    "pools get test_pool",
-    "pools get test_pool -o yaml",
-    "pools update --pool=test_pool --slots=10 --no-include-deferred",
+    "pools get --pool-name=test_pool",
+    "pools get --pool-name=test_pool -o yaml",
+    "pools update --pool=test_pool --slots=10",
     "pools import tests/airflowctl_tests/fixtures/test_pools.json",
     "pools export tests/airflowctl_tests/fixtures/pools_export.json --output=json",
-    "pools delete test_pool",
-    "pools delete test_import_pool",
+    "pools delete --pool=test_pool",
+    "pools delete --pool=test_import_pool",
     # Providers commands
     "providers list",
-    "providers get apache-airflow-providers-standard",
     # Variables commands
     "variables create --key=test_key --value=test_value",
     "variables list",
-    "variables get test_key",
-    "variables get test_key -o table",
+    "variables get --variable-key=test_key",
+    "variables get --variable-key=test_key -o table",
     "variables update --key=test_key --value=updated_value",
     "variables import tests/airflowctl_tests/fixtures/test_variables.json",
-    "variables delete test_key",
-    "variables delete test_import_var",
-    "variables delete test_import_var_with_desc",
+    "variables delete --variable-key=test_key",
+    "variables delete --variable-key=test_import_var",
+    "variables delete --variable-key=test_import_var_with_desc",
     # Plugins command
     "plugins list",
     "plugins list-import-errors",
 ]
-
-# The first Airflow version whose API serves each command, keyed by `_get_command_id`.
-MIN_AIRFLOW_VERSIONS = {
-    "assets set-state-store": Version("3.3.0"),
-    "assets get-state-store": Version("3.3.0"),
-    "assets list-state-store": Version("3.3.0"),
-    "assets delete-state-store": Version("3.3.0"),
-    "assets clear-state-store": Version("3.3.0"),
-    "taskinstances state-store": Version("3.3.0"),
-}
 
 NO_AUTH_TEST_COMMANDS = [
     "version --remote",
@@ -193,22 +144,6 @@ TEST_COMMANDS_DEBUG_MODE = [LOGIN_COMMAND] + [
 TEST_COMMANDS_SKIP_KEYRING = [LOGIN_COMMAND_SKIP_KEYRING] + [
     test.format(date_param=DATE_PARAM_2, xcom_key=_XCOM_KEY_2) for test in TEST_COMMANDS
 ]
-
-
-def _get_command_id(command: str) -> str:
-    return " ".join(command.split(" ", 2)[:2])
-
-
-def _skip_if_unsupported(command: str, airflow_version: Version) -> None:
-    min_version = MIN_AIRFLOW_VERSIONS.get(_get_command_id(command))
-    if min_version and airflow_version < min_version:
-        pytest.skip(f"needs Airflow >= {min_version}, the server runs {airflow_version}")
-
-
-def test_min_airflow_versions_match_test_commands():
-    """A renamed command must be renamed here too, or its version gate silently stops applying."""
-    stale_command_ids = set(MIN_AIRFLOW_VERSIONS) - {_get_command_id(command) for command in TEST_COMMANDS}
-    assert not stale_command_ids
 
 
 def test_hardcoded_xcom_key_would_collide():
@@ -235,24 +170,20 @@ def test_hardcoded_xcom_key_would_collide():
 @pytest.mark.parametrize(
     "command",
     TEST_COMMANDS_DEBUG_MODE,
-    ids=[_get_command_id(command) for command in TEST_COMMANDS_DEBUG_MODE],
+    ids=[" ".join(command.split(" ", 2)[:2]) for command in TEST_COMMANDS_DEBUG_MODE],
 )
-def test_airflowctl_commands(command: str, airflow_version: Version, run_command):
+def test_airflowctl_commands(command: str, run_command):
     """Test airflowctl commands using docker-compose environment."""
-    _skip_if_unsupported(command, airflow_version)
     run_command(command=command, env_vars={"AIRFLOW_CLI_DEBUG_MODE": "true"}, skip_login=True)
 
 
 @pytest.mark.parametrize(
     "command",
     TEST_COMMANDS_SKIP_KEYRING,
-    ids=[_get_command_id(command) for command in TEST_COMMANDS_SKIP_KEYRING],
+    ids=[" ".join(command.split(" ", 2)[:2]) for command in TEST_COMMANDS_SKIP_KEYRING],
 )
-def test_airflowctl_commands_skip_keyring(
-    command: str, api_token: str, airflow_version: Version, run_command
-):
+def test_airflowctl_commands_skip_keyring(command: str, api_token: str, run_command):
     """Test airflowctl commands using docker-compose environment without using keyring."""
-    _skip_if_unsupported(command, airflow_version)
     run_command(
         command=command,
         env_vars={
@@ -262,22 +193,6 @@ def test_airflowctl_commands_skip_keyring(
         },
         skip_login=True,
     )
-
-
-def test_backfill_create_dry_run_lists_the_runs_it_would_create(api_token, run_command, tmp_path):
-    # 2024 stays clear of the runs triggered above, which a dry run would leave out.
-    output = run_command(
-        command="backfill create-dry-run --dag-id example_bash_operator "
-        "--from-date 2024-01-01T00:00:00+00:00 --to-date 2024-01-03T00:00:00+00:00 -o json",
-        env_vars={"AIRFLOW_HOME": str(tmp_path), "AIRFLOW_CLI_TOKEN": api_token},
-        skip_login=True,
-    )
-    # A server older than 3.2 omits the partition fields, and that warning precedes the JSON.
-    assert [row["logical_date"] for row in json.loads(output.splitlines()[-1])] == [
-        "2024-01-01T00:00:00Z",
-        "2024-01-02T00:00:00Z",
-        "2024-01-03T00:00:00Z",
-    ]
 
 
 @pytest.mark.parametrize("command", NO_AUTH_TEST_COMMANDS)

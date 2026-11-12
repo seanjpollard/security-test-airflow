@@ -85,9 +85,9 @@ T = TypeVar("T", bound=FunctionType)
 
 if TYPE_CHECKING:
     from types import ClassMethodDescriptorType
-    from typing import Self
 
     import jinja2
+    from typing_extensions import Self
 
     from airflow.sdk.api.datamodels._generated import DagAttributeTypes
     from airflow.sdk.bases.operatorlink import BaseOperatorLink
@@ -202,28 +202,23 @@ def coerce_resources(resources: dict[str, Any] | None) -> Resources | None:
 
 @contextlib.contextmanager
 def event_loop() -> Generator[AbstractEventLoop]:
-    """
-    Own an event loop for the duration of the block, to drive coroutines from synchronous code.
-
-    Unlike ``asyncio.run()``, which creates a loop for one coroutine and closes it, the loop yielded here
-    outlives any number of ``run_until_complete()`` calls: tasks created on it in one call are still there
-    for the next, which is what code that pauses and resumes a loop between batches of work needs.
-
-    This is :class:`asyncio.Runner`: the loop is set as the current loop of the thread while the block runs
-    and unset afterwards, leftover tasks are cancelled, async generators and the default executor are shut
-    down and the loop is closed. Nothing goes through ``asyncio.get_event_loop()``, which since
-    Python 3.12 warns and since 3.14 raises when no loop is set. Entering the block from a running loop is
-    refused: a loop cannot drive another loop on the same thread.
-    """
+    new_event_loop = False
+    loop = None
     try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        pass
-    else:
-        raise RuntimeError("event_loop() cannot be used from a running event loop")
-
-    with asyncio.Runner() as runner:
-        yield runner.get_loop()
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                raise RuntimeError
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            new_event_loop = True
+        yield loop
+    finally:
+        if new_event_loop and loop is not None:
+            with contextlib.suppress(AttributeError):
+                loop.close()
+                asyncio.set_event_loop(None)
 
 
 class _PartialDescriptor:
@@ -273,21 +268,6 @@ OPERATOR_DEFAULTS: dict[str, Any] = {
     "wait_for_downstream": False,
     "weight_rule": DEFAULT_WEIGHT_RULE,
 }
-
-
-def _get_operator_defaults(operator_class: type[BaseOperator]) -> dict[str, Any]:
-    """Get default values for an operator class's BaseOperator arguments."""
-    operator_defaults = OPERATOR_DEFAULTS.copy()
-    operator_classes = operator_class.mro()
-    for operator_base in reversed(operator_classes[: operator_classes.index(BaseOperator)]):
-        if (init := operator_base.__dict__.get("__init__")) is None:
-            continue
-        operator_defaults.update(
-            (name, parameter.default)
-            for name, parameter in inspect.signature(init).parameters.items()
-            if name in OPERATOR_DEFAULTS and parameter.default is not inspect.Parameter.empty
-        )
-    return operator_defaults
 
 
 # This is what handles the actual mapping.
@@ -392,9 +372,7 @@ else:
         )
 
         # Fill fields not provided by the user with default values.
-        partial_kwargs.update(
-            (k, v) for k, v in _get_operator_defaults(operator_class).items() if k not in partial_kwargs
-        )
+        partial_kwargs.update((k, v) for k, v in OPERATOR_DEFAULTS.items() if k not in partial_kwargs)
 
         # Post-process arguments. Should be kept in sync with _TaskDecorator.expand().
         if "task_concurrency" in kwargs:  # Reject deprecated option.
@@ -950,13 +928,6 @@ class BaseOperator(AbstractOperator, metaclass=BaseOperatorMeta):
     template_ext: Sequence[str] = ()
 
     template_fields_renderers: ClassVar[dict[str, str]] = {}
-
-    # Names of constructor fields whose values may contain Pydantic model classes
-    # this operator can emit to XCom (e.g. ``("output_type",)``). The worker
-    # registers those classes in the deserialization allow-list before running
-    # tasks, so downstream consumers can deserialize the instances without an
-    # ``[core] allowed_deserialization_classes`` edit. Empty by default.
-    deserialization_allowed_class_fields: ClassVar[tuple[str, ...]] = ()
 
     operator_extra_links: Collection[BaseOperatorLink] = ()
 
@@ -1599,7 +1570,6 @@ class BaseOperator(AbstractOperator, metaclass=BaseOperatorMeta):
                     "has_on_retry_callback",
                     "has_on_skipped_callback",
                     "has_retry_policy",
-                    "returns_dag_result",
                 }
             )
             DagContext.pop()

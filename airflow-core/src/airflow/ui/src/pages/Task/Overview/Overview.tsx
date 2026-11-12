@@ -16,37 +16,25 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from "react";
-
-import { Box, HStack, Skeleton, VStack } from "@chakra-ui/react";
+import { Box, HStack, Skeleton, SimpleGrid } from "@chakra-ui/react";
 import dayjs from "dayjs";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 
-import { usePluginServiceGetPlugins, useTaskInstanceServiceGetTaskInstances } from "openapi/queries";
-
-import { ReactPlugin } from "src/pages/ReactPlugin";
-
+import { useTaskInstanceServiceGetTaskInstances } from "openapi/queries";
 import { DurationChart } from "src/components/DurationChart";
 import { NeedsReviewButton } from "src/components/NeedsReviewButton";
 import TimeRangeSelector from "src/components/TimeRangeSelector";
 import { TrendCountButton } from "src/components/TrendCountButton";
-
 import { SearchParamsKeys } from "src/constants/searchParams";
-import { useScopedPluginViews } from "src/hooks/useScopedPluginViews";
-import { useLoopGroupNode } from "src/queries/useIsLoopGroup";
 import { isStatePending, useAutoRefresh } from "src/utils";
-
-import { LoopHistoryChart } from "./LoopHistoryChart";
 
 const defaultHour = "24";
 
 export const Overview = () => {
   const { dagId = "", groupId, taskId } = useParams();
   const { t: translate } = useTranslation("dag");
-
-  const [searchParams] = useSearchParams();
-  const limit = Number(searchParams.get(SearchParamsKeys.LIMIT) ?? "10");
 
   const now = dayjs();
   const [startDate, setStartDate] = useState(now.subtract(Number(defaultHour), "hour").toISOString());
@@ -72,7 +60,7 @@ export const Overview = () => {
     {
       dagId,
       dagRunId: "~",
-      limit,
+      limit: 14,
       orderBy: ["-run_after"],
       taskGroupId: groupId ?? undefined,
       taskId: Boolean(groupId) ? undefined : taskId,
@@ -83,19 +71,11 @@ export const Overview = () => {
         query.state.data?.task_instances.some((ti) => isStatePending(ti.state)) ? refetchInterval : false,
     },
   );
-  const groupNode = useLoopGroupNode(groupId ?? "");
-  const loopNode = groupNode?.is_loop === true ? groupNode : undefined;
-
-  const { data: pluginData } = usePluginServiceGetPlugins();
-  const reactApps = pluginData?.plugins.flatMap((plugin) => plugin.react_apps) ?? [];
-  const taskOverviewReactPlugins = useScopedPluginViews(reactApps, "task_overview");
 
   return (
-    <VStack alignItems="stretch" gap={4} m={4}>
-      <Box css={{ "&:empty": { display: "none" } }} order={1}>
-        <NeedsReviewButton taskId={taskId} />
-      </Box>
-      <Box my={2} order={2}>
+    <Box m={4} spaceY={4}>
+      <NeedsReviewButton taskId={taskId} />
+      <Box my={2}>
         <TimeRangeSelector
           defaultValue={defaultHour}
           endDate={endDate}
@@ -104,7 +84,7 @@ export const Overview = () => {
           startDate={startDate}
         />
       </Box>
-      <HStack flexWrap="wrap" order={3}>
+      <HStack flexWrap="wrap">
         <TrendCountButton
           colorPalette={failedTaskCount === 0 ? "green" : "red"}
           count={failedTaskCount}
@@ -123,31 +103,15 @@ export const Overview = () => {
           startDate={startDate}
         />
       </HStack>
-      <HStack alignItems="flex-start" flexWrap="wrap" gap={5} my={5} order={4}>
-        {loopNode === undefined ? undefined : <LoopHistoryChart groupId={loopNode.id} />}
-        <Box
-          borderRadius={4}
-          borderStyle="solid"
-          borderWidth={1}
-          flex="1 1 400px"
-          maxWidth="900px"
-          minWidth="320px"
-          p={2}
-        >
+      <SimpleGrid columns={3} gap={5} my={5}>
+        <Box borderRadius={4} borderStyle="solid" borderWidth={1} p={2} width="350px">
           {isLoadingTaskInstances ? (
-            <Skeleton height="310px" w="full" />
+            <Skeleton height="200px" w="full" />
           ) : (
-            <DurationChart
-              // oxlint-disable-next-line unicorn/prefer-spread -- a spread would drop the optional chain
-              entries={tiData?.task_instances.slice().reverse()}
-              kind="Task Instance"
-            />
+            <DurationChart entries={tiData?.task_instances.slice().reverse()} kind="Task Instance" />
           )}
         </Box>
-      </HStack>
-      {taskOverviewReactPlugins.map((plugin) => (
-        <ReactPlugin key={plugin.name} reactApp={plugin} />
-      ))}
-    </VStack>
+      </SimpleGrid>
+    </Box>
   );
 };

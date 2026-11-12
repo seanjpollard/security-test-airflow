@@ -31,8 +31,9 @@ export DOCKER_BUILDKIT=1
 
 docker build . \
     --pull \
-    --build-arg BASE_IMAGE="${BASE_IMAGE:-ghcr.io/apache/airflow/base/python:3.14.10-debian13-dev}" \
+    --build-arg BASE_IMAGE="debian:bookworm-slim" \
     --build-arg AIRFLOW_VERSION="${AIRFLOW_VERSION}" \
+    --build-arg AIRFLOW_PYTHON_VERSION="3.13.13" \
     --build-arg ADDITIONAL_PYTHON_DEPS="mpi4py==4.1.1" \
     --build-arg ADDITIONAL_DEV_APT_DEPS="libopenmpi-dev" \
     --build-arg ADDITIONAL_RUNTIME_APT_DEPS="openmpi-common" \

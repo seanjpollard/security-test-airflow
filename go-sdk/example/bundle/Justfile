@@ -21,26 +21,13 @@
 default:
     @just --list
 
-# Build a deployable example bundle that the coordinator can discover
-build: pack
+# Build the example bundle
+build:
+    @echo "Building example DAG bundle..."
+    go build -o ../../bin/example-dag-bundle .
 
-# One-step build + pack. The single `go tool airflow-go-pack`
-# invocation runs `go build` internally, queries the binary for its
-# DAG/task identity via --airflow-metadata, and appends the source files
-# plus airflow-metadata.yaml plus AFBNDL01 trailer. The output is a single
-# self-contained executable bundle, named after the bundle's package
-# directory and written to the current directory. Drop it into the
-# Dag bundle named by ExecutableCoordinator's task_handler_bundle_name
-# to deploy.
-pack:
-    @echo "Packing example DAG bundle..."
-    go tool airflow-go-pack --output ../../bin/example_dags
 
-# Pack with extra go build flags forwarded after "--".
-pack-release:
-    @echo "Packing example DAG bundle (release flags)..."
-    go tool airflow-go-pack --output ../../bin/example_dags -- -trimpath -ldflags="-s -w"
-
-# Inspect a packed bundle's embedded manifest.
-inspect bundle="../../bin/example_dags":
-    go tool airflow-go-pack inspect {{bundle}}
+# Build with specific name and version
+build-with name="data_processing_example" version="1.0.0":
+    @echo "Building example DAG bundle with name={{name}} version={{version}}..."
+    go build -ldflags="-X 'main.bundleName={{name}}' -X 'main.bundleVersion={{version}}'" -o ../../bin/{{name}}-{{version}} .

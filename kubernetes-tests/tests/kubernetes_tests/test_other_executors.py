@@ -54,18 +54,6 @@ class TestCeleryAndLocalExecutor(BaseK8STest):
 
         dag_run_id, logical_date = self.start_job_in_kubernetes(dag_id, self.host)
 
-        # Make sure the first task has already been handed to the executor before
-        # we kill the scheduler. Otherwise the scheduler-kill races with the very
-        # first scheduling step, and the post-restart scheduler has to re-pick the
-        # task itself — making the post-restart monitor timeouts unreliable.
-        self.wait_until_task_in_executor(
-            host=self.host,
-            dag_run_id=dag_run_id,
-            dag_id=dag_id,
-            task_id="push",
-            timeout=60,
-        )
-
         self._delete_airflow_pod("scheduler")
 
         # Wait for the scheduler to be recreated
@@ -77,19 +65,14 @@ class TestCeleryAndLocalExecutor(BaseK8STest):
             raise ValueError(f"Unknown executor {EXECUTOR}")
         self.ensure_resource_health("airflow-scheduler", resource_type=scheduler_resource_type)
 
-        # `push` is already in the executor at this point, but `kubectl rollout
-        # status` returns when the new scheduler pod is *running*, not when the
-        # scheduler loop has resumed processing. Give the worker / new scheduler
-        # enough headroom to drive push → success and then schedule the
-        # downstream puller. 40s used to be the "fail fast" budget — in
-        # practice that races with scheduler-loop warm-up.
+        # Wait some time for the operator to complete
         self.monitor_task(
             host=self.host,
             dag_run_id=dag_run_id,
             dag_id=dag_id,
             task_id="push",
             expected_final_state="success",
-            timeout=120,
+            timeout=40,  # This should fail fast if failing
         )
 
         self.monitor_task(
@@ -98,7 +81,7 @@ class TestCeleryAndLocalExecutor(BaseK8STest):
             dag_id=dag_id,
             task_id="puller",
             expected_final_state="success",
-            timeout=120,
+            timeout=40,
         )
 
         self.ensure_dag_expected_state(

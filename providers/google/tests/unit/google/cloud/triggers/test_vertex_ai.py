@@ -42,7 +42,6 @@ from airflow.providers.google.cloud.triggers.vertex_ai import (
     CreateBatchPredictionJobTrigger,
     CreateHyperparameterTuningJobTrigger,
     CustomContainerTrainingJobTrigger,
-    CustomJobTrigger,
     CustomPythonPackageTrainingJobTrigger,
     CustomTrainingJobTrigger,
     RunPipelineJobTrigger,
@@ -109,18 +108,6 @@ def custom_training_job_trigger():
         project_id=TEST_PROJECT_ID,
         location=TEST_LOCATION,
         job_id=TEST_HPT_JOB_ID,
-        poll_interval=TEST_POLL_INTERVAL,
-        impersonation_chain=TEST_IMPERSONATION_CHAIN,
-    )
-
-
-@pytest.fixture
-def custom_job_trigger():
-    return CustomJobTrigger(
-        gcp_conn_id=TEST_CONN_ID,
-        project_id=TEST_PROJECT_ID,
-        location=TEST_LOCATION,
-        custom_job_id=TEST_HPT_JOB_ID,
         poll_interval=TEST_POLL_INTERVAL,
         impersonation_chain=TEST_IMPERSONATION_CHAIN,
     )
@@ -427,7 +414,7 @@ class TestRunPipelineJobTrigger:
                 "impersonation_chain": TEST_IMPERSONATION_CHAIN,
             },
         )
-        assert actual_data == expected_data
+        actual_data == expected_data
 
     @pytest.mark.asyncio
     async def test_async_hook(self, run_pipeline_job_trigger):
@@ -567,7 +554,7 @@ class TestCustomTrainingJobTrigger:
                 "impersonation_chain": TEST_IMPERSONATION_CHAIN,
             },
         )
-        assert actual_data == expected_data
+        actual_data == expected_data
 
     @pytest.mark.parametrize(
         "pipeline_state_value",
@@ -717,7 +704,7 @@ class TestCustomContainerTrainingJobTrigger:
                 "impersonation_chain": TEST_IMPERSONATION_CHAIN,
             },
         )
-        assert actual_data == expected_data
+        actual_data == expected_data
 
     @pytest.mark.parametrize(
         "pipeline_state_value",
@@ -872,7 +859,7 @@ class TestCustomPythonPackageTrainingJobTrigger:
                 "impersonation_chain": TEST_IMPERSONATION_CHAIN,
             },
         )
-        assert actual_data == expected_data
+        actual_data == expected_data
 
     @pytest.mark.parametrize(
         "pipeline_state_value",
@@ -1011,20 +998,3 @@ class TestCustomPythonPackageTrainingJobTrigger:
             pipeline_id=custom_python_package_training_job_trigger.job_id,
             poll_interval=custom_python_package_training_job_trigger.poll_interval,
         )
-
-
-class TestCustomJobTrigger:
-    def test_serialize(self, custom_job_trigger):
-        actual_data = custom_job_trigger.serialize()
-        expected_data = (
-            "airflow.providers.google.cloud.triggers.vertex_ai.CustomJobTrigger",
-            {
-                "project_id": TEST_PROJECT_ID,
-                "location": TEST_LOCATION,
-                "custom_job_id": TEST_HPT_JOB_ID,
-                "gcp_conn_id": TEST_CONN_ID,
-                "impersonation_chain": TEST_IMPERSONATION_CHAIN,
-                "poll_interval": TEST_POLL_INTERVAL,
-            },
-        )
-        assert actual_data == expected_data

@@ -38,12 +38,9 @@ from typing import TYPE_CHECKING, Any
 
 from celery import Celery, states as celery_states
 from celery.backends.base import BaseKeyValueStoreBackend
-from celery.backends.database import DatabaseBackend, Task as TaskDb, session_cleanup
+from celery.backends.database import DatabaseBackend, Task as TaskDb, retry, session_cleanup
 from celery.signals import import_modules as celery_import_modules, worker_ready
 from sqlalchemy import select
-from sqlalchemy.exc import DatabaseError, InterfaceError, InvalidRequestError
-from sqlalchemy.orm.exc import StaleDataError
-from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt
 
 from airflow.executors.base_executor import BaseExecutor
 from airflow.providers.celery.version_compat import (
@@ -99,20 +96,6 @@ OPERATION_TIMEOUT = conf.getfloat("celery", "operation_timeout")
 
 # Make it constant for unit test.
 CELERY_FETCH_ERR_MSG_HEADER = "Error fetching Celery task state"
-
-
-def _celery_task_logs_to_stdout_override() -> bool | None:
-    """
-    Resolve the ``[celery] task_logs_to_stdout`` worker-level override.
-
-    Returns ``None`` when unset so callers can fall back to the core
-    ``[logging] task_logs_to_stdout`` default, mirroring the ``[celery] json_logs`` /
-    ``[logging] json_logs`` two-level lookup.
-    """
-    value = conf.get("celery", "task_logs_to_stdout", fallback="")
-    if value and value.lower() != "none":
-        return conf.getboolean("celery", "task_logs_to_stdout")
-    return None
 
 
 @cache
@@ -177,25 +160,6 @@ def create_celery_app(team_conf: ExecutorConf | AirflowConfigParser) -> Celery:
     return celery_app
 
 
-@cache
-def _get_celery_app_for_workload(team_name: str | None) -> Celery:
-    """
-    Return a Celery app cached by team name for task publishing.
-
-    Publishing workloads may run either inline in the scheduler process or in a publisher
-    subprocess. Cache the app in whichever process executes the publish path so result
-    backend resolution is amortized while retaining per-team broker isolation.
-    """
-    if AIRFLOW_V_3_2_PLUS:
-        from airflow.executors.base_executor import ExecutorConf
-
-        _conf = ExecutorConf(team_name)
-    else:
-        # Airflow <3.2 ExecutorConf doesn't exist (at least not with the required attributes), fall back to global conf.
-        _conf = conf
-    return create_celery_app(_conf)
-
-
 # Keep module-level app for backward compatibility.
 app = _get_celery_app()
 
@@ -257,13 +221,7 @@ def execute_workload(input: str) -> None:
     log.info("[%s] Executing workload in Celery: %s", celery_task_id, workload)
 
     try:
-        subprocess_logs_to_stdout = _celery_task_logs_to_stdout_override()
-        if subprocess_logs_to_stdout is None:
-            subprocess_logs_to_stdout = conf.getboolean("logging", "task_logs_to_stdout", fallback=False)
-        BaseExecutor.run_workload(
-            workload,
-            subprocess_logs_to_stdout=subprocess_logs_to_stdout,
-        )
+        BaseExecutor.run_workload(workload)
     except Exception as e:
         from airflow.sdk.exceptions import TaskAlreadyRunningError
 
@@ -300,10 +258,6 @@ def _execute_workload_pre_3_3(input: str) -> None:
 
     try:
         if isinstance(workload, workloads.ExecuteTask):
-            subprocess_logs_to_stdout = _celery_task_logs_to_stdout_override()
-            if subprocess_logs_to_stdout is None:
-                # No run_workload() to apply the core default on this pre-3.3 path, so resolve it here.
-                subprocess_logs_to_stdout = conf.getboolean("logging", "task_logs_to_stdout", fallback=False)
             supervise(
                 # This is the "wrong" ti type, but it duck types the same. TODO: Create a protocol for this.
                 ti=workload.ti,  # type: ignore[arg-type]
@@ -312,18 +266,7 @@ def _execute_workload_pre_3_3(input: str) -> None:
                 token=workload.token,
                 server=conf.get("core", "execution_api_server_url", fallback=default_execution_api_server),
                 log_path=workload.log_path,
-                subprocess_logs_to_stdout=subprocess_logs_to_stdout,
             )
-        elif AIRFLOW_V_3_2_PLUS and isinstance(workload, workloads.ExecuteCallback):
-            # Airflow 3.3 runs callbacks in BaseExecutor.run_workload(). Airflow 3.2 still
-            # queues deadline alerts as ExecuteCallback and provides execute_callback_workload.
-            execute_callback_workload = getattr(
-                import_module("airflow.executors.workloads.callback"),
-                "execute_callback_workload",
-            )
-            success, error_msg = execute_callback_workload(workload.callback, log)
-            if not success:
-                raise RuntimeError(error_msg or "Callback execution failed")
         else:
             raise ValueError(f"CeleryExecutor does not know how to handle {type(workload)}")
     except Exception as e:
@@ -445,17 +388,25 @@ def send_workload_to_executor(
     """
     Send workload to executor (serialized and executed as a Celery task).
 
-    This function runs either inline in the long-lived scheduler process (single-workload or
-    sync_parallelism=1 path) or in short-lived ProcessPoolExecutor subprocesses (multi-workload
-    path). To avoid pickling issues with team-specific Celery apps, we pass the team_name and
-    create the app at call time. The cached app lives for the duration of the caller process, so
-    the main benefit is the scheduler-inline path where the cache persists across publish cycles.
-    In the ProcessPoolExecutor path, each subprocess is recreated per publish batch and the cache
-    only lasts for that single batch.
+    This function is called in ProcessPoolExecutor subprocesses. To avoid pickling issues with
+    team-specific Celery apps, we pass the team_name and reconstruct the Celery app here.
     """
     key, args, queue, team_name = workload_tuple
 
-    celery_app = _get_celery_app_for_workload(team_name)
+    # Reconstruct the Celery app from configuration, which may or may not be team-specific.
+    # ExecutorConf wraps config access to automatically use team-specific config where present.
+    if TYPE_CHECKING:
+        _conf: ExecutorConf | AirflowConfigParser
+    # Check if Airflow version is greater than or equal to 3.2 to import ExecutorConf.
+    if AIRFLOW_V_3_2_PLUS:
+        from airflow.executors.base_executor import ExecutorConf
+
+        _conf = ExecutorConf(team_name)
+    else:
+        # Airflow <3.2 ExecutorConf doesn't exist (at least not with the required attributes), fall back to global conf.
+        _conf = conf
+    # Create the Celery app with the correct configuration.
+    celery_app = create_celery_app(_conf)
 
     celery_task_id = None
     if AIRFLOW_V_3_0_PLUS:
@@ -564,12 +515,7 @@ class BulkStateFetcher(LoggingMixin):
 
         return self._prepare_state_and_info_by_task_dict(task_ids, task_results_by_task_id)
 
-    @retry(
-        retry=retry_if_exception_type((DatabaseError, InterfaceError, InvalidRequestError, StaleDataError)),
-        stop=stop_after_attempt(3),
-        before_sleep=before_sleep_log(log, logging.WARNING),
-        reraise=True,
-    )
+    @retry
     def _query_task_cls_from_db_backend(self, task_ids: set[str], **kwargs):
         session = self.celery_app.backend.ResultSession()
         task_cls = getattr(self.celery_app.backend, "task_cls", TaskDb)

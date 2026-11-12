@@ -40,37 +40,9 @@
     "parseDuration": "Ayrıştırılma süresi:",
     "parsedAt": "Ayrıştırıldı:"
   },
-  "deadlineAlerts": {
-    "completionRule": "{{reference}} tarihinden itibaren {{interval}} içinde tamamlanmalıdır",
-    "count_one": "{{count, number}} son tarih",
-    "count_other": "{{count, number}} son tarih",
-    "referenceType": {
-      "AverageRuntimeDeadline": "ortalama çalışma süresi",
-      "DagRunLogicalDateDeadline": "mantıksal tarih",
-      "DagRunQueuedAtDeadline": "kuyruğa alınma zamanı"
-    }
-  },
-  "deadlineStatus": {
-    "actual": "Gerçekleşen",
-    "expected": "Beklenen",
-    "finishedEarly": "Son tarihten {{duration}} önce tamamlandı",
-    "finishedLate": "Son tarihten {{duration}} sonra tamamlandı",
-    "label": "Son Tarih",
-    "met": "Karşılandı",
-    "missed": "Kaçırıldı",
-    "missedCount_one": "{{count, number}} Kaçırılan Son Tarih",
-    "missedCount_other": "{{count, number}} Kaçırılan Son Tarih",
-    "mixedCount": "{{missedCount, number}} Kaçırılan, {{upcomingCount, number}} Yaklaşan",
-    "stillRunning": "Hâlâ çalışıyor",
-    "upcoming": "Yaklaşan",
-    "upcomingCount_one": "{{count, number}} Yaklaşan Son Tarih",
-    "upcomingCount_other": "{{count, number}} Yaklaşan Son Tarih"
-  },
   "extraLinks": "Ek Bağlantılar",
   "grid": {
     "buttons": {
-      "newerRuns": "Daha yeni çalıştırmalar",
-      "olderRuns": "Daha eski çalıştırmalar",
       "resetToLatest": "En son haline sıfırla",
       "toggleGroup": "Grubu aç/kapat"
     },
@@ -80,9 +52,6 @@
     "buttons": {
       "advanced": "Gelişmiş",
       "dagDocs": "Dag Belgeleri"
-    },
-    "status": {
-      "deactivated": "Devre Dışı Bırakıldı"
     }
   },
   "logs": {
@@ -97,14 +66,13 @@
     },
     "info": "BİLGİ",
     "noTryNumber": "Tekrar Deneme numarası yok",
-    "search": {
-      "matchCount": "{{total, number}} içinden {{current, number}}",
-      "noMatches": "Eşleşme yok",
-      "placeholder": "Günlüklerde ara..."
-    },
     "settings": "Günlük Ayarları",
     "viewInExternal": "Günlükleri {{name}} içinde görüntüle (deneme {{attempt}})",
     "warning": "UYARI"
+  },
+  "navigation": {
+    "navigation": "Gezin: {{arrow}}",
+    "toggleGroup": "Grubu aç/kapat: Space"
   },
   "notFound": {
     "back": "Geri Dön",
@@ -124,10 +92,6 @@
     "charts": {
       "assetEvent_one": "Oluşturulan Varlık Etkinliği",
       "assetEvent_other": "Oluşturulan Varlık Etkinlikleri"
-    },
-    "deadlines": {
-      "showAll": "Tümünü Göster",
-      "title": "Son Tarihler"
     },
     "failedLogs": {
       "hideLogs": "Günlükleri Gizle",
@@ -157,16 +121,6 @@
     },
     "graphDirection": {
       "label": "Grafik Yönü"
-    },
-    "graphFilters": {
-      "clearFilters": "Filtreleri Temizle",
-      "durationGte": "Min. süre (sn)",
-      "durationGteHint": "Haritalanmış görevler için tüm örnekler boyunca toplam süreyi ölçer",
-      "mapIndex": "Min. harita indeksi",
-      "mapIndexHint": "Haritalanmış görevleri en az bu indekse kadar genişletilmiş gösterir",
-      "selectStatus": "Durum seçin",
-      "selectTaskGroup": "Görev grubu seçin",
-      "title": "Görev Filtreleri"
     },
     "showVersionIndicator": {
       "label": "Versiyon Göstergesini Göster",
@@ -219,8 +173,8 @@
     "code": "Kod",
     "details": "Detaylar",
     "logs": "Günlükler",
-    "mappedTaskInstances_one": "Haritalanmış Görev Örneği [{{count, number}}]",
-    "mappedTaskInstances_other": "Haritalanmış Görev Örnekleri [{{count, number}}]",
+    "mappedTaskInstances_one": "Haritalanmış Görev Örneği [{{count}}]",
+    "mappedTaskInstances_other": "Haritalanmış Görev Örnekleri [{{count}}]",
     "overview": "Genel Bakış",
     "renderedTemplates": "İşlenmiş Şablonlar",
     "requiredActions": "Gerekli Eylemler",

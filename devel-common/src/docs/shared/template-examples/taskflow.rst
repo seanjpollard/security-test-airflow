@@ -17,12 +17,12 @@
 
  .. code-block:: python
 
-    from airflow.sdk import TaskInstance
-    from airflow.sdk.types import DagRunProtocol
+    from airflow.models.taskinstance import TaskInstance
+    from airflow.models.dagrun import DagRun
 
 
     @task
-    def print_ti_info(task_instance: TaskInstance, dag_run: DagRunProtocol):
+    def print_ti_info(task_instance: TaskInstance, dag_run: DagRun):
         print(f"Run ID: {task_instance.run_id}")  # Run ID: scheduled__2023-08-09T00:00:00+00:00
-        print(f"Task start date: {task_instance.start_date}")  # 2023-08-10 00:00:01+00:00
-        print(f"Dag Run logical date: {dag_run.logical_date}")  # 2023-08-09 00:00:00+00:00
+        print(f"Duration: {task_instance.duration}")  # Duration: 0.972019
+        print(f"Dag Run queued at: {dag_run.queued_at}")  # 2023-08-10 00:00:01+02:20

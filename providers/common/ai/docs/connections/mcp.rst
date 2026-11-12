@@ -17,7 +17,7 @@
 
 .. _howto/connection:mcp:
 
-MCP server connection
+MCP Server Connection
 =====================
 
 The MCP connection type configures access to
@@ -35,8 +35,8 @@ Configuring the Connection
 Transport (Extra field)
     The transport type: ``http`` (default), ``sse``, or ``stdio``.
 
-    - ``http``: Streamable HTTP, the recommended transport for remote servers.
-    - ``sse``: Server-Sent Events, deprecated in favor of Streamable HTTP.
+    - ``http``: Streamable HTTP — the recommended transport for remote servers.
+    - ``sse``: Server-Sent Events — deprecated in favor of Streamable HTTP.
     - ``stdio``: Run the MCP server as a subprocess communicating over stdin/stdout.
 
 Host
@@ -45,10 +45,7 @@ Host
     Examples: ``http://localhost:3001/mcp``, ``https://mcp.example.com/v1``
 
 Auth Token (Password field)
-    Optional authentication token for the MCP server. Sent as a static
-    ``Authorization: Bearer <token>`` header on HTTP/SSE transports. For
-    short-lived or minted tokens, pass a ``token_provider`` to ``MCPToolset``
-    instead (see :doc:`../toolsets/mcp`).
+    Optional authentication token for the MCP server.
 
 Command (Extra field)
     The command to run for ``stdio`` transport. Required when transport is ``stdio``.
@@ -59,21 +56,6 @@ Arguments (Extra field)
     JSON array of arguments for the stdio command.
 
     Examples: ``["mcp-run-python"]``, ``["-m", "my_mcp_server"]``
-
-Environment (Extra field)
-    JSON object of environment variables for the ``stdio`` subprocess. Ignored
-    for ``http``/``sse``. For a secret that lives in a different connection or is
-    minted fresh per call, pass an ``env_provider`` to ``MCPToolset`` instead of
-    storing it here (see :doc:`../toolsets/mcp`).
-
-    Examples: ``{"MY_SERVER_MODE": "readonly"}``
-
-Timeout (Extra field)
-    Connection init timeout in seconds for the ``stdio`` transport. Ignored
-    for ``http``/``sse``. Must be a non-negative finite number; ``0`` or ``null``
-    disables the timeout. Default: ``10``.
-
-    Examples: ``30``
 
 Examples
 --------
@@ -113,13 +95,4 @@ Examples
     {
         "conn_type": "mcp",
         "extra": "{\"transport\": \"stdio\", \"command\": \"python\", \"args\": [\"-m\", \"my_server\"], \"timeout\": 30}"
-    }
-
-**Stdio with subprocess environment variables**
-
-.. code-block:: json
-
-    {
-        "conn_type": "mcp",
-        "extra": "{\"transport\": \"stdio\", \"command\": \"my-mcp-server\", \"args\": [], \"env\": {\"SERVER_MODE\": \"readonly\"}}"
     }

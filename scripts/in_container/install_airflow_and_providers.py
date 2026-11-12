@@ -237,7 +237,7 @@ def get_providers_constraints_location(
 @cache
 def get_airflow_installation_path() -> Path:
     """Get the installation path of Airflow in the container.
-    Will return somehow like `/usr/python/lib/python3.11/site-packages/airflow`.
+    Will return somehow like `/usr/python/lib/python3.10/site-packages/airflow`.
     """
     import importlib.util
 
@@ -905,7 +905,7 @@ FUTURE_CONTENT = "from __future__ import annotations"
     type=click.Choice(ALLOWED_CONSTRAINTS_MODE),
     default=ALLOWED_CONSTRAINTS_MODE[0],
     show_envvar=True,
-    envvar="PROVIDERS_CONSTRAINTS_MODE",
+    envvar="AIRFLOW_CONSTRAINTS_MODE",
     help="Providers constraints mode.",
 )
 @click.option(
@@ -923,7 +923,7 @@ FUTURE_CONTENT = "from __future__ import annotations"
 )
 @click.option(
     "--python-version",
-    default="3.11",
+    default="3.10",
     envvar="PYTHON_MAJOR_MINOR_VERSION",
     show_default=True,
     help="Python version to use",
@@ -1183,11 +1183,9 @@ def _install_airflow_ctl_with_constraints(installation_spec: InstallationSpec, g
         "pip",
         "install",
     ]
-    # Install the ctl distribution itself, plus pin airflow alongside (if it's being
-    # installed) so the resolver does not accidentally upgrade airflow to a version
-    # different from the one installed in the previous step.
-    if installation_spec.airflow_ctl_distribution:
-        base_install_airflow_ctl_cmd.append(installation_spec.airflow_ctl_distribution)
+    # if airflow is also being installed we should add airflow to the base_install_providers_cmd
+    # to avoid accidentally upgrading airflow to a version that is different from installed in the
+    # previous step
     if installation_spec.airflow_distribution:
         base_install_airflow_ctl_cmd.append(installation_spec.airflow_distribution)
     install_airflow_ctl_cmd = base_install_airflow_ctl_cmd.copy()
@@ -1246,13 +1244,6 @@ def _install_only_airflow_airflow_core_task_sdk_with_constraints(
         console.print(
             f"\n[bright_blue]Installing airflow task-sdk distribution: "
             f"{installation_spec.airflow_task_sdk_distribution} with constraints"
-        )
-        console.print()
-    if installation_spec.airflow_ctl_distribution:
-        base_install_airflow_cmd.append(installation_spec.airflow_ctl_distribution)
-        console.print(
-            f"\n[bright_blue]Installing airflow ctl distribution alongside core: "
-            f"{installation_spec.airflow_ctl_distribution}"
         )
         console.print()
     install_airflow_cmd = base_install_airflow_cmd.copy()

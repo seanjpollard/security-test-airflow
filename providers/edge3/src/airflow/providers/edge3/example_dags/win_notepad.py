@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 class NotepadOperator(BaseOperator):
     """Example Operator Implementation which starts a ``Notepad.exe`` on Windows."""
 
-    template_fields: Sequence[str] = ("text",)
+    template_fields: Sequence[str] = "text"
 
     def __init__(self, text: str, **kwargs):
         self.text = text
@@ -65,7 +65,7 @@ with DAG(
     doc_md=__doc__,
     schedule=None,
     start_date=datetime(2024, 7, 1),
-    tags=["example", "edge", "Windows"],
+    tags=["edge", "Windows"],
     default_args={"queue": "windows"},
     params={
         "notepad_text": Param(

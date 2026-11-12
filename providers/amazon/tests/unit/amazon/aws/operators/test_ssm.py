@@ -25,7 +25,6 @@ from botocore.exceptions import WaiterError
 from airflow.providers.amazon.aws.hooks.ssm import SsmHook
 from airflow.providers.amazon.aws.operators.ssm import SsmGetCommandInvocationOperator, SsmRunCommandOperator
 
-from unit.amazon.aws.utils.test_deferral import expect_deferral_warning
 from unit.amazon.aws.utils.test_template_fields import validate_template_fields
 
 COMMAND_ID = "test_command_id"
@@ -58,7 +57,7 @@ class TestSsmRunCommandOperator:
         [
             pytest.param(False, False, id="no_wait"),
             pytest.param(True, False, id="wait"),
-            pytest.param(False, True, id="defer_overrides_no_wait"),
+            pytest.param(False, True, id="defer"),
         ],
     )
     @mock.patch.object(SsmHook, "get_waiter")
@@ -66,8 +65,7 @@ class TestSsmRunCommandOperator:
         self.operator.wait_for_completion = wait_for_completion
         self.operator.deferrable = deferrable
 
-        with expect_deferral_warning(deferrable=deferrable, wait_for_completion=wait_for_completion):
-            command_id = self.operator.execute({})
+        command_id = self.operator.execute({})
 
         assert command_id == COMMAND_ID
         mock_conn.send_command.assert_called_once_with(DocumentName=DOCUMENT_NAME, InstanceIds=INSTANCE_IDS)

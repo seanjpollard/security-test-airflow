@@ -18,26 +18,19 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack
 from typing import TYPE_CHECKING
 from unittest import mock
 
-import pendulum
 import pytest
 
 from airflow._shared.module_loading import qualname
-from airflow.exceptions import AirflowTimetableInvalid, InvalidPartitionKeyError
-from airflow.partition_mappers.base import RollupMapper
 from airflow.partition_mappers.identity import IdentityMapper as IdentityMapper
-from airflow.partition_mappers.temporal import StartOfDayMapper
-from airflow.partition_mappers.window import DayWindow
-from airflow.sdk import Asset, AssetAlias
+from airflow.sdk import Asset
 from airflow.serialization.definitions.assets import SerializedAsset
 from airflow.serialization.encoders import ensure_serialized_asset
 from airflow.serialization.enums import DagAttributeTypes
 from airflow.timetables.simple import PartitionedAssetTimetable
-
-from tests_common.test_utils.config import conf_vars
 
 if TYPE_CHECKING:
     from airflow.partition_mappers.base import PartitionMapper
@@ -117,86 +110,12 @@ class TestPartitionedAssetTimetable:
         assert isinstance(timetable.get_partition_mapper(name="test_1"), Key1Mapper)
         assert isinstance(timetable.get_partition_mapper(uri="test_1"), Key1Mapper)
 
-    def test_partition_mapper_info_default_identity_mapper(self):
-        timetable = PartitionedAssetTimetable(assets=Asset("a"))
-        assert timetable.partition_mapper_info == [{"name": "a", "uri": "a", "is_rollup": False}]
-
-    def test_partition_mapper_info_default_rollup_mapper(self):
-        """
-        ``default_partition_mapper=RollupMapper(...)`` is the primary documented
-        rollup usage pattern (see ``example_asset_partition.py``). Every asset
-        reachable from ``asset_condition`` should be reported as rollup even
-        when ``partition_mapper_config`` is empty.
-        """
-        asset = Asset(name="daily", uri="s3://bucket/daily")
-        timetable = PartitionedAssetTimetable(
-            assets=asset,
-            default_partition_mapper=RollupMapper(upstream_mapper=StartOfDayMapper(), window=DayWindow()),
-        )
-
-        assert timetable.partition_mapper_info == [
-            {"name": "daily", "uri": "s3://bucket/daily", "is_rollup": True},
-        ]
-
-    def test_partition_mapper_info_mixes_rollup_and_non_rollup(self):
-        non_rollup = ensure_serialized_asset(Asset(name="non_rollup_name", uri="s3://bucket/non_rollup"))
-        rollup = ensure_serialized_asset(Asset(name="rollup_name", uri="s3://bucket/rollup"))
-        timetable = PartitionedAssetTimetable(
-            assets=[non_rollup, rollup],
-            partition_mapper_config={
-                non_rollup: IdentityMapper(),
-                rollup: RollupMapper(upstream_mapper=StartOfDayMapper(), window=DayWindow()),
-            },
-        )
-
-        info = timetable.partition_mapper_info
-        assert info == [
-            {"name": "non_rollup_name", "uri": "s3://bucket/non_rollup", "is_rollup": False},
-            {"name": "rollup_name", "uri": "s3://bucket/rollup", "is_rollup": True},
-        ]
-
-    def test_partition_mapper_info_skips_asset_aliases(self):
-        """
-        ``SerializedAssetAlias.iter_assets`` yields nothing (aliases are resolved
-        at event time, not at parse time), and ``_build_name_uri_mapping``
-        warns that aliases are unsupported as ``partition_mapper_config`` keys.
-        ``partition_mapper_info`` therefore omits any alias entries — including
-        when an alias is combined with a regular asset under an ``Or`` condition —
-        matching the alias-unsupported policy enforced elsewhere in this class.
-        """
-        asset = Asset(name="real_asset", uri="s3://bucket/real_asset")
-        alias = AssetAlias(name="alias_only")
-        timetable = PartitionedAssetTimetable(assets=asset | alias)
-
-        info = timetable.partition_mapper_info
-        assert info == [
-            {"name": "real_asset", "uri": "s3://bucket/real_asset", "is_rollup": False},
-        ]
-
-    def test_partition_mapper_info_handles_asset_refs(self):
-        ref_by_name = ensure_serialized_asset(Asset.ref(name="ref_by_name"))
-        ref_by_uri = ensure_serialized_asset(Asset.ref(uri="s3://ref"))
-        timetable = PartitionedAssetTimetable(
-            assets=[ref_by_name, ref_by_uri],
-            partition_mapper_config={
-                ref_by_name: RollupMapper(upstream_mapper=StartOfDayMapper(), window=DayWindow()),
-                ref_by_uri: IdentityMapper(),
-            },
-        )
-
-        info = timetable.partition_mapper_info
-        assert info == [
-            {"name": "ref_by_name", "is_rollup": True},
-            {"uri": "s3://ref", "is_rollup": False},
-        ]
-
     def test_serialize(self):
         ser_asset = ensure_serialized_asset(Asset("test"))
         timetable = PartitionedAssetTimetable(
             assets=ser_asset, partition_mapper_config={ser_asset: IdentityMapper()}
         )
         assert timetable.serialize() == {
-            "batch_asset_events": False,
             "asset_condition": {
                 "__type": DagAttributeTypes.ASSET,
                 "name": "test",
@@ -228,7 +147,6 @@ class TestPartitionedAssetTimetable:
     def test_deserialize(self):
         timetable = PartitionedAssetTimetable.deserialize(
             {
-                "batch_asset_events": True,
                 "asset_condition": {
                     "__type": DagAttributeTypes.ASSET,
                     "name": "test",
@@ -261,71 +179,3 @@ class TestPartitionedAssetTimetable:
         assert timetable.asset_condition == ser_asset
         assert isinstance(timetable.default_partition_mapper, IdentityMapper)
         assert isinstance(timetable.partition_mapper_config[ser_asset], IdentityMapper)
-        assert timetable.batch_asset_events is True
-
-    def test_serialize_deserialize_batch_asset_events_false(self):
-        """Serialize/deserialize round-trip preserves batch_asset_events=False."""
-        ser_asset = ensure_serialized_asset(Asset("test"))
-        timetable = PartitionedAssetTimetable(
-            assets=ser_asset,
-            partition_mapper_config={ser_asset: IdentityMapper()},
-            batch_asset_events=False,
-        )
-        serialized = timetable.serialize()
-        assert serialized["batch_asset_events"] is False
-
-        deserialized = PartitionedAssetTimetable.deserialize(serialized)
-        assert deserialized.batch_asset_events is False
-
-    @pytest.mark.parametrize("batch_asset_events", [False, True])
-    @pytest.mark.parametrize("use_default_mapper", [False, True])
-    def test_rollup_requires_batching(self, batch_asset_events, use_default_mapper):
-        asset = ensure_serialized_asset(Asset("test"))
-        mapper = RollupMapper(upstream_mapper=StartOfDayMapper(), window=DayWindow())
-        kwargs = (
-            {"default_partition_mapper": mapper}
-            if use_default_mapper
-            else {"partition_mapper_config": {asset: mapper}}
-        )
-        timetable = PartitionedAssetTimetable(assets=asset, batch_asset_events=batch_asset_events, **kwargs)
-        expected = (
-            nullcontext() if batch_asset_events else pytest.raises(AirflowTimetableInvalid, match="rollups")
-        )
-        with expected:
-            timetable.validate()
-
-    @pytest.mark.parametrize("use_default_mapper", [False, True])
-    def test_rollup_defaults_to_batching(self, use_default_mapper):
-        asset = ensure_serialized_asset(Asset("test"))
-        mapper = RollupMapper(upstream_mapper=StartOfDayMapper(), window=DayWindow())
-        kwargs = (
-            {"default_partition_mapper": mapper}
-            if use_default_mapper
-            else {"partition_mapper_config": {asset: mapper}}
-        )
-        with conf_vars({("scheduler", "batch_asset_events"): "False"}):
-            timetable = PartitionedAssetTimetable(assets=asset, **kwargs)
-        assert timetable.batch_asset_events is True
-        timetable.validate()
-
-    @pytest.mark.parametrize(
-        "asset_like",
-        [
-            Asset(name="daily", uri="s3://bucket/daily"),
-            Asset.ref(name="daily"),
-        ],
-    )
-    def test_decode_partition_date_raises_on_invalid_key(self, asset_like):
-        timetable = PartitionedAssetTimetable(
-            assets=asset_like,
-            default_partition_mapper=StartOfDayMapper(),
-        )
-        with pytest.raises(InvalidPartitionKeyError, match="is invalid for this timetable's mappers"):
-            timetable._decode_partition_date("not-a-date")
-
-    def test_decode_partition_date_returns_period_start_for_valid_key(self):
-        timetable = PartitionedAssetTimetable(
-            assets=Asset(name="daily", uri="s3://bucket/daily"),
-            default_partition_mapper=StartOfDayMapper(),
-        )
-        assert timetable._decode_partition_date("2025-01-01") == pendulum.datetime(2025, 1, 1, tz="UTC")

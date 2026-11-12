@@ -25,6 +25,8 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta
 
+from google.cloud.aiplatform_v1beta1 import FeatureOnlineStore, FeatureView, FeatureViewDataKey
+
 from airflow import DAG
 from airflow.providers.google.cloud.operators.bigquery import (
     BigQueryCreateEmptyDatasetOperator,
@@ -125,15 +127,7 @@ with DAG(
         project_id=PROJECT_ID,
         location=REGION,
         feature_online_store_id=FEATURE_ONLINE_STORE_ID,
-        feature_online_store={
-            "bigtable": {
-                "auto_scaling": {
-                    "min_node_count": 1,
-                    "max_node_count": 3,
-                    "cpu_utilization_target": 50,
-                }
-            }
-        },
+        feature_online_store=FeatureOnlineStore(optimized=FeatureOnlineStore.Optimized()),
     )
     # [END how_to_cloud_vertex_ai_create_feature_online_store_operator]
 
@@ -144,13 +138,13 @@ with DAG(
         location=REGION,
         feature_online_store_id=FEATURE_ONLINE_STORE_ID,
         feature_view_id=FEATURE_VIEW_ID,
-        feature_view={
-            "big_query_source": {
-                "uri": f"bq://{BQ_VIEW_FQN}",
-                "entity_id_columns": ["entity_id"],
-            },
-            "sync_config": {"cron": "TZ=America/Los_Angeles 56 * * * *"},
-        },
+        feature_view=FeatureView(
+            big_query_source=FeatureView.BigQuerySource(
+                uri=f"bq://{BQ_VIEW_FQN}",
+                entity_id_columns=["entity_id"],
+            ),
+            sync_config=FeatureView.SyncConfig(cron="TZ=America/Los_Angeles 56 * * * *"),
+        ),
     )
     # [END how_to_cloud_vertex_ai_create_feature_view_store_operator]
 
@@ -177,7 +171,8 @@ with DAG(
     wait_for_sync = FeatureViewSyncSensor(
         task_id="wait_for_sync",
         location=REGION,
-        feature_view_sync_name="{{ task_instance.xcom_pull(task_ids='sync_task', key='return_value')}}",
+        # verbose form: "{{ task_instance.xcom_pull(task_ids='sync_task', key='return_value') }}"
+        feature_view_sync_name=sync_task.output,
         poke_interval=60,  # Check every minute
         timeout=1200,  # Timeout after 20 minutes
         mode="reschedule",
@@ -188,7 +183,7 @@ with DAG(
     get_task = GetFeatureViewSyncOperator(
         task_id="get_task",
         location=REGION,
-        feature_view_sync_name="{{ task_instance.xcom_pull(task_ids='sync_task', key='return_value')}}",
+        feature_view_sync_name=sync_task.output,
     )
     # [END how_to_cloud_vertex_ai_feature_store_get_feature_view_sync_operator]
 
@@ -199,7 +194,7 @@ with DAG(
         location=REGION,
         feature_online_store_id=FEATURE_ONLINE_STORE_ID,
         feature_view_id=FEATURE_VIEW_ID,
-        data_key=FEATURE_VIEW_DATA_KEY,
+        data_key=FeatureViewDataKey(FEATURE_VIEW_DATA_KEY),
         retries=3,
         retry_delay=timedelta(minutes=3),
     )
@@ -212,7 +207,6 @@ with DAG(
         location=REGION,
         feature_online_store_id=FEATURE_ONLINE_STORE_ID,
         feature_view_id=FEATURE_VIEW_ID,
-        trigger_rule=TriggerRule.ALL_DONE,
     )
     # [END how_to_cloud_vertex_ai_delete_feature_view_operator]
 
@@ -222,7 +216,6 @@ with DAG(
         project_id=PROJECT_ID,
         location=REGION,
         feature_online_store_id=FEATURE_ONLINE_STORE_ID,
-        trigger_rule=TriggerRule.ALL_DONE,
     )
     # [END how_to_cloud_vertex_ai_delete_feature_online_store_operator]
 

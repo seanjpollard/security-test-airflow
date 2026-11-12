@@ -17,8 +17,6 @@
 # under the License.
 from __future__ import annotations
 
-from unittest import mock
-
 import boto3
 import pytest
 from moto import mock_aws
@@ -26,10 +24,9 @@ from moto import mock_aws
 from airflow.models import DAG
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.providers.amazon.aws.transfers.s3_to_sftp import S3ToSFTPOperator
-from airflow.providers.amazon.aws.utils import validate_destination_path
-from airflow.providers.common.compat.sdk import timezone
 from airflow.providers.ssh.hooks.ssh import SSHHook
 from airflow.providers.ssh.operators.ssh import SSHOperator
+from airflow.utils.timezone import datetime
 
 from tests_common.test_utils.config import conf_vars
 
@@ -47,22 +44,10 @@ SFTP_MOCK_FILE = "test_sftp_file.csv"
 S3_MOCK_FILES = "test_1_file.csv"
 
 TEST_DAG_ID = "unit_tests_s3_to_sftp"
-DEFAULT_DATE = timezone.datetime(2018, 1, 1)
+DEFAULT_DATE = datetime(2018, 1, 1)
 
 
 class TestS3ToSFTPOperator:
-    @pytest.fixture(autouse=True)
-    def _ssh_default_allows_unknown_host(self, monkeypatch):
-        """Let the bundled ``ssh_default`` connection reach the test SSH server.
-
-        ``no_host_key_check`` now defaults to false, and ``ssh_default`` is a bare
-        ``ssh://localhost`` with no extras, so the transfer operators -- which build
-        their own ``SFTPHook`` from the conn id and cannot be handed a pre-configured
-        hook -- would be refused by host key verification. Setting the extra here is
-        exactly what a deployment relying on the old default has to do.
-        """
-        monkeypatch.setenv("AIRFLOW_CONN_SSH_DEFAULT", "ssh://localhost/?no_host_key_check=true")
-
     def setup_method(self):
         hook = SSHHook(ssh_conn_id="ssh_default")
         hook.no_host_key_check = True
@@ -328,137 +313,3 @@ class TestS3ToSFTPOperator:
 
     def teardown_method(self):
         self.delete_remote_resource()
-
-
-class TestS3ToSFTPOperatorInit:
-    """Unit tests for S3ToSFTPOperator.__init__ that do not require an SSH server."""
-
-    @pytest.mark.parametrize(
-        ("keys", "expected", "skipped"),
-        [
-            pytest.param(
-                ["source/pre_one.txt", "source/xpre_two.txt", "source/pre_again_pre_.txt"],
-                [
-                    ("source/pre_one.txt", "/destination/new_one.txt"),
-                    ("source/pre_again_pre_.txt", "/destination/new_again_pre_.txt"),
-                ],
-                ["xpre_two.txt"],
-                id="prefix-only-at-start",
-            ),
-            pytest.param(
-                ["source/pre_one.txt", "source/pre_dir/pre_two.txt", "source/pre_dir/other.txt"],
-                [
-                    ("source/pre_one.txt", "/destination/new_one.txt"),
-                    ("source/pre_dir/pre_two.txt", "/destination/pre_dir/new_two.txt"),
-                ],
-                ["pre_dir/other.txt"],
-                id="nested-keys-keep-their-directory",
-            ),
-        ],
-    )
-    @mock.patch.object(S3ToSFTPOperator, "_download_from_s3")
-    @mock.patch("airflow.providers.amazon.aws.transfers.s3_to_sftp.SSHHook")
-    @mock.patch("airflow.providers.amazon.aws.transfers.s3_to_sftp.S3Hook")
-    def test_execute_matches_the_prefix_on_the_file_name(
-        self, mock_s3_hook_class, mock_ssh_hook_class, mock_download_from_s3, keys, expected, skipped
-    ):
-        """The prefix matches only the start of the file name, and only that leading occurrence is
-        renamed. ``list_keys`` recurses, so a nested key is matched on its file name and keeps its
-        directory, while the old substring rule still decides which skipped keys are reported."""
-        mock_s3_hook = mock_s3_hook_class.return_value
-        mock_s3_hook.list_keys.return_value = keys
-        sftp_client = mock_ssh_hook_class.return_value.get_conn.return_value.open_sftp.return_value
-        operator = S3ToSFTPOperator(
-            task_id=TASK_ID,
-            s3_bucket=BUCKET,
-            s3_key="source/",
-            sftp_path="/destination/",
-            sftp_conn_id=SFTP_CONN_ID,
-            s3_filenames="pre_",
-            sftp_filenames="new_",
-        )
-
-        with mock.patch.object(operator.log, "warning") as mock_log_warning:
-            operator.execute(None)
-
-        assert mock_download_from_s3.call_args_list == [
-            mock.call(sftp_client, mock_s3_hook, *call) for call in expected
-        ]
-        mock_log_warning.assert_called_once_with(mock.ANY, len(skipped), "pre_", skipped, "")
-
-    @pytest.mark.parametrize(
-        ("s3_filenames", "sftp_filenames"),
-        [
-            (None, None),
-            ("*", None),
-            ("prefix_", "renamed_"),
-            (["a.csv", "b.csv"], ["x.csv", "y.csv"]),
-        ],
-    )
-    def test_multi_file_params(self, s3_filenames, sftp_filenames):
-        """s3_filenames and sftp_filenames are stored correctly."""
-        op = S3ToSFTPOperator(
-            task_id="test_multi",
-            s3_bucket=BUCKET,
-            s3_key=S3_KEY,
-            sftp_path=SFTP_PATH,
-            sftp_conn_id=SFTP_CONN_ID,
-            s3_filenames=s3_filenames,
-            sftp_filenames=sftp_filenames,
-        )
-        assert op.s3_filenames == s3_filenames
-        assert op.sftp_filenames == sftp_filenames
-
-    def test_fail_on_file_not_exist_default(self):
-        """fail_on_file_not_exist defaults to True."""
-        op = S3ToSFTPOperator(
-            task_id="test_fail_default",
-            s3_bucket=BUCKET,
-            s3_key=S3_KEY,
-            sftp_path=SFTP_PATH,
-            sftp_conn_id=SFTP_CONN_ID,
-        )
-        assert op.fail_on_file_not_exist is True
-
-    @pytest.mark.parametrize("fail_on_file_not_exist", [True, False])
-    def test_fail_on_file_not_exist_skip(self, fail_on_file_not_exist):
-        """When key is missing: raise FileNotFoundError if True, skip if False."""
-        from unittest.mock import MagicMock, patch
-
-        op = S3ToSFTPOperator(
-            task_id="test_skip",
-            s3_bucket=BUCKET,
-            s3_key=S3_KEY,
-            sftp_path=SFTP_PATH,
-            sftp_conn_id=SFTP_CONN_ID,
-            fail_on_file_not_exist=fail_on_file_not_exist,
-        )
-        mock_s3_hook = MagicMock()
-        mock_s3_hook.check_for_key.return_value = False
-
-        if fail_on_file_not_exist:
-            with pytest.raises(FileNotFoundError):
-                op._download_from_s3(MagicMock(), mock_s3_hook, S3_KEY, SFTP_PATH)
-        else:
-            with patch.object(op.log, "info") as mock_log:
-                op._download_from_s3(MagicMock(), mock_s3_hook, S3_KEY, SFTP_PATH)
-            mock_log.assert_called_once()
-
-    @pytest.mark.parametrize(
-        "object_suffix",
-        [
-            pytest.param("../../../../etc/cron.d/evil", id="dotdot-segments"),
-            pytest.param("subdir/../../../escape", id="dotdot-cancels-base"),
-        ],
-    )
-    def test_validate_destination_path_rejects_escape(self, object_suffix):
-        # In multi-file mode the destination is ``sftp_path`` plus a key suffix
-        # returned by ``list_keys``; a crafted object name must not place the
-        # upload outside the configured ``sftp_path`` on the SFTP server.
-        sftp_path = "/srv/sftp/incoming/"
-        with pytest.raises(ValueError, match="escapes configured sftp_path"):
-            validate_destination_path(sftp_path + object_suffix, sftp_path, base_name="sftp_path")
-
-    def test_validate_destination_path_allows_contained(self):
-        sftp_path = "/srv/sftp/incoming/"
-        validate_destination_path(sftp_path + "sub/dir/report.csv", sftp_path, base_name="sftp_path")

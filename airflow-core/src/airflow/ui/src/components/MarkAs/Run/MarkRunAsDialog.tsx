@@ -16,25 +16,21 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useEffect, useState } from "react";
-
-import { Button } from "@chakra-ui/react";
+import { Button, Flex, Heading, VStack } from "@chakra-ui/react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { DagRunMutableStates, DAGRunResponse } from "openapi/requests/types.gen";
-
-import { Modal } from "src/system-components";
-
+import type { DAGRunPatchStates, DAGRunResponse } from "openapi/requests/types.gen";
 import { ActionAccordion } from "src/components/ActionAccordion";
 import { StateBadge } from "src/components/StateBadge";
-
+import { Dialog } from "src/components/ui";
 import { usePatchDagRun } from "src/queries/usePatchDagRun";
 
 type Props = {
   readonly dagRun: DAGRunResponse;
   readonly onClose: () => void;
   readonly open: boolean;
-  readonly state: DagRunMutableStates;
+  readonly state: DAGRunPatchStates;
 };
 
 const MarkRunAsDialog = ({ dagRun, onClose, open, state }: Props) => {
@@ -43,55 +39,46 @@ const MarkRunAsDialog = ({ dagRun, onClose, open, state }: Props) => {
   const { t: translate } = useTranslation();
 
   const [note, setNote] = useState<string | null>(dagRun.note);
-
-  useEffect(() => {
-    if (open) {
-      setNote(dagRun.note);
-    }
-  }, [dagRun.note, open]);
-
-  const handleClose = () => {
-    setNote(dagRun.note);
-    onClose();
-  };
-  const { isPending, mutate } = usePatchDagRun({ dagId, dagRunId, onSuccess: handleClose });
+  const { isPending, mutate } = usePatchDagRun({ dagId, dagRunId, onSuccess: onClose });
 
   return (
-    <Modal
-      footerActions={
-        <Button
-          data-testid="mark-run-as-confirm"
-          loading={isPending}
-          onClick={() => {
-            mutate({
-              dagId,
-              dagRunId,
-              requestBody: { note, state },
-            });
-          }}
-        >
-          {translate("modal.confirm")}
-        </Button>
-      }
-      lazyMount
-      onOpenChange={(details) => {
-        if (!details.open) {
-          handleClose();
-        }
-      }}
-      open={open}
-      title={
-        <>
-          {translate("dags:runAndTaskActions.markAs.title", {
-            state,
-            type: translate("dagRun_one"),
-          })}
-          : {dagRunId} <StateBadge state={state} />
-        </>
-      }
-    >
-      <ActionAccordion note={note} setNote={setNote} />
-    </Modal>
+    <Dialog.Root lazyMount onOpenChange={onClose} open={open} size="xl">
+      <Dialog.Content backdrop>
+        <Dialog.Header>
+          <VStack align="start" gap={4}>
+            <Heading size="xl">
+              {translate("dags:runAndTaskActions.markAs.title", {
+                state,
+                type: translate("dagRun_one"),
+              })}
+              : {dagRunId} <StateBadge state={state} />
+            </Heading>
+          </VStack>
+        </Dialog.Header>
+
+        <Dialog.CloseTrigger />
+
+        <Dialog.Body width="full">
+          <ActionAccordion note={note} setNote={setNote} />
+          <Flex justifyContent="end" mt={3}>
+            <Button
+              colorPalette="brand"
+              data-testid="mark-run-as-confirm"
+              loading={isPending}
+              onClick={() => {
+                mutate({
+                  dagId,
+                  dagRunId,
+                  requestBody: { note, state },
+                });
+              }}
+            >
+              {translate("modal.confirm")}
+            </Button>
+          </Flex>
+        </Dialog.Body>
+      </Dialog.Content>
+    </Dialog.Root>
   );
 };
 

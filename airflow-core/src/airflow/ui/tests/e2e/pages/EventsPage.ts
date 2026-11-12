@@ -18,9 +18,7 @@
  */
 import type { Locator, Page } from "@playwright/test";
 import { expect } from "@playwright/test";
-
 import { BasePage } from "tests/e2e/pages/BasePage";
-import { DATA_ROWS } from "tests/e2e/utils/ui/selectors";
 
 export class EventsPage extends BasePage {
   public readonly eventColumn: Locator;
@@ -34,8 +32,7 @@ export class EventsPage extends BasePage {
 
   public constructor(page: Page) {
     super(page);
-    // DataTable's row count is the page heading, so this reads "950 Events" rather than "Audit Log"
-    this.eventsPageTitle = page.getByRole("heading", { name: /events/i });
+    this.eventsPageTitle = page.getByRole("heading", { level: 2, name: "Audit Log" });
     this.eventsTable = page.getByTestId("table-list");
     this.eventColumn = this.eventsTable.getByRole("columnheader").filter({ hasText: "Event" });
     this.extraColumn = this.eventsTable.getByRole("columnheader").filter({ hasText: "Extra" });
@@ -44,7 +41,7 @@ export class EventsPage extends BasePage {
       .filter({ has: page.getByTestId("add-filter-button") })
       .first();
     this.ownerColumn = this.eventsTable.getByRole("columnheader").filter({ hasText: "User" });
-    this.tableRows = this.eventsTable.locator(DATA_ROWS);
+    this.tableRows = this.eventsTable.locator("tbody").getByRole("row");
     this.whenColumn = this.eventsTable.getByRole("columnheader").filter({ hasText: "When" });
   }
 
@@ -81,7 +78,11 @@ export class EventsPage extends BasePage {
   public async getEventLogRows(): Promise<Array<Locator>> {
     const count = await this.tableRows.count();
 
-    return count === 0 ? [] : this.tableRows.all();
+    if (count === 0) {
+      return [];
+    }
+
+    return this.tableRows.all();
   }
 
   public async getEventTypes(): Promise<Array<string>> {

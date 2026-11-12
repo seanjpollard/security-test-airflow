@@ -18,11 +18,10 @@
 
 from __future__ import annotations
 
-import gc
 from collections.abc import Generator
 from contextlib import contextmanager
 from functools import partial
-from multiprocessing import Process, get_start_method
+from multiprocessing import Process
 
 from airflow.cli.commands.daemon_utils import run_command_with_daemon_option
 from airflow.configuration import conf
@@ -31,7 +30,6 @@ from airflow.jobs.job import Job, run_job
 from airflow.jobs.triggerer_job_runner import TriggererJobRunner
 from airflow.utils import cli as cli_utils
 from airflow.utils.memray_utils import MemrayTraceComponents, enable_memray_trace
-from airflow.utils.process_utils import set_component_mp_start_method
 from airflow.utils.providers_configuration_loader import providers_configuration_loaded
 
 
@@ -44,12 +42,6 @@ def _serve_logs(skip_serve_logs: bool = False) -> Generator[None, None, None]:
     if skip_serve_logs is False:
         port = conf.getint("logging", "trigger_log_server_port", fallback=8794)
         sub_proc = Process(target=partial(serve_logs, port=port))
-        if get_start_method() == "fork":
-            # Freeze and stay frozen: unfreezing would let this process's next full GC split the
-            # pages the forked child shares copy-on-write (a memory jump with no new allocation).
-            # The triggerer forks its children once, like the Dag processor manager. No effect
-            # under forkserver/spawn, where the child re-imports instead of sharing.
-            gc.freeze()
         sub_proc.start()
     try:
         yield
@@ -60,18 +52,11 @@ def _serve_logs(skip_serve_logs: bool = False) -> Generator[None, None, None]:
 
 @enable_memray_trace(component=MemrayTraceComponents.triggerer)
 def triggerer_run(
-    skip_serve_logs: bool,
-    capacity: int,
-    triggerer_heartrate: float,
-    queues: set[str] | None = None,
-    team_name: str | None = None,
+    skip_serve_logs: bool, capacity: int, triggerer_heartrate: float, queues: set[str] | None = None
 ):
-    set_component_mp_start_method("triggerer")
     with _serve_logs(skip_serve_logs):
         triggerer_job_runner = TriggererJobRunner(
-            job=Job(heartrate=triggerer_heartrate, team_names=[team_name] if team_name else []),
-            capacity=capacity,
-            queues=queues,
+            job=Job(heartrate=triggerer_heartrate), capacity=capacity, queues=queues
         )
         run_job(job=triggerer_job_runner.job, execute_callable=triggerer_job_runner._execute)
 
@@ -90,18 +75,6 @@ def triggerer(args):
             "--queues option may only be used when triggerer.queues_enabled is `True`."
         )
 
-    multi_team = conf.getboolean("core", "multi_team")
-    team_name: str | None = getattr(args, "team_name", None)
-
-    if team_name and not multi_team:
-        raise AirflowConfigException("--team-name option may only be used when core.multi_team is enabled.")
-
-    if team_name:
-        from airflow.models.team import Team
-
-        if Team.get_name_if_exists(team_name) is None:
-            raise AirflowConfigException(f"Team {team_name!r} does not exist.")
-
     queues = set(args.queues) if args.queues else None
     triggerer_heartrate = conf.getfloat("triggerer", "JOB_HEARTBEAT_SEC")
 
@@ -109,9 +82,7 @@ def triggerer(args):
         from airflow.cli.hot_reload import run_with_reloader
 
         run_with_reloader(
-            lambda: triggerer_run(
-                args.skip_serve_logs, args.capacity, triggerer_heartrate, queues, team_name
-            ),
+            lambda: triggerer_run(args.skip_serve_logs, args.capacity, triggerer_heartrate, queues),
             process_name="triggerer",
         )
         return
@@ -119,8 +90,6 @@ def triggerer(args):
     run_command_with_daemon_option(
         args=args,
         process_name="triggerer",
-        callback=lambda: triggerer_run(
-            args.skip_serve_logs, args.capacity, triggerer_heartrate, queues, team_name
-        ),
+        callback=lambda: triggerer_run(args.skip_serve_logs, args.capacity, triggerer_heartrate, queues),
         should_setup_logging=True,
     )

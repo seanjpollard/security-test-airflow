@@ -17,11 +17,8 @@
  * under the License.
  */
 import { Box } from "@chakra-ui/react";
-import { FiAlertTriangle, FiClock } from "react-icons/fi";
 
-import { RouterLink, Tooltip } from "src/system-components";
-
-import { RunTypeIcon } from "src/components/RunTypeIcon";
+import { BasicTooltip } from "src/components/BasicTooltip";
 
 import { CalendarTooltip } from "./CalendarTooltip";
 import type { CalendarCellData, CalendarColorMode } from "./types";
@@ -31,11 +28,10 @@ type Props = {
     | Record<string, string>
     | string
     | {
-        primary: string | { _dark: string; _light: string };
-        secondary: string | { _dark: string; _light: string };
+        actual: string | { _dark: string; _light: string };
+        planned: string | { _dark: string; _light: string };
       };
   readonly cellData: CalendarCellData | undefined;
-  readonly dagId: string;
   readonly index?: number;
   readonly marginRight?: string;
   readonly viewMode?: CalendarColorMode;
@@ -44,7 +40,6 @@ type Props = {
 export const CalendarCell = ({
   backgroundColor,
   cellData,
-  dagId,
   index,
   marginRight,
   viewMode = "total",
@@ -55,69 +50,9 @@ export const CalendarCell = ({
     viewMode === "failed" ? (cellData?.counts.failed ?? 0) : (cellData?.counts.total ?? 0);
   const hasData = Boolean(cellData && relevantCount > 0);
   const hasTooltip = Boolean(cellData);
-  const startDate = cellData?.runs[0]?.date;
-  const hasStartDate = Boolean(startDate);
-
-  // States present in this cell, computed with the same view-mode-aware logic the
-  // tooltip uses (see CalendarTooltip). Exposed as a `data-states` attribute so e2e
-  // tests can read run states from the DOM instead of hovering — the tooltip does
-  // not open reliably under synthetic pointer events in headless Firefox.
-  const runStates = cellData
-    ? Object.entries(cellData.counts)
-        .filter(
-          ([key, value]) =>
-            key !== "total" && key !== "backfill" && value > 0 && (viewMode !== "failed" || key === "failed"),
-        )
-        .map(([key]) => key)
-    : [];
 
   const isMixedState =
-    typeof backgroundColor === "object" && "secondary" in backgroundColor && "primary" in backgroundColor;
-
-  const { deadlineCounts } = cellData ?? {};
-  const hasMissedDeadline = (deadlineCounts?.missed ?? 0) > 0;
-  const hasPendingDeadline = (deadlineCounts?.pending ?? 0) > 0;
-  const hasDeadline = hasMissedDeadline || hasPendingDeadline;
-  const DeadlineIcon = hasMissedDeadline ? FiAlertTriangle : FiClock;
-
-  const deadlineIndicator = hasDeadline ? (
-    <Box
-      alignItems="center"
-      data-testid="deadline-indicator"
-      display="flex"
-      fontSize="10px"
-      height="100%"
-      justifyContent="center"
-      left="0"
-      lineHeight={1}
-      position="absolute"
-      top="0"
-      width="100%"
-    >
-      <DeadlineIcon />
-    </Box>
-  ) : undefined;
-
-  const hasBackfill = (cellData?.counts.backfill ?? 0) > 0;
-  const backfillIndicator = hasBackfill ? (
-    <Box
-      alignItems="center"
-      color="white"
-      data-testid="backfill-indicator"
-      display="flex"
-      filter="drop-shadow(0 0 1px rgba(0, 0, 0, 0.7))"
-      fontSize="9px"
-      height="100%"
-      justifyContent="center"
-      left="0"
-      lineHeight={1}
-      position="absolute"
-      top="0"
-      width="100%"
-    >
-      <RunTypeIcon runType="backfill" />
-    </Box>
-  ) : undefined;
+    typeof backgroundColor === "object" && "planned" in backgroundColor && "actual" in backgroundColor;
 
   const cellBox = isMixedState ? (
     <Box
@@ -125,7 +60,6 @@ export const CalendarCell = ({
       borderRadius="2px"
       cursor={hasData ? "pointer" : "default"}
       data-has-data={hasData ? "true" : "false"}
-      data-states={runStates.join(" ")}
       data-testid="calendar-cell"
       data-view-mode={viewMode}
       height="14px"
@@ -135,21 +69,19 @@ export const CalendarCell = ({
       width="14px"
     >
       <Box
-        bg={backgroundColor.secondary}
+        bg={backgroundColor.planned}
         clipPath="polygon(0 100%, 100% 100%, 0 0)"
         height="100%"
         position="absolute"
         width="100%"
       />
       <Box
-        bg={backgroundColor.primary}
+        bg={backgroundColor.actual}
         clipPath="polygon(100% 0, 100% 100%, 0 0)"
         height="100%"
         position="absolute"
         width="100%"
       />
-      {deadlineIndicator}
-      {backfillIndicator}
     </Box>
   ) : (
     <Box
@@ -158,17 +90,12 @@ export const CalendarCell = ({
       borderRadius="2px"
       cursor={hasData ? "pointer" : "default"}
       data-has-data={hasData ? "true" : "false"}
-      data-states={runStates.join(" ")}
       data-testid="calendar-cell"
       data-view-mode={viewMode}
       height="14px"
       marginRight={computedMarginRight}
-      position="relative"
       width="14px"
-    >
-      {deadlineIndicator}
-      {backfillIndicator}
-    </Box>
+    />
   );
 
   if (!hasTooltip) {
@@ -176,33 +103,8 @@ export const CalendarCell = ({
   }
 
   return (
-    <Tooltip
-      content={<CalendarTooltip cellData={cellData} viewMode={viewMode} />}
-      lazyMount
-      openDelay={500}
-      portalled
-      positioning={{
-        offset: {
-          crossAxis: 5,
-          mainAxis: 5,
-        },
-        placement: "bottom",
-      }}
-      unmountOnExit
-    >
-      {hasData && hasStartDate ? (
-        <RouterLink
-          to={
-            viewMode === "failed"
-              ? `/dags/${dagId}/runs?start_date_gte=${startDate}&sort=start_date&state=failed`
-              : `/dags/${dagId}/runs?start_date_gte=${startDate}&sort=start_date`
-          }
-        >
-          {cellBox}
-        </RouterLink>
-      ) : (
-        cellBox
-      )}
-    </Tooltip>
+    <BasicTooltip content={<CalendarTooltip cellData={cellData} viewMode={viewMode} />}>
+      {cellBox}
+    </BasicTooltip>
   );
 };

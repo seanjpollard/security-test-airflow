@@ -33,8 +33,6 @@ class StepFunctionsExecutionCompleteTrigger(AwsBaseWaiterTrigger):
     :param waiter_delay: The amount of time in seconds to wait between attempts.
     :param waiter_max_attempts: The maximum number of attempts to be made.
     :param aws_conn_id: The Airflow connection used for AWS credentials.
-    :param region_name: AWS region name to use.
-        Override the region_name in connection (if provided).
     """
 
     def __init__(
@@ -48,7 +46,7 @@ class StepFunctionsExecutionCompleteTrigger(AwsBaseWaiterTrigger):
         **kwargs,
     ) -> None:
         super().__init__(
-            serialized_fields={"execution_arn": execution_arn},
+            serialized_fields={"execution_arn": execution_arn, "region_name": region_name},
             waiter_name="step_function_succeeded",
             waiter_args={"executionArn": execution_arn},
             failure_message="Step function failed",
@@ -59,7 +57,6 @@ class StepFunctionsExecutionCompleteTrigger(AwsBaseWaiterTrigger):
             waiter_delay=waiter_delay,
             waiter_max_attempts=waiter_max_attempts,
             aws_conn_id=aws_conn_id,
-            region_name=region_name,
             **kwargs,
         )
 

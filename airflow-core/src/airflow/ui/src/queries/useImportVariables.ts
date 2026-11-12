@@ -16,14 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from "react";
-
 import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useVariableServiceBulkVariables, useVariableServiceGetVariablesKey } from "openapi/queries";
-
-import { toaster } from "src/system-components";
+import { toaster } from "src/components/ui";
 
 export const useImportVariables = ({ onSuccessConfirm }: { onSuccessConfirm: () => void }) => {
   const queryClient = useQueryClient();

@@ -16,11 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { isOneOf } from "src/utils";
 
 export type DataIntervalMode = "auto" | "manual";
-
-export type PausedDagAction = "drain" | "keepPaused" | "unpause";
 
 export type DagRunTriggerParams = {
   conf: string;
@@ -28,7 +25,6 @@ export type DagRunTriggerParams = {
   dataIntervalEnd: string;
   dataIntervalMode: DataIntervalMode;
   dataIntervalStart: string;
-  drainDag?: boolean;
   logicalDate: string;
   note: string;
   partitionKey: string | undefined;
@@ -37,6 +33,4 @@ export type DagRunTriggerParams = {
 export const dataIntervalModeOptions = [
   { label: "components:triggerDag.dataIntervalAuto", value: "auto" },
   { label: "components:triggerDag.dataIntervalManual", value: "manual" },
-] as const satisfies ReadonlyArray<{ label: string; value: DataIntervalMode }>;
-
-export const isDataIntervalMode = isOneOf(dataIntervalModeOptions.map((option) => option.value));
+] as const satisfies Array<{ label: string; value: DataIntervalMode }>;

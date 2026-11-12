@@ -16,13 +16,11 @@
 # under the License.
 from __future__ import annotations
 
-import attrs
-
 from airflow.sdk.definitions.partition_mappers.base import PartitionMapper
 
 
-@attrs.define
 class AllowedKeyMapper(PartitionMapper):
     """Partition mapper that validates keys against a set of allowed keys."""
 
-    allowed_keys: list[str]
+    def __init__(self, allowed_keys: list[str]) -> None:
+        self.allowed_keys = allowed_keys

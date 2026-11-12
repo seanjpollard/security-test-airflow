@@ -19,14 +19,24 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from pydantic_ai.messages import ImageUrl
 
 from airflow.providers.common.ai.decorators.llm_schema_compare import _LLMSchemaCompareDecoratedOperator
 from airflow.providers.common.ai.operators.llm_schema_compare import (
     LLMSchemaCompareOperator,
     SchemaCompareResult,
 )
-from airflow.providers.common.compat.sdk import DAG, task
+
+
+def _make_mock_run_result(output):
+    """Create a mock AgentRunResult compatible with log_run_summary."""
+    mock_result = MagicMock()
+    mock_result.output = output
+    mock_result.usage.return_value = MagicMock(
+        requests=1, tool_calls=0, input_tokens=0, output_tokens=0, total_tokens=0
+    )
+    mock_result.response = MagicMock(model_name="test-model")
+    mock_result.all_messages.return_value = []
+    return mock_result
 
 
 def _make_compare_result():
@@ -37,9 +47,9 @@ def _make_compare_result():
     )
 
 
-def _make_mock_agent(output: SchemaCompareResult, make_mock_run_result):
-    mock_agent = MagicMock(spec=["run_sync", "instrument"])
-    mock_agent.run_sync.return_value = make_mock_run_result(output)
+def _make_mock_agent(output: SchemaCompareResult):
+    mock_agent = MagicMock(spec=["run_sync"])
+    mock_agent.run_sync.return_value = _make_mock_run_result(output)
     return mock_agent
 
 
@@ -47,27 +57,12 @@ class TestLLMSchemaCompareDecoratedOperator:
     def test_custom_operator_name(self):
         assert _LLMSchemaCompareDecoratedOperator.custom_operator_name == "@task.llm_schema_compare"
 
-    def test_output_type_rejected(self):
-        @task.llm_schema_compare(
-            llm_conn_id="my_llm", db_conn_ids=["conn_a", "conn_b"], table_names=["t"], output_type=int
-        )
-        def my_prompt_fn():
-            return "Compare schemas"
-
-        with (
-            DAG(dag_id="dag"),
-            pytest.raises(TypeError, match="LLMSchemaCompareOperator does not accept 'output_type'"),
-        ):
-            my_prompt_fn()
-
     @patch("airflow.providers.common.ai.operators.llm.PydanticAIHook", autospec=True)
     @patch.object(LLMSchemaCompareOperator, "_build_schema_context", return_value="mocked schema")
-    def test_execute_calls_callable_and_uses_result_as_prompt(
-        self, mock_build_ctx, mock_hook_cls, make_mock_run_result
-    ):
+    def test_execute_calls_callable_and_uses_result_as_prompt(self, mock_build_ctx, mock_hook_cls):
         """The user's callable return value becomes the LLM prompt."""
         mock_hook_cls.get_hook.return_value.create_agent.return_value = _make_mock_agent(
-            _make_compare_result(), make_mock_run_result
+            _make_compare_result()
         )
 
         def my_prompt_fn():
@@ -87,11 +82,11 @@ class TestLLMSchemaCompareDecoratedOperator:
 
     @pytest.mark.parametrize(
         "return_value",
-        [42, "", "   ", None, b"bytes", bytearray(b"x"), [], ()],
-        ids=["non-string", "empty", "whitespace", "none", "bytes", "bytearray", "empty-list", "empty-tuple"],
+        [42, "", "   ", None],
+        ids=["non-string", "empty", "whitespace", "none"],
     )
     def test_execute_raises_on_invalid_prompt(self, return_value):
-        """TypeError when the callable returns an unsupported prompt shape."""
+        """TypeError when the callable returns a non-string or blank string."""
         op = _LLMSchemaCompareDecoratedOperator(
             task_id="test",
             python_callable=lambda: return_value,
@@ -99,43 +94,15 @@ class TestLLMSchemaCompareDecoratedOperator:
             db_conn_ids=["postgres_default", "snowflake_default"],
             table_names=["test_table"],
         )
-        with pytest.raises(TypeError, match="must be"):
+        with pytest.raises(TypeError, match="non-empty string"):
             op.execute(context={})
 
     @patch("airflow.providers.common.ai.operators.llm.PydanticAIHook", autospec=True)
     @patch.object(LLMSchemaCompareOperator, "_build_schema_context", return_value="mocked schema")
-    def test_execute_accepts_sequence_prompt(self, mock_build_ctx, mock_hook_cls, make_mock_run_result):
-        """A non-empty Sequence[UserContent] return value is forwarded to run_sync as-is."""
-        mock_agent = _make_mock_agent(_make_compare_result(), make_mock_run_result)
-        mock_hook_cls.get_hook.return_value.create_agent.return_value = mock_agent
-
-        image = ImageUrl(url="https://example.com/x.png")
-        prompt = ["Compare these schemas:", image]
-
-        def my_prompt_fn():
-            return prompt
-
-        op = _LLMSchemaCompareDecoratedOperator(
-            task_id="test",
-            python_callable=my_prompt_fn,
-            llm_conn_id="llm_conn",
-            db_conn_ids=["postgres_default", "snowflake_default"],
-            table_names=["test_table"],
-        )
-        op.execute(context={})
-
-        assert op.prompt == prompt
-        forwarded_prompt = mock_agent.run_sync.call_args[0][0]
-        assert forwarded_prompt == prompt
-
-    @patch("airflow.providers.common.ai.operators.llm.PydanticAIHook", autospec=True)
-    @patch.object(LLMSchemaCompareOperator, "_build_schema_context", return_value="mocked schema")
-    def test_execute_merges_op_kwargs_into_callable(
-        self, mock_build_ctx, mock_hook_cls, make_mock_run_result
-    ):
+    def test_execute_merges_op_kwargs_into_callable(self, mock_build_ctx, mock_hook_cls):
         """op_kwargs are resolved by the callable to build the prompt."""
         mock_hook_cls.get_hook.return_value.create_agent.return_value = _make_mock_agent(
-            _make_compare_result(), make_mock_run_result
+            _make_compare_result()
         )
 
         def my_prompt_fn(target_env):
@@ -152,25 +119,3 @@ class TestLLMSchemaCompareDecoratedOperator:
         op.execute(context={"task_instance": MagicMock()})
 
         assert op.prompt == "Compare schemas for production environment"
-
-    @patch(
-        "airflow.providers.common.ai.operators.llm_schema_compare.LLMSchemaCompareOperator.execute",
-        autospec=True,
-    )
-    def test_execute_renders_only_the_returned_prompt(self, mock_execute):
-        """Fields rendered before execute() are not rendered again; only the returned value is."""
-        op = _LLMSchemaCompareDecoratedOperator(
-            task_id="test",
-            python_callable=lambda: "Summarize {{ topic }}",
-            llm_conn_id="my_llm",
-            system_prompt="{{ note }}",
-            db_conn_ids=["postgres_default", "snowflake_default"],
-            table_names=["test_table"],
-        )
-        context = {"topic": "logs", "note": "{{ other }}", "other": "rendered twice"}
-
-        op.render_template_fields(context)
-        op.execute(context=context)
-
-        assert op.prompt == "Summarize logs"
-        assert op.system_prompt == "{{ other }}"

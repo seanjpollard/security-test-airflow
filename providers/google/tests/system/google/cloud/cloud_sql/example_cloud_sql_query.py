@@ -475,13 +475,7 @@ with DAG(
             return connection_id
 
         @task_group(group_id=f"create_connections_{database_type}")
-        def create_connections(
-            instance: str,
-            db_type: str,
-            ip_address: str,
-            port: str,
-            database_type: str = database_type,
-        ):
+        def create_connections(instance: str, db_type: str, ip_address: str, port: str):
             for conn in CONNECTIONS:
                 conn_id = f"{conn.id}_{database_type}"
                 create_connection(

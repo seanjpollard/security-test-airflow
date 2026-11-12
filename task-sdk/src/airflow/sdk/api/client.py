@@ -21,19 +21,17 @@ import logging
 import ssl
 import sys
 import uuid
-from datetime import datetime
 from functools import cache
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, TypeVar
-from urllib.parse import quote
 
-import httpx2
+import certifi
+import httpx
 import msgspec
 import structlog
-import truststore
 from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel
 from tenacity import (
     before_log,
     retry,
@@ -48,35 +46,24 @@ from airflow.sdk.api.datamodels._generated import (
     API_VERSION,
     AssetEventsResponse,
     AssetResponse,
-    AssetStateStorePutBody,
-    AssetStateStoreResponse,
-    CallbackTerminalState,
-    CallbackTerminalStatePayload,
+    AssetStatePutBody,
+    AssetStateResponse,
     ConnectionResponse,
-    ConnectionTestConnectionResponse,
-    ConnectionTestResultBody,
-    ConnectionTestState,
     DagResponse,
     DagRun,
-    DagRunNoteUpdatePayload,
     DagRunStateResponse,
     DagRunType,
-    ExternalClearTargetPayload,
     HITLDetailRequest,
     HITLDetailResponse,
     HITLUser,
     InactiveAssetsResponse,
-    LoopDecisionPayload,
-    Note,
     PrevSuccessfulDagRunResponse,
-    ResultMessage,
     TaskBreadcrumbsResponse,
     TaskInstanceState,
+    TaskStatePutBody,
+    TaskStateResponse,
     TaskStatesResponse,
-    TaskStateStorePutBody,
-    TaskStateStoreResponse,
     TerminalStateNonSuccess,
-    TIAwaitingInputStatePayload,
     TIDeferredStatePayload,
     TIEnterRunningPayload,
     TIHeartbeatInfo,
@@ -88,7 +75,6 @@ from airflow.sdk.api.datamodels._generated import (
     TITerminalStatePayload,
     TriggerDAGRunPayload,
     ValidationError as RemoteValidationError,
-    VariableKeysResponse,
     VariablePostBody,
     VariableResponse,
     XComResponse,
@@ -105,7 +91,6 @@ from airflow.sdk.execution_time.comms import (
     OKResponse,
     PreviousDagRunResult,
     PreviousTIResult,
-    RescheduleTask,
     SkipDownstreamTasks,
     TaskRescheduleStartDate,
     TICount,
@@ -116,6 +101,8 @@ from airflow.sdk.execution_time.comms import (
 if TYPE_CHECKING:
     from datetime import datetime
     from typing import ParamSpec
+
+    from airflow.sdk.execution_time.comms import RescheduleTask
 
     P = ParamSpec("P")
     T = TypeVar("T")
@@ -196,33 +183,27 @@ __all__ = [
 ]
 
 
-def get_json_error(response: httpx2.Response):
+def get_json_error(response: httpx.Response):
     """Raise a ServerResponseError if we can extract error info from the error."""
     err = ServerResponseError.from_response(response)
     if err:
         raise err
 
 
-def raise_on_4xx_5xx(response: httpx2.Response):
+def raise_on_4xx_5xx(response: httpx.Response):
     return get_json_error(response) or response.raise_for_status()
 
 
 # Py 3.11+ version
-def raise_on_4xx_5xx_with_note(response: httpx2.Response):
+def raise_on_4xx_5xx_with_note(response: httpx.Response):
     try:
         return get_json_error(response) or response.raise_for_status()
-    except httpx2.HTTPStatusError as e:
+    except httpx.HTTPStatusError as e:
         if TYPE_CHECKING:
             assert hasattr(e, "add_note")
         e.add_note(
             f"Correlation-id={response.headers.get('correlation-id', None) or response.request.headers.get('correlation-id', 'no-correlation-id')}"
         )
-        # .detail sits behind the generic message and only reaches logs where a handler
-        # logs it by hand. Add it as a note too, so uncaught paths (e.g. the executor) keep it.
-
-        detail = getattr(e, "detail", None)
-        if detail is not None:
-            e.add_note(f"Server error detail: {detail!r}")
         raise
 
 
@@ -231,11 +212,11 @@ if hasattr(BaseException, "add_note"):
     raise_on_4xx_5xx = raise_on_4xx_5xx_with_note
 
 
-def add_correlation_id(request: httpx2.Request):
+def add_correlation_id(request: httpx.Request):
     request.headers["correlation-id"] = str(uuid7())
 
 
-def inject_trace_context(request: httpx2.Request) -> None:
+def inject_trace_context(request: httpx.Request) -> None:
     _trace_propagator.inject(request.headers)
 
 
@@ -253,22 +234,6 @@ def _log_and_trace_retry(retry_state) -> None:
         )
 
 
-def _path(prefix: str, *identifiers: str | uuid.UUID, tail: str | None = None) -> str:
-    """
-    Build a request path, quoting each identifier so it stays a single segment.
-
-    ``prefix`` is the fixed, trusted portion of the path. The server decodes ``%2F`` before
-    routing, so a ``/`` in a positional identifier would shift it onto another route and is
-    rejected. ``tail`` is the last segment (a ``:path`` key or a final id) and may contain ``/``.
-    """
-    if any("/" in str(identifier) for identifier in identifiers):
-        raise ValueError(f"Path identifier must not contain '/': {identifiers!r}")
-    segments = [*identifiers] if tail is None else [*identifiers, tail]
-    quoted = (quote(str(segment), safe="") for segment in segments)
-    # quote() leaves a bare "." or ".." as is, and httpx would still collapse it as a dot segment.
-    return "/".join([prefix, *("%2E" * len(q) if q in (".", "..") else q for q in quoted)])
-
-
 class TaskInstanceOperations:
     __slots__ = ("client",)
 
@@ -284,40 +249,24 @@ class TaskInstanceOperations:
         except ServerResponseError as e:
             if e.response.status_code == HTTPStatus.CONFLICT:
                 detail = e.detail
-                if isinstance(detail, dict) and (
-                    detail.get("reason") == "running_elsewhere"
-                    or (detail.get("reason") == "invalid_state" and detail.get("previous_state") == "running")
+                if (
+                    isinstance(detail, dict)
+                    and detail.get("reason") == "invalid_state"
+                    and detail.get("previous_state") == "running"
                 ):
                     raise TaskAlreadyRunningError(f"Task instance {id} is already running") from e
             raise
         return TIRunContext.model_validate_json(resp.read())
 
-    def finish(
-        self,
-        id: uuid.UUID,
-        state: TerminalStateNonSuccess,
-        when: datetime,
-        rendered_map_index,
-        retry_reason: str | None = None,
-        *,
-        pid: int | None = None,
-        loop_decision: LoopDecisionPayload | None = None,
-    ):
-        """Report a terminal outcome or acknowledge server-requested termination."""
+    def finish(self, id: uuid.UUID, state: TerminalStateNonSuccess, when: datetime, rendered_map_index):
+        """Tell the API server that this TI has reached a terminal state."""
         if state == TaskInstanceState.SUCCESS:
             raise ValueError("Logic error. SUCCESS state should call the `succeed` function instead")
+        # TODO: handle the naming better. finish sounds wrong as "even" deferred is essentially finishing.
         body = TITerminalStatePayload(
-            end_date=when,
-            state=TerminalStateNonSuccess(state),
-            rendered_map_index=rendered_map_index,
-            retry_reason=retry_reason,
+            end_date=when, state=TerminalStateNonSuccess(state), rendered_map_index=rendered_map_index
         )
-        if loop_decision is not None:
-            body.loop_decision = loop_decision
-        if state == TerminalStateNonSuccess.SERVER_TERMINATED:
-            body.hostname = get_hostname()
-            body.pid = pid
-        self.client.patch(f"task-instances/{id}/state", content=body.model_dump_json(exclude_unset=True))
+        self.client.patch(f"task-instances/{id}/state", content=body.model_dump_json())
 
     def retry(
         self,
@@ -336,25 +285,13 @@ class TaskInstanceOperations:
         )
         self.client.patch(f"task-instances/{id}/state", content=body.model_dump_json())
 
-    def succeed(
-        self,
-        id: uuid.UUID,
-        when: datetime,
-        task_outlets,
-        outlet_events,
-        rendered_map_index,
-        *,
-        loop_decision: LoopDecisionPayload | None = None,
-        external_clear_target: ExternalClearTargetPayload | None = None,
-    ):
+    def succeed(self, id: uuid.UUID, when: datetime, task_outlets, outlet_events, rendered_map_index):
         """Tell the API server that this TI has succeeded."""
         body = TISuccessStatePayload(
             end_date=when,
             task_outlets=task_outlets,
             outlet_events=outlet_events,
             rendered_map_index=rendered_map_index,
-            loop_decision=loop_decision,
-            external_clear_target=external_clear_target,
         )
         self.client.patch(f"task-instances/{id}/state", content=body.model_dump_json())
 
@@ -363,11 +300,6 @@ class TaskInstanceOperations:
         body = TIDeferredStatePayload(**msg.model_dump(exclude_unset=True, exclude={"type"}))
 
         # Create a deferred state payload from msg
-        self.client.patch(f"task-instances/{id}/state", content=body.model_dump_json())
-
-    def await_input(self, id: uuid.UUID, msg):
-        """Tell the API server that this TI is parked awaiting human input (Human-in-the-loop)."""
-        body = TIAwaitingInputStatePayload(**msg.model_dump(exclude_unset=True, exclude={"type"}))
         self.client.patch(f"task-instances/{id}/state", content=body.model_dump_json())
 
     def reschedule(self, id: uuid.UUID, msg: RescheduleTask):
@@ -379,27 +311,12 @@ class TaskInstanceOperations:
 
     def heartbeat(self, id: uuid.UUID, pid: int):
         body = TIHeartbeatInfo(pid=pid, hostname=get_hostname())
-        self.client.request(
-            "PUT",
-            f"task-instances/{id}/heartbeat",
-            content=body.model_dump_json(),
-            retry=False,  # heartbeats do not retry: they are implicitly retried by the supervisor loop.
-        )
+        self.client.put(f"task-instances/{id}/heartbeat", content=body.model_dump_json())
 
     def skip_downstream_tasks(self, id: uuid.UUID, msg: SkipDownstreamTasks):
         """Tell the API server to skip the downstream tasks of this TI."""
         body = TISkippedDownstreamTasksStatePayload(tasks=msg.tasks)
         self.client.patch(f"task-instances/{id}/skip-downstream", content=body.model_dump_json())
-
-    def update_dagrun_note(self, id: uuid.UUID, note: str | None) -> OKResponse:
-        """
-        Update the note for the DagRun associated with this task instance.
-
-        An empty note removes it, and ``None`` leaves any existing note untouched.
-        """
-        body = DagRunNoteUpdatePayload(note=Note(note) if note is not None else None)
-        self.client.patch(f"task-instances/{id}/dag-run-note", content=body.model_dump_json())
-        return OKResponse(ok=True)
 
     def set_rtif(self, id: uuid.UUID, body: dict[str, str]) -> OKResponse:
         """Set Rendered Task Instance Fields via the API server."""
@@ -481,7 +398,7 @@ class TaskInstanceOperations:
         if state:
             params["state"] = state.value if isinstance(state, TaskInstanceState) else state
 
-        resp = self.client.get(_path("task-instances/previous", dag_id, task_id), params=params)
+        resp = self.client.get(f"task-instances/previous/{dag_id}/{task_id}", params=params)
         return PreviousTIResult(task_instance=resp.json())
 
     def get_task_states(
@@ -512,11 +429,7 @@ class TaskInstanceOperations:
         resp = self.client.get("task-instances/states", params=params)
         return TaskStatesResponse.model_validate_json(resp.read())
 
-    def get_task_breakcrumbs(
-        self,
-        dag_id: str,
-        run_id: str,
-    ) -> TaskBreadcrumbsResponse:
+    def get_task_breakcrumbs(self, dag_id: str, run_id: str) -> TaskBreadcrumbsResponse:
         params = {"dag_id": dag_id, "run_id": run_id}
         resp = self.client.get("task-instances/breadcrumbs", params=params)
         return TaskBreadcrumbsResponse.model_validate_json(resp.read())
@@ -536,7 +449,7 @@ class ConnectionOperations:
     def get(self, conn_id: str) -> ConnectionResponse | ErrorResponse:
         """Get a connection from the API server."""
         try:
-            resp = self.client.get(_path("connections", tail=conn_id))
+            resp = self.client.get(f"connections/{conn_id}")
         except ServerResponseError as e:
             if e.response.status_code == HTTPStatus.NOT_FOUND:
                 log.debug(
@@ -546,21 +459,6 @@ class ConnectionOperations:
                     status_code=e.response.status_code,
                 )
                 return ErrorResponse(error=ErrorType.CONNECTION_NOT_FOUND, detail={"conn_id": conn_id})
-            if e.response.status_code in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
-                # Surface authz failures as a distinct ErrorType so the
-                # ExecutionAPISecretsBackend can refuse to fall back to a
-                # less-restrictive backend (e.g. env vars). 401/403 must
-                # not be conflated with "not found".
-                log.debug(
-                    "Connection access denied",
-                    conn_id=conn_id,
-                    detail=e.detail,
-                    status_code=e.response.status_code,
-                )
-                return ErrorResponse(
-                    error=ErrorType.PERMISSION_DENIED,
-                    detail={"conn_id": conn_id, "status_code": e.response.status_code},
-                )
             raise
         return ConnectionResponse.model_validate_json(resp.read())
 
@@ -574,7 +472,7 @@ class VariableOperations:
     def get(self, key: str) -> VariableResponse | ErrorResponse:
         """Get a variable from the API server."""
         try:
-            resp = self.client.get(_path("variables", tail=key))
+            resp = self.client.get(f"variables/{key}")
         except ServerResponseError as e:
             if e.response.status_code == HTTPStatus.NOT_FOUND:
                 log.debug(
@@ -584,26 +482,13 @@ class VariableOperations:
                     status_code=e.response.status_code,
                 )
                 return ErrorResponse(error=ErrorType.VARIABLE_NOT_FOUND, detail={"key": key})
-            if e.response.status_code in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
-                # See ConnectionOperations.get() above for rationale —
-                # authz failures must not be conflated with "not found".
-                log.debug(
-                    "Variable access denied",
-                    key=key,
-                    detail=e.detail,
-                    status_code=e.response.status_code,
-                )
-                return ErrorResponse(
-                    error=ErrorType.PERMISSION_DENIED,
-                    detail={"key": key, "status_code": e.response.status_code},
-                )
             raise
         return VariableResponse.model_validate_json(resp.read())
 
-    def set(self, key: str, value: str, description: str | None = None) -> OKResponse:
+    def set(self, key: str, value: str | None, description: str | None = None) -> OKResponse:
         """Set an Airflow Variable via the API server."""
         body = VariablePostBody(val=value, description=description)
-        self.client.put(_path("variables", tail=key), content=body.model_dump_json())
+        self.client.put(f"variables/{key}", content=body.model_dump_json())
         # Any error from the server will anyway be propagated down to the supervisor,
         # so we choose to send a generic response to the supervisor over the server response to
         # decouple from the server response string
@@ -614,19 +499,11 @@ class VariableOperations:
         key: str,
     ) -> OKResponse:
         """Delete a variable with given key via the API server."""
-        self.client.delete(_path("variables", tail=key))
+        self.client.delete(f"variables/{key}")
         # Any error from the server will anyway be propagated down to the supervisor,
         # so we choose to send a generic response to the supervisor over the server response to
         # decouple from the server response string
         return OKResponse(ok=True)
-
-    def keys(self, prefix: str | None = None, limit: int = 1000, offset: int = 0) -> VariableKeysResponse:
-        """List variable keys from the API server, optionally filtered by key prefix."""
-        params: dict[str, str | int] = {"limit": limit, "offset": offset}
-        if prefix is not None:
-            params["prefix"] = prefix
-        resp = self.client.get("variables/keys", params=params)
-        return VariableKeysResponse.model_validate_json(resp.read())
 
 
 class XComOperations:
@@ -635,20 +512,9 @@ class XComOperations:
     def __init__(self, client: Client):
         self.client = client
 
-    def head(
-        self,
-        dag_id: str,
-        run_id: str,
-        task_id: str,
-        key: str,
-        *,
-        previous_iteration: bool = False,
-    ) -> XComCountResponse:
+    def head(self, dag_id: str, run_id: str, task_id: str, key: str) -> XComCountResponse:
         """Get the number of mapped XCom values."""
-        params: dict[str, str | int] = {}
-        if previous_iteration:
-            params["previous_iteration"] = True
-        resp = self.client.head(_path("xcoms", dag_id, run_id, task_id, tail=key), params=params)
+        resp = self.client.head(f"xcoms/{dag_id}/{run_id}/{task_id}/{key}")
 
         # content_range: str | None
         if not (content_range := resp.headers["Content-Range"]) or not content_range.startswith(
@@ -665,22 +531,20 @@ class XComOperations:
         key: str,
         map_index: int | None = None,
         include_prior_dates: bool = False,
-        *,
-        previous_iteration: bool = False,
     ) -> XComResponse:
         """Get a XCom value from the API server."""
-        params: dict[str, str | int] = {}
-        if previous_iteration:
-            params["previous_iteration"] = True
+        # TODO: check if we need to use map_index as params in the uri
+        # ref: https://github.com/apache/airflow/blob/v2-10-stable/airflow/api_connexion/openapi/v1.yaml#L1785C1-L1785C81
+        params = {}
         if map_index is not None and map_index >= 0:
             params.update({"map_index": map_index})
         if include_prior_dates:
             params.update({"include_prior_dates": include_prior_dates})
         try:
-            resp = self.client.get(_path("xcoms", dag_id, run_id, task_id, tail=key), params=params)
+            resp = self.client.get(f"xcoms/{dag_id}/{run_id}/{task_id}/{key}", params=params)
         except ServerResponseError as e:
             if e.response.status_code == HTTPStatus.NOT_FOUND:
-                log.debug(
+                log.error(
                     "XCom not found",
                     dag_id=dag_id,
                     run_id=run_id,
@@ -710,14 +574,16 @@ class XComOperations:
         mapped_length: int | None = None,
     ) -> OKResponse:
         """Set a XCom value via the API server."""
-        params: dict[str, str | int] = {}
+        # TODO: check if we need to use map_index as params in the uri
+        # ref: https://github.com/apache/airflow/blob/v2-10-stable/airflow/api_connexion/openapi/v1.yaml#L1785C1-L1785C81
+        params: dict[str, Any] = {}
         if dag_result:
             params["dag_result"] = dag_result
         if map_index is not None and map_index >= 0:
             params["map_index"] = map_index
         if mapped_length is not None and mapped_length >= 0:
             params["mapped_length"] = mapped_length
-        self.client.post(_path("xcoms", dag_id, run_id, task_id, tail=key), params=params, json=value)
+        self.client.post(f"xcoms/{dag_id}/{run_id}/{task_id}/{key}", params=params, json=value)
         # Any error from the server will anyway be propagated down to the supervisor,
         # so we choose to send a generic response to the supervisor over the server response to
         # decouple from the server response string
@@ -732,10 +598,11 @@ class XComOperations:
         map_index: int | None = None,
     ) -> OKResponse:
         """Delete a XCom with given key via the API server."""
-        params: dict[str, str | int] = {}
         if map_index is not None and map_index >= 0:
-            params["map_index"] = map_index
-        self.client.delete(_path("xcoms", dag_id, run_id, task_id, tail=key), params=params)
+            params = {"map_index": map_index}
+        else:
+            params = {}
+        self.client.delete(f"xcoms/{dag_id}/{run_id}/{task_id}/{key}", params=params)
         # Any error from the server will anyway be propagated down to the supervisor,
         # so we choose to send a generic response to the supervisor over the server response to
         # decouple from the server response string
@@ -748,20 +615,12 @@ class XComOperations:
         task_id: str,
         key: str,
         offset: int,
-        *,
-        previous_iteration: bool = False,
     ) -> XComSequenceIndexResponse | ErrorResponse:
-        params: dict[str, str | int] = {}
-        if previous_iteration:
-            params["previous_iteration"] = True
         try:
-            resp = self.client.get(
-                f"{_path('xcoms', dag_id, run_id, task_id, tail=key)}/item/{offset}",
-                params=params,
-            )
+            resp = self.client.get(f"xcoms/{dag_id}/{run_id}/{task_id}/{key}/item/{offset}")
         except ServerResponseError as e:
             if e.response.status_code == HTTPStatus.NOT_FOUND:
-                log.debug(
+                log.error(
                     "XCom not found",
                     dag_id=dag_id,
                     run_id=run_id,
@@ -794,12 +653,8 @@ class XComOperations:
         stop: int | None,
         step: int | None,
         include_prior_dates: bool = False,
-        *,
-        previous_iteration: bool = False,
     ) -> XComSequenceSliceResponse:
-        params: dict[str, str | int] = {}
-        if previous_iteration:
-            params["previous_iteration"] = True
+        params = {}
         if start is not None:
             params["start"] = start
         if stop is not None:
@@ -808,45 +663,46 @@ class XComOperations:
             params["step"] = step
         if include_prior_dates:
             params["include_prior_dates"] = include_prior_dates
-        resp = self.client.get(f"{_path('xcoms', dag_id, run_id, task_id, tail=key)}/slice", params=params)
+        resp = self.client.get(f"xcoms/{dag_id}/{run_id}/{task_id}/{key}/slice", params=params)
         return XComSequenceSliceResponse.model_validate_json(resp.read())
 
 
-class TaskStateStoreOperations:
+class TaskStateOperations:
     __slots__ = ("client",)
 
     def __init__(self, client: Client):
         self.client = client
 
-    def get(self, ti_id: uuid.UUID, key: str) -> TaskStateStoreResponse | ErrorResponse:
-        """Get a task store value from the API server."""
+    def get(self, ti_id: uuid.UUID, key: str) -> TaskStateResponse | ErrorResponse:
+        """Get a task state value from the API server."""
         try:
-            resp = self.client.get(_path("store/ti", ti_id, tail=key))
+            resp = self.client.get(f"state/ti/{ti_id}/{key}")
         except ServerResponseError as e:
             if e.response.status_code == HTTPStatus.NOT_FOUND:
-                log.debug("Task store key not found", ti_id=ti_id, key=key)
-                return ErrorResponse(error=ErrorType.TASK_STORE_NOT_FOUND, detail={"key": key})
+                log.debug("Task state key not found", ti_id=ti_id, key=key)
+                return ErrorResponse(error=ErrorType.TASK_STATE_NOT_FOUND, detail={"key": key})
             raise
-        return TaskStateStoreResponse.model_validate_json(resp.read())
+        return TaskStateResponse.model_validate_json(resp.read())
 
-    def set(self, ti_id: uuid.UUID, key: str, value: JsonValue, expires_at: datetime | None) -> OKResponse:
-        """Set a task store value via the API server."""
-        body = TaskStateStorePutBody(value=value, expires_at=expires_at)
-        self.client.put(_path("store/ti", ti_id, tail=key), content=body.model_dump_json())
+    def set(self, ti_id: uuid.UUID, key: str, value: str) -> OKResponse:
+        """Set a task state value via the API server."""
+        body = TaskStatePutBody(value=value)
+        self.client.put(f"state/ti/{ti_id}/{key}", content=body.model_dump_json())
         return OKResponse(ok=True)
 
     def delete(self, ti_id: uuid.UUID, key: str) -> OKResponse:
-        """Delete a single task store key via the API server."""
-        self.client.delete(_path("store/ti", ti_id, tail=key))
+        """Delete a single task state key via the API server."""
+        self.client.delete(f"state/ti/{ti_id}/{key}")
         return OKResponse(ok=True)
 
-    def clear(self, ti_id: uuid.UUID) -> OKResponse:
-        """Clear all task store keys for a task instance via the API server."""
-        self.client.delete(_path("store/ti", ti_id))
+    def clear(self, ti_id: uuid.UUID, all_map_indices: bool = False) -> OKResponse:
+        """Clear all task state keys for a task instance via the API server."""
+        params = {"all_map_indices": "true"} if all_map_indices else {}
+        self.client.delete(f"state/ti/{ti_id}", params=params)
         return OKResponse(ok=True)
 
 
-class AssetStateStoreOperations:
+class AssetStateOperations:
     __slots__ = ("client",)
 
     def __init__(self, client: Client):
@@ -857,10 +713,10 @@ class AssetStateStoreOperations:
     ) -> tuple[str, dict[str, str]]:
         if name:
             params: dict[str, str] = {"name": name}
-            endpoint = f"store/asset/by-name/{op}"
+            endpoint = f"state/asset/by-name/{op}"
         elif uri:
             params = {"uri": uri}
-            endpoint = f"store/asset/by-uri/{op}"
+            endpoint = f"state/asset/by-uri/{op}"
         else:
             raise ValueError("Either `name` or `uri` must be provided")
         if key is not None:
@@ -869,36 +725,32 @@ class AssetStateStoreOperations:
 
     def get(
         self, key: str, *, name: str | None = None, uri: str | None = None
-    ) -> AssetStateStoreResponse | ErrorResponse:
-        """Get an asset store value from the API server."""
+    ) -> AssetStateResponse | ErrorResponse:
+        """Get an asset state value from the API server."""
         endpoint, params = self._resolve_endpoint("value", key=key, name=name, uri=uri)
         try:
             resp = self.client.get(endpoint, params=params)
         except ServerResponseError as e:
             if e.response.status_code == HTTPStatus.NOT_FOUND:
-                log.debug("Asset store key not found", name=name, uri=uri, key=key)
-                return ErrorResponse(error=ErrorType.ASSET_STORE_NOT_FOUND, detail={"key": key})
+                log.debug("Asset state key not found", name=name, uri=uri, key=key)
+                return ErrorResponse(error=ErrorType.ASSET_STATE_NOT_FOUND, detail={"key": key})
             raise
-        return AssetStateStoreResponse.model_validate_json(resp.read())
+        return AssetStateResponse.model_validate_json(resp.read())
 
-    def set(
-        self, key: str, value: JsonValue, *, name: str | None = None, uri: str | None = None
-    ) -> OKResponse:
-        """Set an asset store value via the API server."""
+    def set(self, key: str, value: str, *, name: str | None = None, uri: str | None = None) -> OKResponse:
+        """Set an asset state value via the API server."""
         endpoint, params = self._resolve_endpoint("value", key=key, name=name, uri=uri)
-        self.client.put(
-            endpoint, params=params, content=AssetStateStorePutBody(value=value).model_dump_json()
-        )
+        self.client.put(endpoint, params=params, content=AssetStatePutBody(value=value).model_dump_json())
         return OKResponse(ok=True)
 
     def delete(self, key: str, *, name: str | None = None, uri: str | None = None) -> OKResponse:
-        """Delete a single asset store key via the API server."""
+        """Delete a single asset state key via the API server."""
         endpoint, params = self._resolve_endpoint("value", key=key, name=name, uri=uri)
         self.client.delete(endpoint, params=params)
         return OKResponse(ok=True)
 
     def clear(self, *, name: str | None = None, uri: str | None = None) -> OKResponse:
-        """Clear all store keys for an asset via the API server."""
+        """Clear all state keys for an asset via the API server."""
         endpoint, params = self._resolve_endpoint("clear", name=name, uri=uri)
         self.client.delete(endpoint, params=params)
         return OKResponse(ok=True)
@@ -959,9 +811,6 @@ class AssetEventOperations:
         before: datetime | None = None,
         ascending: bool = True,
         limit: int | None = None,
-        partition_key: str | None = None,
-        partition_key_regexp_pattern: str | None = None,
-        extra: dict[str, str] | None = None,
     ) -> AssetEventsResponse:
         """Get Asset event from the API server."""
         common_params: dict[str, Any] = {}
@@ -970,24 +819,15 @@ class AssetEventOperations:
         if before:
             common_params["before"] = before.isoformat()
         common_params["ascending"] = ascending
-        if limit is not None:
+        if limit:
             common_params["limit"] = limit
-        if partition_key is not None:
-            common_params["partition_key"] = partition_key
-        if partition_key_regexp_pattern is not None:
-            common_params["partition_key_regexp_pattern"] = partition_key_regexp_pattern
-        extra_params: list[tuple[str, str]] = []
-        if extra:
-            extra_params = [("extra", f"{k}={v}") for k, v in extra.items()]
         if name or uri:
             resp = self.client.get(
-                "asset-events/by-asset",
-                params=[*{"name": name, "uri": uri, **common_params}.items(), *extra_params],
+                "asset-events/by-asset", params={"name": name, "uri": uri, **common_params}
             )
         elif alias_name:
             resp = self.client.get(
-                "asset-events/by-asset-alias",
-                params=[*{"name": alias_name, **common_params}.items(), *extra_params],
+                "asset-events/by-asset-alias", params={"name": alias_name, **common_params}
             )
         else:
             raise ValueError("Either `name`, `uri` or `alias_name` must be provided")
@@ -1022,8 +862,7 @@ class DagRunOperations:
 
         try:
             self.client.post(
-                _path("dag-runs", dag_id, run_id),
-                content=body.model_dump_json(exclude_defaults=True),
+                f"dag-runs/{dag_id}/{run_id}", content=body.model_dump_json(exclude_defaults=True)
             )
         except ServerResponseError as e:
             if e.response.status_code == HTTPStatus.CONFLICT:
@@ -1039,18 +878,18 @@ class DagRunOperations:
 
     def clear(self, dag_id: str, run_id: str) -> OKResponse:
         """Clear a Dag run via the API server."""
-        self.client.post(f"{_path('dag-runs', dag_id, run_id)}/clear")
+        self.client.post(f"dag-runs/{dag_id}/{run_id}/clear")
         # TODO: Error handling
         return OKResponse(ok=True)
 
     def get_detail(self, dag_id: str, run_id: str) -> DagRun:
         """Get detail of a dag run."""
-        resp = self.client.get(_path("dag-runs", dag_id, run_id))
+        resp = self.client.get(f"dag-runs/{dag_id}/{run_id}")
         return DagRun.model_validate_json(resp.read())
 
     def get_state(self, dag_id: str, run_id: str) -> DagRunStateResponse:
         """Get the state of a Dag run via the API server."""
-        resp = self.client.get(f"{_path('dag-runs', dag_id, run_id)}/state")
+        resp = self.client.get(f"dag-runs/{dag_id}/{run_id}/state")
         return DagRunStateResponse.model_validate_json(resp.read())
 
     def get_count(
@@ -1099,7 +938,7 @@ class DagsOperations:
 
     def get(self, dag_id: str) -> DagResponse:
         """Get a DAG via the API server."""
-        resp = self.client.get(_path("dags", tail=dag_id))
+        resp = self.client.get(f"dags/{dag_id}")
         return DagResponse.model_validate_json(resp.read())
 
 
@@ -1139,11 +978,8 @@ class HITLOperations:
             assigned_users=assigned_users,
         )
         resp = self.client.post(
-            _path("/hitlDetails", ti_id),
+            f"/hitlDetails/{ti_id}",
             content=payload.model_dump_json(),
-            # One key per request, reused by the client's retries, so a retried POST cannot replace
-            # the request (and discard an answer) after the first attempt was stored.
-            headers={"content-type": "application/json", "Idempotency-Key": str(uuid.uuid4())},
         )
         return HITLDetailRequest.model_validate_json(resp.read())
 
@@ -1161,62 +997,22 @@ class HITLOperations:
             params_input=params_input,
         )
         resp = self.client.patch(
-            _path("/hitlDetails", ti_id),
+            f"/hitlDetails/{ti_id}",
             content=payload.model_dump_json(),
         )
         return HITLDetailResponse.model_validate_json(resp.read())
 
     def get_detail_response(self, ti_id: uuid.UUID) -> HITLDetailResponse:
         """Get content part of a Human-in-the-loop response for a specific Task Instance."""
-        resp = self.client.get(_path("/hitlDetails", ti_id))
+        resp = self.client.get(f"/hitlDetails/{ti_id}")
         return HITLDetailResponse.model_validate_json(resp.read())
 
 
-class ConnectionTestOperations:
-    __slots__ = ("client",)
-
-    def __init__(self, client: Client):
-        self.client = client
-
-    def get_connection(self, connection_test_id: uuid.UUID) -> ConnectionTestConnectionResponse:
-        """Fetch connection data for a test request from the API server."""
-        resp = self.client.get(f"{_path('connection-tests', connection_test_id)}/connection")
-        return ConnectionTestConnectionResponse.model_validate_json(resp.read())
-
-    def update_state(
-        self, id: uuid.UUID, state: ConnectionTestState, result_message: str | None = None
-    ) -> None:
-        """Report the state of a connection test to the API server."""
-        if result_message is not None:
-            result_message = result_message[:2000]
-        body = ConnectionTestResultBody(
-            state=state,
-            result_message=ResultMessage(result_message) if result_message is not None else None,
-        )
-        self.client.patch(_path("connection-tests", id), content=body.model_dump_json())
-
-
-class CallbackOperations:
-    __slots__ = ("client",)
-
-    def __init__(self, client: Client):
-        self.client = client
-
-    def run(self, callback_id: uuid.UUID) -> None:
-        """Exchange the single-use callback token for an execution token."""
-        self.client.patch(f"callbacks/{callback_id}/run")
-
-    def finish(self, callback_id: uuid.UUID, state: CallbackTerminalState, output: str | None = None) -> None:
-        """Report the terminal state of a callback to the API server."""
-        body = CallbackTerminalStatePayload(state=state, output=output)
-        self.client.patch(f"callbacks/{callback_id}/state", content=body.model_dump_json())
-
-
-class BearerAuth(httpx2.Auth):
+class BearerAuth(httpx.Auth):
     def __init__(self, token: str):
         self.token: str = token
 
-    def auth_flow(self, request: httpx2.Request):
+    def auth_flow(self, request: httpx.Request):
         if self.token:
             request.headers["Authorization"] = "Bearer " + self.token
         yield request
@@ -1224,13 +1020,13 @@ class BearerAuth(httpx2.Auth):
 
 # This exists as an aid for debugging or local running via the `dry_run` argument to Client. It doesn't make
 # sense for returning connections etc.
-def noop_handler(request: httpx2.Request) -> httpx2.Response:
+def noop_handler(request: httpx.Request) -> httpx.Response:
     path = request.url.path
     log.debug("Dry-run request", method=request.method, path=path)
 
     if path.startswith("/task-instances/") and path.endswith("/run"):
         # Return a fake context
-        return httpx2.Response(
+        return httpx.Response(
             200,
             json={
                 "dag_run": {
@@ -1246,7 +1042,7 @@ def noop_handler(request: httpx2.Request) -> httpx2.Response:
                 "should_retry": False,
             },
         )
-    return httpx2.Response(200, json={"text": "Hello, world!"})
+    return httpx.Response(200, json={"text": "Hello, world!"})
 
 
 # Note: Given defaults make attempts after 1, 3, 7, 15 and fails after 31seconds
@@ -1254,42 +1050,25 @@ API_RETRIES = conf.getint("workers", "execution_api_retries")
 API_RETRY_WAIT_MIN = conf.getfloat("workers", "execution_api_retry_wait_min")
 API_RETRY_WAIT_MAX = conf.getfloat("workers", "execution_api_retry_wait_max")
 API_SSL_CERT_PATH = conf.get("api", "ssl_cert")
-API_SSL_CA_FILE_PATH = conf.get("api", "ssl_ca_file", fallback=None)
 API_TIMEOUT = conf.getfloat("workers", "execution_api_timeout")
 API_CLIENT_SSL_CERT = conf.get("api", "client_ssl_cert", fallback=None)
 API_CLIENT_SSL_KEY = conf.get("api", "client_ssl_key", fallback=None)
-API_CLIENT_USE_PUBLIC_CERTS = conf.getboolean("api", "client_use_public_certs", fallback=True)
 
 
 def _should_retry_api_request(exception: BaseException) -> bool:
     """Determine if an API request should be retried based on the exception type."""
-    if isinstance(exception, httpx2.HTTPStatusError):
+    if isinstance(exception, httpx.HTTPStatusError):
         return exception.response.status_code >= 500
 
-    return isinstance(exception, httpx2.RequestError)
+    return isinstance(exception, httpx.RequestError)
 
 
-class Client(httpx2.Client):
+class Client(httpx.Client):
     @lru_cache()
     @staticmethod
-    def _get_ssl_context_cached(ca_file: str | None = None, ca_path: str | None = None) -> ssl.SSLContext:
-        """
-        Cache SSL context to prevent memory growth from repeated context creation.
-
-        If `client_use_public_certs` is enabled, the system trust store is trusted alongside any
-        explicitly loaded CAs.
-
-        :param ca_file: Certificate Authority, optional.
-        :param ca_path: Certificate File, optional.
-        """
-        ctx: ssl.SSLContext
-        if API_CLIENT_USE_PUBLIC_CERTS:
-            log.info("Using public CAs from the system trust store")
-            ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            if ca_file:
-                ctx.load_verify_locations(ca_file)
-        else:
-            ctx = ssl.create_default_context(cafile=ca_file)
+    def _get_ssl_context_cached(ca_file: str, ca_path: str | None = None) -> ssl.SSLContext:
+        """Cache SSL context to prevent memory growth from repeated context creation."""
+        ctx = ssl.create_default_context(cafile=ca_file)
         if ca_path:
             ctx.load_verify_locations(ca_path)
         return ctx
@@ -1302,12 +1081,12 @@ class Client(httpx2.Client):
         if dry_run:
             # If dry run is requested, install a no op handler so that simple tasks can "heartbeat" using a
             # real client, but just don't make any HTTP requests
-            kwargs.setdefault("transport", httpx2.MockTransport(noop_handler))
+            kwargs.setdefault("transport", httpx.MockTransport(noop_handler))
             kwargs.setdefault("base_url", "dry-run://server")
         else:
             kwargs["base_url"] = base_url
             # Call via the class to avoid binding lru_cache wires to this instance.
-            kwargs["verify"] = type(self)._get_ssl_context_cached(API_SSL_CA_FILE_PATH, API_SSL_CERT_PATH)
+            kwargs["verify"] = type(self)._get_ssl_context_cached(certifi.where(), API_SSL_CERT_PATH)
 
             if API_CLIENT_SSL_CERT or API_CLIENT_SSL_KEY:
                 if not (API_CLIENT_SSL_CERT and API_CLIENT_SSL_KEY):
@@ -1332,29 +1111,10 @@ class Client(httpx2.Client):
             **kwargs,
         )
 
-    def _update_auth(self, response: httpx2.Response):
+    def _update_auth(self, response: httpx.Response):
         if new_token := response.headers.get("Refreshed-API-Token"):
             log.debug("Execution API issued us a refreshed Task token")
             self.auth = BearerAuth(new_token)
-
-    def request(self, *args, retry: bool = True, **kwargs):
-        """
-        Make a request using our httpx2.Client.request with a default retry policy.
-
-        Pass ``retry=False`` to bypass the default retry policy.
-        """
-        if not retry:
-            return self._request_without_retry(*args, **kwargs)
-        return self._request_with_retry(*args, **kwargs)
-
-    def _request_without_retry(self, *args, **kwargs):
-        # Set content type as convenience if not already set
-        if kwargs.get("content", None) is not None and "content-type" not in (
-            kwargs.get("headers", {}) or {}
-        ):
-            kwargs["headers"] = {"content-type": "application/json"}
-
-        return super().request(*args, **kwargs)
 
     @retry(
         retry=retry_if_exception(_should_retry_api_request),
@@ -1363,8 +1123,15 @@ class Client(httpx2.Client):
         before_sleep=_log_and_trace_retry,
         reraise=True,
     )
-    def _request_with_retry(self, *args, **kwargs):
-        return self._request_without_retry(*args, **kwargs)
+    def request(self, *args, **kwargs):
+        """Implement a convenience for httpx.Client.request with a retry layer."""
+        # Set content type as convenience if not already set
+        if kwargs.get("content", None) is not None and "content-type" not in (
+            kwargs.get("headers", {}) or {}
+        ):
+            kwargs["headers"] = {"content-type": "application/json"}
+
+        return super().request(*args, **kwargs)
 
     # We "group" or "namespace" operations by what they operate on, rather than a flat namespace with all
     # methods on one object prefixed with the object type (`.task_instances.update` rather than
@@ -1414,15 +1181,15 @@ class Client(httpx2.Client):
 
     @lru_cache()  # type: ignore[misc]
     @property
-    def task_state_store(self) -> TaskStateStoreOperations:
-        """Operations related to task store."""
-        return TaskStateStoreOperations(self)
+    def task_state(self) -> TaskStateOperations:
+        """Operations related to task state."""
+        return TaskStateOperations(self)
 
     @lru_cache()  # type: ignore[misc]
     @property
-    def asset_state_store(self) -> AssetStateStoreOperations:
-        """Operations related to asset store."""
-        return AssetStateStoreOperations(self)
+    def asset_state(self) -> AssetStateOperations:
+        """Operations related to asset state."""
+        return AssetStateOperations(self)
 
     @lru_cache()  # type: ignore[misc]
     @property
@@ -1432,29 +1199,9 @@ class Client(httpx2.Client):
 
     @lru_cache()  # type: ignore[misc]
     @property
-    def connection_tests(self) -> ConnectionTestOperations:
-        """Operations related to Connection Tests."""
-        return ConnectionTestOperations(self)
-
-    @lru_cache()  # type: ignore[misc]
-    @property
-    def callbacks(self) -> CallbackOperations:
-        """Operations related to Callbacks."""
-        return CallbackOperations(self)
-
-    @lru_cache()  # type: ignore[misc]
-    @property
     def dags(self) -> DagsOperations:
         """Operations related to DAGs."""
         return DagsOperations(self)
-
-
-def _has_json_body(response: httpx2.Response) -> bool:
-    """Check whether a response declares a JSON body."""
-    # Kept in sync with airflowctl.api.operations._has_json_body.
-    # Media types are case-insensitive and may carry parameters (RFC 9110).
-    media_type = response.headers.get("content-type", "").partition(";")[0].strip().lower()
-    return media_type == "application/json" or media_type.endswith("+json")
 
 
 # This is only used for parsing. ServerResponseError is raised instead
@@ -1465,26 +1212,25 @@ class _ErrorBody(BaseModel):
         return repr(self.detail)
 
 
-class ServerResponseError(httpx2.HTTPStatusError):
-    def __init__(self, message: str, *, request: httpx2.Request, response: httpx2.Response):
+class ServerResponseError(httpx.HTTPStatusError):
+    def __init__(self, message: str, *, request: httpx.Request, response: httpx.Response):
         super().__init__(message, request=request, response=response)
 
     detail: list[RemoteValidationError] | str | dict[str, Any] | None
 
     def __reduce__(self) -> tuple[Any, ...]:
-        # Needed because https://github.com/encode/httpx/pull/3108 never landed, and httpx2
-        # forked from httpx 0.28.1 without it.
+        # Needed because https://github.com/encode/httpx/pull/3108 isn't merged yet.
         return Exception.__new__, (type(self),) + self.args, self.__dict__
 
     @classmethod
-    def from_response(cls, response: httpx2.Response) -> ServerResponseError | None:
+    def from_response(cls, response: httpx.Response) -> ServerResponseError | None:
         if response.is_success:
             return None
         # 4xx or 5xx error?
         if not (400 <= response.status_code < 600):
             return None
 
-        if not _has_json_body(response):
+        if response.headers.get("content-type") != "application/json":
             return None
 
         detail: list[RemoteValidationError] | dict[str, Any] | None = None
@@ -1503,7 +1249,7 @@ class ServerResponseError(httpx2.HTTPStatusError):
             try:
                 detail = msgspec.json.decode(response.content)
             except Exception:
-                # Fallback to a normal httpx2 error
+                # Fallback to a normal httpx error
                 return None
             msg = "Server returned error"
 

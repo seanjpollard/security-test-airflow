@@ -18,7 +18,6 @@
  */
 import { expect } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
-
 import { BasePage } from "tests/e2e/pages/BasePage";
 
 /**
@@ -44,6 +43,17 @@ export class LoginPage extends BasePage {
     this.errorMessage = page.getByText("Invalid credentials");
   }
 
+  public async expectLoginSuccess(): Promise<void> {
+    const currentUrl: string = this.page.url();
+
+    if (currentUrl.includes("/login")) {
+      throw new Error(`Expected to be redirected after login, but still on: ${currentUrl}`);
+    }
+
+    const isLoggedIn: boolean = await this.isLoggedIn();
+
+    expect(isLoggedIn).toBe(true);
+  }
   public async login(username: string, password: string): Promise<void> {
     await this.usernameInput.fill(username);
     await this.passwordInput.fill(password);

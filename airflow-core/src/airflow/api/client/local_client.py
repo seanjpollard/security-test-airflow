@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-import httpx2
+import httpx
 
 from airflow.api.common import delete_dag, trigger_dag
 from airflow.exceptions import AirflowBadRequest, PoolNotFound
@@ -30,8 +30,8 @@ from airflow.utils.types import DagRunTriggeredByType
 class Client:
     """Local API client implementation."""
 
-    def __init__(self, auth=None, session: httpx2.Client | None = None):
-        self._session: httpx2.Client = session or httpx2.Client()
+    def __init__(self, auth=None, session: httpx.Client | None = None):
+        self._session: httpx.Client = session or httpx.Client()
         if auth:
             self._session.auth = auth
 
@@ -78,12 +78,12 @@ class Client:
         pool = Pool.get_pool(pool_name=name)
         if not pool:
             raise PoolNotFound(f"Pool {name} not found")
-        return pool.pool, pool.slots, pool.description, pool.include_deferred, pool.team_name
+        return pool.pool, pool.slots, pool.description, pool.include_deferred
 
     def get_pools(self):
-        return [(p.pool, p.slots, p.description, p.include_deferred, p.team_name) for p in Pool.get_pools()]
+        return [(p.pool, p.slots, p.description, p.include_deferred) for p in Pool.get_pools()]
 
-    def create_pool(self, name, slots, description, include_deferred, team_name=None):
+    def create_pool(self, name, slots, description, include_deferred):
         if not (name and name.strip()):
             raise AirflowBadRequest("Pool name shouldn't be empty")
         pool_name_length = Pool.pool.property.columns[0].type.length
@@ -94,13 +94,9 @@ class Client:
         except ValueError:
             raise AirflowBadRequest(f"Invalid value for `slots`: {slots}")
         pool = Pool.create_or_update_pool(
-            name=name,
-            slots=slots,
-            description=description,
-            include_deferred=include_deferred,
-            team_name=team_name,
+            name=name, slots=slots, description=description, include_deferred=include_deferred
         )
-        return pool.pool, pool.slots, pool.description, pool.team_name
+        return pool.pool, pool.slots, pool.description
 
     def delete_pool(self, name):
         pool = Pool.delete_pool(name=name)

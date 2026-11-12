@@ -57,14 +57,10 @@ from airflow_breeze.utils.path_utils import (
     BREEZE_ROOT_PATH,
     BREEZE_SOURCES_PATH,
     SCRIPTS_CI_DOCKER_COMPOSE_LOCAL_YAML_PATH,
-    SUPPRESS_WORKTREE_ISOLATION_FILE,
-    WORKTREE_ISOLATION_ENV,
     get_installation_airflow_sources,
     get_installation_sources_config_metadata_hash,
-    get_shared_build_cache_path,
     get_used_airflow_sources,
     get_used_sources_setup_metadata_hash,
-    is_worktree_isolation_enabled,
 )
 from airflow_breeze.utils.recording import generating_command_images
 from airflow_breeze.utils.reinstall import reinstall_breeze, warn_non_editable
@@ -120,7 +116,7 @@ def autocomplete(force: bool):
     """
     # Determine if the shell is bash/zsh/powershell. It helps to build the autocomplete path
     detected_shell = os.environ.get("SHELL")
-    detected_shell = None if detected_shell is None else Path(detected_shell).name
+    detected_shell = None if detected_shell is None else detected_shell.split(os.sep)[-1]
     if detected_shell not in ["bash", "zsh", "fish"]:
         console_print(f"\n[error] The shell {detected_shell} is not supported for autocomplete![/]\n")
         sys.exit(1)
@@ -201,12 +197,6 @@ def version():
     help="Enable/disable Colour mode (useful for colour blind-friendly communication).",
     default=None,
 )
-@click.option(
-    "--worktree-isolation/--no-worktree-isolation",
-    help="Enable/disable a separate Docker Compose project for each git worktree of this checkout. "
-    f"Applies to every worktree; the {WORKTREE_ISOLATION_ENV} environment variable overrides it.",
-    default=None,
-)
 def change_config(
     python: str,
     backend: str,
@@ -218,10 +208,9 @@ def change_config(
     cheatsheet: bool,
     asciiart: bool,
     colour: bool,
-    worktree_isolation: bool | None,
 ):
     """
-    Show/update configuration (Python, Backend, Cheatsheet, ASCIIART, worktree isolation).
+    Show/update configuration (Python, Backend, Cheatsheet, ASCIIART).
     """
     asciiart_file = "suppress_asciiart"
     cheatsheet_file = "suppress_cheatsheet"
@@ -248,16 +237,6 @@ def change_config(
             touch_cache_file(colour_file)
             console_print("[info]Disable Colour[/]")
 
-    if worktree_isolation is not None:
-        suppress_isolation_file = get_shared_build_cache_path() / SUPPRESS_WORKTREE_ISOLATION_FILE
-        if worktree_isolation:
-            suppress_isolation_file.unlink(missing_ok=True)
-            console_print("[info]Enable worktree isolation[/]")
-        else:
-            suppress_isolation_file.parent.mkdir(parents=True, exist_ok=True)
-            suppress_isolation_file.touch()
-            console_print("[info]Disable worktree isolation[/]")
-
     def get_suppress_status(file: str):
         return "disabled" if check_if_cache_exists(file) else "enabled"
 
@@ -276,11 +255,6 @@ def change_config(
     console_print(f"[info]* Cheatsheet: {get_suppress_status(cheatsheet_file)}[/]")
     console_print()
     console_print(f"[info]* Colour: {get_suppress_status(colour_file)}[/]")
-    console_print()
-    isolation_status = "enabled" if is_worktree_isolation_enabled() else "disabled"
-    if os.environ.get(WORKTREE_ISOLATION_ENV):
-        isolation_status += f" (set by {WORKTREE_ISOLATION_ENV})"
-    console_print(f"[info]* Worktree isolation: {isolation_status}[/]")
     console_print()
 
 

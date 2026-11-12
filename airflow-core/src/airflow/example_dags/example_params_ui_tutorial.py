@@ -23,22 +23,11 @@ to the DAG and which are used to render a trigger form.
 
 from __future__ import annotations
 
-import configparser
 import datetime
 import json
 from pathlib import Path
 
 from airflow.sdk import DAG, Param, task
-
-
-def _get_script_interfaces_from_config() -> list[str]:
-    config = configparser.ConfigParser()
-    config.read(Path(__file__).with_name("example_params_ui_interfaces.ini"))
-
-    return [section for section in config.sections() if config[section].get("TYPE") == "Script"]
-
-
-SCRIPT_INTERFACES = _get_script_interfaces_from_config()
 
 with DAG(
     dag_id=Path(__file__).stem,
@@ -86,19 +75,6 @@ with DAG(
             enum=[f"value {i}" for i in range(16, 64)],
             section="Typed parameters with Param object",
         ),
-        "script_interface": Param(
-            SCRIPT_INTERFACES[0],
-            description="Choices are generated from example_params_ui_interfaces.ini at Dag parse time.",
-            schema={
-                "type": "string",
-                "title": "Script interface",
-                "enum": SCRIPT_INTERFACES,
-                "values_display": {
-                    name: name.replace("Interface", "Interface ") for name in SCRIPT_INTERFACES
-                },
-                "section": "Typed parameters with Param object",
-            },
-        ),
         # [END section_1]
         # Boolean as proper parameter with description
         "bool": Param(
@@ -115,15 +91,6 @@ with DAG(
             format="date-time",
             title="Date-Time Picker",
             description="Please select a date and time, use the button on the left for a pop-up calendar.",
-            section="Typed parameters with Param object",
-        ),
-        # Durations are also Supported support for ISO 8601
-        "duration": Param(
-            "PT15M",
-            type="string",
-            format="duration",
-            title="Duration definitions",
-            description="Please enter a duration in ISO 8601 format (e.g. PT15M, PT2H, P1D).",
             section="Typed parameters with Param object",
         ),
         "date": Param(
@@ -268,46 +235,6 @@ with DAG(
             },
             section="Special advanced stuff with form fields",
         ),
-        # Multi-type parameters
-        "batch_size": Param(
-            1000,
-            type=["integer", "string"],
-            title="Batch size (int or 'all')",
-            description_md=(
-                "Number of rows per batch as an integer, **or** the string ``all`` to process "
-                "everything in one pass. Try `500` → integer, `all` → string."
-            ),
-            section="Multi-type parameters",
-        ),
-        "notify": Param(
-            True,
-            type=["boolean", "string"],
-            title="Notification target",
-            description=(
-                "Set true/false to toggle the default recipient, or enter an email address "
-                "(string) to override it."
-            ),
-            section="Multi-type parameters",
-        ),
-        "pipeline_config": Param(
-            "nightly-export",
-            type=["string", "object"],
-            title="Pipeline (name or full config)",
-            description_md=(
-                "Pipeline shorthand name, or a JSON object with the full config, e.g. "
-                '`{"name": "nightly", "retries": 2}`'
-            ),
-            section="Multi-type parameters",
-        ),
-        "priority": Param(
-            5,
-            type=["integer", "string"],
-            title="Priority (number or label)",
-            description=(
-                "Numeric priority as an integer, or one of the named levels: 'low', 'normal', 'high'."
-            ),
-            section="Multi-type parameters",
-        ),
         # If you want to have static parameters which are always passed and not editable by the user
         # then you can use the JSON schema option of passing constant values. These parameters
         # will not be displayed but passed to the DAG
@@ -316,7 +243,8 @@ with DAG(
 ) as dag:
     # [START section_3]
     @task(task_display_name="Show used parameters")
-    def show_params(params=None) -> None:
+    def show_params(**kwargs) -> None:
+        params = kwargs["params"]
         print(f"This DAG was triggered with the following parameters:\n\n{json.dumps(params, indent=4)}\n")
 
     show_params()

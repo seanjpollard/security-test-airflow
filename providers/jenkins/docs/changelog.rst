@@ -27,42 +27,6 @@
 Changelog
 ---------
 
-4.2.7
-.....
-
-Misc
-~~~~
-
-* ``Drop support for Python 3.10 (#74157)``
-* ``Adopt flit 4 as the provider distribution build backend (#71186)``
-
-Doc-only
-~~~~~~~~
-
-* ``Update provider READMEs for the Python 3.11 baseline (#74158)``
-* ``Align Jenkins dependency documentation with its package metadata (#68991)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-   * ``[main] Upgrade important CI environment (#73629)``
-   * ``Revert "[main] Upgrade important CI environment (#73308)" (#73621)``
-   * ``[main] Upgrade important CI environment (#73308)``
-   * ``Prepare providers release 2026-08-18 (#71794)``
-   * ``Update changelog wording (#71161)``
-
-4.2.6
-.....
-
-Misc
-~~~~
-
-* ``Add explicit [tool.flit.sdist] sections to flit-based pyproject.tomls (#65861)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-   * ``Fix stale system test documentation links (#65071)``
-
-
 4.2.5
 .....
 
@@ -280,7 +244,7 @@ Misc
 .....
 
 .. note::
-  This version contains no code changes. It was released to replace a previous version that was yanked due to a packaging issue.
+  This version has no code changes. It's released due to yank of previous version due to packaging issues.
 
 4.0.1
 .....

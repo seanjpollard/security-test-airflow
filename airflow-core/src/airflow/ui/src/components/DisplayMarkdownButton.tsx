@@ -16,11 +16,11 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState, type ReactElement } from "react";
+import { Box, Heading, IconButton, VStack } from "@chakra-ui/react";
+import { type ReactElement, useState } from "react";
 
-import { Heading, VStack, type ButtonProps } from "@chakra-ui/react";
-
-import { Dialog, IconButton, MARKDOWN_DIALOG_STORAGE_KEY, ResizableWrapper } from "src/system-components";
+import { Dialog, Tooltip } from "src/components/ui";
+import { ResizableWrapper, MARKDOWN_DIALOG_STORAGE_KEY } from "src/components/ui/ResizableWrapper";
 
 import ReactMarkdown from "./ReactMarkdown";
 
@@ -29,20 +29,29 @@ const DisplayMarkdownButton = ({
   icon,
   mdContent,
   text,
-  ...rest
 }: {
   readonly header: string;
   readonly icon?: ReactElement;
   readonly mdContent: string;
   readonly text: string;
-} & ButtonProps) => {
+}) => {
   const [isDocsOpen, setIsDocsOpen] = useState(false);
 
   return (
-    <div>
-      <IconButton {...rest} data-testid="markdown-button" label={text} onClick={() => setIsDocsOpen(true)}>
-        {icon}
-      </IconButton>
+    <Box>
+      <Tooltip content={text}>
+        <IconButton
+          aria-label={text}
+          colorPalette="brand"
+          data-testid="markdown-button"
+          onClick={() => setIsDocsOpen(true)}
+          size="md"
+          title={text}
+          variant="ghost"
+        >
+          {icon}
+        </IconButton>
+      </Tooltip>
       <Dialog.Root
         data-testid="markdown-modal"
         onOpenChange={() => setIsDocsOpen(false)}
@@ -51,7 +60,7 @@ const DisplayMarkdownButton = ({
       >
         <Dialog.Content backdrop maxHeight="none" maxWidth="none" padding={0} width="auto">
           <ResizableWrapper storageKey={MARKDOWN_DIALOG_STORAGE_KEY}>
-            <Dialog.Header alignItems="center" flexShrink={0} justifyContent="space-between">
+            <Dialog.Header bg="brand.muted" flexShrink={0}>
               <Heading size="xl">{header}</Heading>
               <Dialog.CloseTrigger closeButtonProps={{ size: "xl" }} />
             </Dialog.Header>
@@ -61,7 +70,7 @@ const DisplayMarkdownButton = ({
           </ResizableWrapper>
         </Dialog.Content>
       </Dialog.Root>
-    </div>
+    </Box>
   );
 };
 

@@ -22,23 +22,9 @@ from collections.abc import Iterable
 from enum import Enum
 from functools import singledispatch
 from traceback import format_exception
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import (
-    JSON,
-    ForeignKey,
-    Index,
-    Integer,
-    String,
-    Text,
-    and_,
-    case,
-    delete,
-    func,
-    or_,
-    select,
-    update,
-)
+from sqlalchemy import Integer, String, Text, delete, func, or_, select, update
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, selectinload
 from sqlalchemy.sql.functions import coalesce
@@ -47,17 +33,18 @@ from airflow._shared.timezones import timezone
 from airflow.assets.manager import AssetManager
 from airflow.configuration import conf
 from airflow.models.asset import AssetWatcherModel
-from airflow.models.base import Base, StringID
+from airflow.models.base import Base
 from airflow.models.taskinstance import TaskInstance
-from airflow.serialization.enums import stringify_encoding_keys
-from airflow.triggers.base import AssetTriggerEvent, BaseTaskEndEvent
+from airflow.serialization.enums import stringify_encoding_keys as _stringify_encoding_keys
+from airflow.triggers.base import BaseTaskEndEvent
+from airflow.utils.retries import run_with_db_retries
 from airflow.utils.session import NEW_SESSION, provide_session
-from airflow.utils.sqlalchemy import UtcDateTime, with_row_locks
+from airflow.utils.sqlalchemy import UtcDateTime, get_dialect_name, with_row_locks
 from airflow.utils.state import TaskInstanceState
 
 if TYPE_CHECKING:
     from sqlalchemy import Row
-    from sqlalchemy.sql import ColumnElement, Select
+    from sqlalchemy.sql import Select
 
     from airflow.triggers.base import BaseTrigger, TriggerEvent
 
@@ -70,48 +57,6 @@ Internal use only.
 """
 
 log = logging.getLogger(__name__)
-
-
-class RecordedFailure(NamedTuple):
-    """
-    A trigger failure, as recorded on its trigger row.
-
-    :meta private:
-    """
-
-    consecutive_failures: int
-    # Exception type and message only, already redacted and truncated
-    error: str
-
-
-class TriggerKind(str, Enum):
-    """What a trigger runs for, worked out from its owner rather than stored."""
-
-    TASK = "task"
-    CALLBACK = "callback"
-    ASSET_WATCHER = "asset_watcher"
-
-
-class TriggerStatus(str, Enum):
-    """How a trigger is doing, worked out the same way for every kind from its row and its triggerer's heartbeat."""
-
-    # pending: not picked up yet. running: on a live triggerer and not failed since it last recovered.
-    # failing: on a live triggerer and failed since it last recovered. orphaned: its triggerer stopped
-    # sending heartbeats; another triggerer will take it.
-    PENDING = "pending"
-    RUNNING = "running"
-    FAILING = "failing"
-    ORPHANED = "orphaned"
-
-
-def get_triggerer_alive_clauses(health_check_threshold: float) -> tuple[ColumnElement[bool], ...]:
-    """Conditions under which a triggerer job still owns its triggers; otherwise any triggerer may take them."""
-    from airflow.jobs.job import Job  # To avoid circular import
-
-    return (
-        Job.end_date.is_(None),
-        Job.latest_heartbeat > timezone.utcnow() - datetime.timedelta(seconds=health_check_threshold),
-    )
 
 
 class TriggerFailureReason(str, Enum):
@@ -147,7 +92,6 @@ class Trigger(Base):
     """
 
     __tablename__ = "trigger"
-    __table_args__ = (Index("idx_trigger_triggerer_queue_id", "triggerer_id", "queue", "id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     classpath: Mapped[str] = mapped_column(String(1000), nullable=False)
@@ -155,29 +99,6 @@ class Trigger(Base):
     created_date: Mapped[datetime.datetime] = mapped_column(UtcDateTime, nullable=False)
     triggerer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     queue: Mapped[str | None] = mapped_column(String(256), nullable=True)
-
-    # What the triggerer records for every trigger, whatever its kind, and only when it changes: a failure,
-    # a recovery (clears the count and its start; last_failed_at and last_error survive it) or an event.
-    consecutive_failures: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    first_failed_at: Mapped[datetime.datetime | None] = mapped_column(UtcDateTime, nullable=True)
-    last_failed_at: Mapped[datetime.datetime | None] = mapped_column(UtcDateTime, nullable=True)
-    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    last_event_at: Mapped[datetime.datetime | None] = mapped_column(UtcDateTime, nullable=True)
-
-    # Who the trigger runs for, written once by whoever creates it: ``dag_id`` is the owner's Dag and
-    # ``owner_ref`` the owner within it, ``{"ti_id": ...}`` or ``{"callback_id": ...}``. Both stay empty for
-    # asset watchers, whose owners are the asset_watcher rows, shared and changing as Dags are parsed.
-    dag_id: Mapped[str | None] = mapped_column(StringID(), nullable=True)
-    owner_ref: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
-
-    # Denormalized from dag_bundle_team to keep the triggerer's ~1s polling queries join-free,
-    # especially since it's eventually consistent and trigger rows are ephemeral.
-    # Without this, filtering by team requires 2-3 joins depending on trigger type.
-    # Performance testing confirmed the denormalized column avoids measurable overhead in the
-    # triggerer loop under load.
-    team_name: Mapped[str | None] = mapped_column(
-        String(50), ForeignKey("team.name", ondelete="SET NULL"), nullable=True, index=True
-    )
 
     triggerer_job = relationship(
         "Job",
@@ -201,19 +122,12 @@ class Trigger(Base):
         kwargs: dict[str, Any],
         created_date: datetime.datetime | None = None,
         queue: str | None = None,
-        team_name: str | None = None,
-        *,
-        dag_id: str | None = None,
-        owner_ref: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.classpath = classpath
         self.encrypted_kwargs = self.encrypt_kwargs(kwargs)
         self.created_date = created_date or timezone.utcnow()
         self.queue = queue
-        self.team_name = team_name
-        self.dag_id = dag_id
-        self.owner_ref = owner_ref
 
     @property
     def kwargs(self) -> dict[str, Any]:
@@ -228,16 +142,12 @@ class Trigger(Base):
     @staticmethod
     def encrypt_kwargs(kwargs: dict[str, Any]) -> str:
         """Encrypt the kwargs of the trigger."""
-        from airflow.sdk.serde import serialize
-
-        return Trigger._encrypt_serialized_kwargs(serialize(stringify_encoding_keys(kwargs)))
-
-    @staticmethod
-    def _encrypt_serialized_kwargs(serialized_kwargs: dict[str, Any]) -> str:
         import json
 
         from airflow.models.crypto import get_fernet
+        from airflow.sdk.serde import serialize
 
+        serialized_kwargs = serialize(_stringify_encoding_keys(kwargs))
         return get_fernet().encrypt(json.dumps(serialized_kwargs).encode("utf-8")).decode("utf-8")
 
     @staticmethod
@@ -279,31 +189,11 @@ class Trigger(Base):
     def from_object(cls, trigger: BaseTrigger) -> Trigger:
         """Alternative constructor that creates a trigger row based directly off of a Trigger object."""
         classpath, kwargs = trigger.serialize()
-        return cls(classpath=classpath, kwargs=kwargs, queue=trigger.queue)
-
-    @classmethod
-    def from_serialized_kwargs(
-        cls,
-        classpath: str,
-        serialized_kwargs: dict[str, Any],
-        queue: str | None = None,
-        *,
-        dag_id: str | None = None,
-        owner_ref: dict[str, Any] | None = None,
-    ) -> Trigger:
-        """
-        Create a trigger row from kwargs that are already in their serde-encoded form.
-
-        The kwargs are stored exactly as given and decoded by the triggerer when it creates
-        the trigger, the same as kwargs stored by :meth:`from_object`.
-        """
-        trigger = cls(classpath=classpath, kwargs={}, queue=queue, dag_id=dag_id, owner_ref=owner_ref)
-        trigger.encrypted_kwargs = cls._encrypt_serialized_kwargs(serialized_kwargs)
-        return trigger
+        return cls(classpath=classpath, kwargs=kwargs)
 
     @classmethod
     @provide_session
-    def bulk_fetch(cls, ids: Iterable[int], *, session: Session = NEW_SESSION) -> dict[int, Trigger]:
+    def bulk_fetch(cls, ids: Iterable[int], session: Session = NEW_SESSION) -> dict[int, Trigger]:
         """Fetch all the Triggers by ID and return a dict mapping ID -> Trigger instance."""
         stmt = (
             select(cls)
@@ -318,7 +208,7 @@ class Trigger(Base):
 
     @classmethod
     @provide_session
-    def fetch_trigger_ids_with_non_task_associations(cls, *, session: Session = NEW_SESSION) -> set[int]:
+    def fetch_trigger_ids_with_non_task_associations(cls, session: Session = NEW_SESSION) -> set[int]:
         """Fetch all trigger IDs actively associated with non-task entities like assets and callbacks."""
         from airflow.models.callback import Callback  # to avoid circular import: Callback -> Trigger
 
@@ -330,48 +220,46 @@ class Trigger(Base):
 
     @classmethod
     @provide_session
-    def clean_unused(cls, *, session: Session = NEW_SESSION) -> None:
+    def clean_unused(cls, session: Session = NEW_SESSION) -> None:
         """
-        Delete up to one batch of triggers that have no dependent tasks, assets, or callbacks.
+        Delete all triggers that have no tasks dependent on them and are not associated to an asset.
 
         Triggers have a one-to-many relationship to task instances, so we need to clean those up first.
-        Afterward we can drop unreferenced triggers; later triggerer loops drain any remaining batches.
-
-        Database errors are not retried; to retry, run the call again in a new transaction.
+        Afterward we can drop the triggers not referenced by anyone.
         """
-        batch_size = conf.getint("triggerer", "unreferenced_triggers_cleanup_batch_size", fallback=500)
-        if batch_size <= 0:
-            raise ValueError("[triggerer] unreferenced_triggers_cleanup_batch_size must be at least 1")
-
         # Update all task instances with trigger IDs that are not DEFERRED to remove them
-        session.execute(
-            update(TaskInstance)
-            .where(
-                TaskInstance.state != TaskInstanceState.DEFERRED,
-                TaskInstance.trigger_id.is_not(None),
+        for attempt in run_with_db_retries():
+            with attempt:
+                session.execute(
+                    update(TaskInstance)
+                    .where(
+                        TaskInstance.state != TaskInstanceState.DEFERRED, TaskInstance.trigger_id.is_not(None)
+                    )
+                    .values(trigger_id=None)
+                )
+
+        # Get all triggers that have no task instances, assets, or callbacks depending on them and delete them
+        ids = (
+            select(cls.id)
+            .where(~cls.assets.any(), ~cls.callback.has())
+            .join(TaskInstance, cls.id == TaskInstance.trigger_id, isouter=True)
+            .group_by(cls.id)
+            .having(func.count(TaskInstance.trigger_id) == 0)
+        )
+        if get_dialect_name(session) == "mysql":
+            # MySQL doesn't support DELETE with JOIN, so we need to do it in two steps
+            ids_list = list(session.scalars(ids).all())
+            session.execute(
+                delete(Trigger).where(Trigger.id.in_(ids_list)).execution_options(synchronize_session=False)
             )
-            .values(trigger_id=None)
-        )
-        cls._delete_unused_batch(batch_size, session=session)
-
-    @classmethod
-    def _delete_unused_batch(cls, batch_size: int, *, session: Session) -> None:
-        unreferenced = (~cls.assets.any(), ~cls.callback.has(), ~cls.task_instance.has())
-        ids = select(cls.id).where(*unreferenced).order_by(cls.id).limit(batch_size)
-        ids = with_row_locks(ids, session, of=cls, skip_locked=True, key_share=False)
-        ids_list = list(session.scalars(ids))
-        if not ids_list:
-            return
-
-        session.execute(
-            delete(cls)
-            .where(cls.id.in_(ids_list), *unreferenced)
-            .execution_options(synchronize_session=False)
-        )
+        else:
+            session.execute(
+                delete(Trigger).where(Trigger.id.in_(ids)).execution_options(synchronize_session=False)
+            )
 
     @classmethod
     @provide_session
-    def submit_event(cls, trigger_id, event: TriggerEvent, *, session: Session = NEW_SESSION) -> None:
+    def submit_event(cls, trigger_id, event: TriggerEvent, session: Session = NEW_SESSION) -> None:
         """
         Fire an event.
 
@@ -387,11 +275,7 @@ class Trigger(Base):
             handle_event_submit(event, task_instance=task_instance, session=session)
 
         # Send an event to assets
-        trigger = session.scalars(
-            select(cls)
-            .where(cls.id == trigger_id)
-            .options(selectinload(cls.asset_watchers).selectinload(AssetWatcherModel.asset))
-        ).one_or_none()
+        trigger = session.scalars(select(cls).where(cls.id == trigger_id)).one_or_none()
         if trigger is None:
             # Already deleted for some reason
             return
@@ -399,33 +283,16 @@ class Trigger(Base):
             AssetManager.register_asset_change(
                 asset=asset.to_serialized(),
                 extra={"from_trigger": True, "payload": event.payload},
-                partition_key=event.partition_key if isinstance(event, AssetTriggerEvent) else None,
                 session=session,
             )
         if trigger.callback:
             trigger.callback.handle_event(event, session)
-        # Recorded for every kind of trigger; written with the rest of this transaction.
-        trigger.last_event_at = timezone.utcnow()
 
     @classmethod
     @provide_session
-    def submit_failure(
-        cls,
-        trigger_id,
-        exc=None,
-        *,
-        triggerer_id: int | None = None,
-        failure: RecordedFailure | None = None,
-        session: Session = NEW_SESSION,
-    ) -> None:
+    def submit_failure(cls, trigger_id, exc=None, session: Session = NEW_SESSION) -> None:
         """
         When a trigger has failed unexpectedly, mark everything that depended on it as failed.
-
-        With ``triggerer_id``, only act while that triggerer still owns the trigger: a reassigned
-        trigger is being run elsewhere, so a failure from its previous owner must not fail the task.
-
-        ``failure`` is recorded on the trigger row for every kind of trigger, so the failure shows the same
-        way whether a task depended on the trigger or not (an asset watcher has no task to fail).
 
         Notably, we have to actually run the failure code from a worker as it may
         have linked callbacks, so hilariously we have to re-schedule the task
@@ -435,12 +302,11 @@ class Trigger(Base):
         the runtime code understands as immediate-fail, and pack the error into
         next_kwargs.
         """
-        query = select(TaskInstance).where(
-            TaskInstance.trigger_id == trigger_id, TaskInstance.state == TaskInstanceState.DEFERRED
-        )
-        if triggerer_id is not None:
-            query = query.join(cls, cls.id == TaskInstance.trigger_id).where(cls.triggerer_id == triggerer_id)
-        for task_instance in session.scalars(query):
+        for task_instance in session.scalars(
+            select(TaskInstance).where(
+                TaskInstance.trigger_id == trigger_id, TaskInstance.state == TaskInstanceState.DEFERRED
+            )
+        ):
             # Add the error and set the next_method to the fail state
             if isinstance(exc, BaseException):
                 traceback = format_exception(type(exc), exc, exc.__traceback__)
@@ -457,131 +323,10 @@ class Trigger(Base):
             task_instance.state = TaskInstanceState.SCHEDULED
             task_instance.scheduled_dttm = timezone.utcnow()
 
-        if failure is not None:
-            now = timezone.utcnow()
-            stmt = update(cls).where(cls.id == trigger_id)
-            if triggerer_id is not None:
-                stmt = stmt.where(cls.triggerer_id == triggerer_id)
-            session.execute(
-                stmt.values(
-                    consecutive_failures=failure.consecutive_failures,
-                    first_failed_at=now
-                    if failure.consecutive_failures == 1
-                    else coalesce(cls.first_failed_at, now),
-                    last_failed_at=now,
-                    last_error=failure.error,
-                ).execution_options(synchronize_session=False)
-            )
-
-    @classmethod
-    @provide_session
-    def clear_recorded_failures(
-        cls, trigger_ids: Iterable[int], *, triggerer_id: int | None = None, session: Session = NEW_SESSION
-    ) -> None:
-        """Record that these triggers recovered; their last error is kept."""
-        stmt = update(cls).where(cls.id.in_(trigger_ids), cls.consecutive_failures.is_not(None))
-        if triggerer_id is not None:
-            stmt = stmt.where(cls.triggerer_id == triggerer_id)
-        session.execute(
-            stmt.values(consecutive_failures=None, first_failed_at=None).execution_options(
-                synchronize_session=False
-            )
-        )
-
-    @property
-    def kind(self) -> TriggerKind | None:
-        """What the trigger runs for, from the owner recorded on it or its watchers; keep in step with :meth:`kind_expression`."""
-        owner_ref = self.owner_ref or {}
-        if "ti_id" in owner_ref:
-            return TriggerKind.TASK
-        if "callback_id" in owner_ref:
-            return TriggerKind.CALLBACK
-        if self.asset_watchers:
-            return TriggerKind.ASSET_WATCHER
-        return None
-
-    @classmethod
-    def kind_expression(cls) -> ColumnElement[str | None]:
-        """Return the SQL for :attr:`kind`."""
-        return case(
-            (cls.owner_ref["ti_id"].as_string().is_not(None), TriggerKind.TASK.value),
-            (cls.owner_ref["callback_id"].as_string().is_not(None), TriggerKind.CALLBACK.value),
-            (cls.id.in_(select(AssetWatcherModel.trigger_id)), TriggerKind.ASSET_WATCHER.value),
-            else_=None,
-        )
-
-    @classmethod
-    def owner_still_refers_expression(cls) -> ColumnElement[bool]:
-        """
-        Whether the recorded owner still refers to the trigger.
-
-        A trigger it no longer refers to (a task that resumed or failed, a finished callback, a removed
-        watcher) is deleted on the triggerer's next cleanup.
-        """
-        from airflow.models.callback import Callback  # to avoid circular import: Callback -> Trigger
-
-        # Uncorrelated IN subqueries: Postgres plans each once, where a correlated EXISTS is costed per row
-        # and sets off its JIT on large tables.
-        return or_(
-            and_(
-                cls.owner_ref["ti_id"].as_string().is_not(None),
-                cls.id.in_(select(TaskInstance.trigger_id).where(TaskInstance.trigger_id.is_not(None))),
-            ),
-            and_(
-                cls.owner_ref["callback_id"].as_string().is_not(None),
-                cls.id.in_(select(Callback.trigger_id).where(Callback.trigger_id.is_not(None))),
-            ),
-            cls.id.in_(select(AssetWatcherModel.trigger_id)),
-        )
-
-    @classmethod
-    def status_expression(cls) -> ColumnElement[str]:
-        """
-        Return the SQL for :class:`TriggerStatus`; needs ``Trigger.triggerer_job`` outer-joined.
-
-        Keep in step with :meth:`status`.
-        """
-        threshold = conf.getfloat("triggerer", "triggerer_health_check_threshold")
-        # Positive conditions only: a NULL from the outer join (job row gone, no heartbeat) is not true, so
-        # it falls through to "orphaned" as it does in Python.
-        alive = and_(*get_triggerer_alive_clauses(threshold))
-        return case(
-            (cls.triggerer_id.is_(None), TriggerStatus.PENDING.value),
-            (and_(alive, cls.consecutive_failures > 0), TriggerStatus.FAILING.value),
-            (alive, TriggerStatus.RUNNING.value),
-            else_=TriggerStatus.ORPHANED.value,
-        )
-
-    def is_owner_alive(self) -> bool:
-        """Whether the triggerer that owns this trigger still holds it (see :meth:`assign_unassigned`)."""
-        job = self.triggerer_job
-        threshold = conf.getfloat("triggerer", "triggerer_health_check_threshold")
-        return (
-            job is not None
-            and job.end_date is None
-            and job.latest_heartbeat is not None
-            and job.latest_heartbeat > timezone.utcnow() - datetime.timedelta(seconds=threshold)
-        )
-
-    def status(self) -> TriggerStatus:
-        """Return the :class:`TriggerStatus` of this trigger; needs ``triggerer_job`` loaded."""
-        if self.triggerer_id is None:
-            return TriggerStatus.PENDING
-        if not self.is_owner_alive():
-            return TriggerStatus.ORPHANED
-        if self.consecutive_failures:
-            return TriggerStatus.FAILING
-        return TriggerStatus.RUNNING
-
     @classmethod
     @provide_session
     def ids_for_triggerer(
-        cls,
-        triggerer_id,
-        queues: set[str] | None = None,
-        team_name: str | None = None,
-        *,
-        session: Session = NEW_SESSION,
+        cls, triggerer_id, queues: set[str] | None = None, session: Session = NEW_SESSION
     ) -> list[int]:
         """Retrieve a list of trigger ids."""
         query = select(cls.id).where(cls.triggerer_id == triggerer_id)
@@ -593,24 +338,7 @@ class Trigger(Base):
         else:
             query = query.filter(cls.queue.is_(None))
 
-        # Check config instead of team_name: if multi-team is disabled after triggers were
-        # created with a team, those triggers must still be picked up instead of being orphaned.
-        if conf.getboolean("core", "multi_team"):
-            if team_name:
-                query = query.filter(cls.team_name == team_name)
-            else:
-                query = query.filter(cls.team_name.is_(None))
-
         return list(session.scalars(query).all())
-
-    @classmethod
-    @provide_session
-    def fetch_assignments(
-        cls, ids: Iterable[int], *, session: Session = NEW_SESSION
-    ) -> dict[int, int | None]:
-        """Map each of ``ids`` that still has a trigger row to its current ``triggerer_id``."""
-        rows = session.execute(select(cls.id, cls.triggerer_id).where(cls.id.in_(ids)))
-        return {trigger_id: triggerer_id for trigger_id, triggerer_id in rows}
 
     @classmethod
     @provide_session
@@ -620,8 +348,6 @@ class Trigger(Base):
         capacity,
         health_check_threshold,
         queues: set[str] | None = None,
-        team_name: str | None = None,
-        *,
         session: Session = NEW_SESSION,
     ) -> None:
         """
@@ -645,7 +371,8 @@ class Trigger(Base):
             return
 
         alive_triggerer_ids = select(Job.id).where(
-            *get_triggerer_alive_clauses(health_check_threshold),
+            Job.end_date.is_(None),
+            Job.latest_heartbeat > timezone.utcnow() - datetime.timedelta(seconds=health_check_threshold),
             Job.job_type == "TriggererJob",
         )
 
@@ -655,7 +382,6 @@ class Trigger(Base):
             capacity=capacity,
             alive_triggerer_ids=alive_triggerer_ids,
             queues=queues,
-            team_name=team_name,
             session=session,
         )
         if trigger_ids_query:
@@ -675,7 +401,6 @@ class Trigger(Base):
         alive_triggerer_ids: list[int] | Select,
         queues: set[str] | None,
         session: Session,
-        team_name: str | None = None,
     ):
         """
         Get sorted triggers based on capacity and alive triggerer ids.
@@ -684,7 +409,6 @@ class Trigger(Base):
         :param alive_triggerer_ids: The alive triggerer ids as a list or a select query.
         :param queues: The optional set of trigger queues to filter triggers by.
         :param session: The database session.
-        :param team_name: The team to filter triggers for (None = global triggerer).
         """
         from airflow.models.callback import Callback  # to avoid circular import: Callback -> Trigger
 
@@ -696,7 +420,6 @@ class Trigger(Base):
             # Callback triggers
             select(cls.id)
             .join(Callback, isouter=False)
-            .where(or_(cls.triggerer_id.is_(None), cls.triggerer_id.not_in(alive_triggerer_ids)))
             .order_by(Callback.priority_weight.desc(), cls.created_date),
             # Task Instance triggers
             select(cls.id)
@@ -731,71 +454,10 @@ class Trigger(Base):
             else:
                 filtered_query = query.filter(cls.queue.is_(None))
 
-            # Check config instead of team_name: if multi-team is disabled after triggers were
-            # created with a team, those triggers must still be picked up instead of being orphaned.
-            if conf.getboolean("core", "multi_team"):
-                if team_name:
-                    filtered_query = filtered_query.filter(cls.team_name == team_name)
-                else:
-                    filtered_query = filtered_query.filter(cls.team_name.is_(None))
-
             locked_query = with_row_locks(filtered_query.limit(remaining_capacity), session, skip_locked=True)
             result.extend(session.execute(locked_query).all())
 
         return result
-
-
-def _split_stored_next_kwargs(next_kwargs_raw: Any) -> tuple[dict[str, Any], bool]:
-    """
-    Return the top-level mapping of the stored ``next_kwargs``, with its values still encoded.
-
-    The values are deliberately left encoded. Only the worker resuming the task needs them as
-    objects; decoding them here would reconstruct task-supplied values in the scheduler, the
-    triggerer and the API server for nothing, since all the caller does is add the event.
-
-    Two encodings are accepted: serde, which stores a dict as a plain dict of encoded values, and
-    the legacy ``{"__type": "dict", "__var": {...}}`` form of rows written before the switch to
-    serde, which a deferred task may still carry across an upgrade.
-
-    :return: The encoded mapping, and whether it came from the legacy form.
-    :raise ValueError: The stored payload is not an encoded dict.
-    """
-    from airflow._shared.serialization import CLASSNAME, OLD_DATA, OLD_DICT, OLD_TYPE, SCHEMA_ID
-
-    if not isinstance(next_kwargs_raw, dict):
-        raise ValueError(f"next_kwargs is stored as {type(next_kwargs_raw).__name__}, expected a dict")
-    if OLD_TYPE in next_kwargs_raw and OLD_DATA in next_kwargs_raw:
-        if next_kwargs_raw[OLD_TYPE] != OLD_DICT or not isinstance(next_kwargs_raw[OLD_DATA], dict):
-            raise ValueError(
-                f"next_kwargs is stored as a legacy {next_kwargs_raw[OLD_TYPE]!r}, expected a dict"
-            )
-        return next_kwargs_raw[OLD_DATA], True
-    if CLASSNAME in next_kwargs_raw or SCHEMA_ID in next_kwargs_raw:
-        raise ValueError(
-            f"next_kwargs is stored as an encoded {next_kwargs_raw.get(CLASSNAME)!r}, expected a dict"
-        )
-    return next_kwargs_raw, False
-
-
-def _fail_unresumable_task_instance(
-    task_instance: TaskInstance, reason: str, exc: BaseException, *, session: Session
-) -> None:
-    """
-    Route through ``__fail__`` so a worker fails the task normally instead of stranding it.
-
-    Mirrors ``Trigger.submit_failure``: without this the task is left with no event to resume it.
-    Traceback goes into ``next_kwargs`` as a list -- the only channel reaching the task log --
-    since ``format_exception`` returns it that way and the runtime joins it.
-    """
-    task_instance.next_method = TRIGGER_FAIL_REPR
-    task_instance.next_kwargs = {
-        "error": reason,
-        "traceback": format_exception(type(exc), exc, exc.__traceback__),
-    }
-    task_instance.trigger_id = None
-    task_instance.state = TaskInstanceState.SCHEDULED
-    task_instance.scheduled_dttm = timezone.utcnow()
-    session.flush()
 
 
 @singledispatch
@@ -807,72 +469,33 @@ def handle_event_submit(event: TriggerEvent, *, task_instance: TaskInstance, ses
     as well as its state to scheduled. It also adds the event's payload
     into the kwargs for the task.
 
-    A task instance whose stored kwargs cannot be decoded, or which the event payload cannot be
-    encoded into, is failed rather than resumed. This runs in the triggerer, the scheduler and the
-    API processes, each of which handles every waiting task instance in one pass, so a single
-    unusable payload must not be able to abort the caller. The triggerer had the worst of it: an
-    event whose submit raised was left unconfirmed and redelivered indefinitely.
-
-    Failing the task instance is not free for every caller: a Human-in-the-loop response whose
-    ``params_input`` serde cannot encode is now recorded and discarded rather than rejected, which
-    the submitter cannot retry. That wants validating on the write side; tracked at
-    https://github.com/apache/airflow/issues/71036
-
     :param task_instance: The task instance to handle the submit event for.
     :param session: The session to be used for the database callback sink.
     """
-    from airflow.sdk.serde import serialize
+    from airflow.sdk.serde import deserialize, serialize
+    from airflow.utils.state import TaskInstanceState
 
     next_kwargs_raw = task_instance.next_kwargs or {}
 
-    # Decoding and re-encoding fail for different reasons and are reported separately: blaming the
-    # stored kwargs for a payload the trigger just yielded would point the author at DB state that
-    # was never the problem.
+    # deserialize first to provide a compat layer if there are mixed serialized (BaseSerialisation and serde) data
+    # which can happen if a deferred task resumes after upgrade
     try:
-        stored_kwargs, is_legacy = _split_stored_next_kwargs(next_kwargs_raw)
-    except Exception as exc:
-        log.exception(
-            "Could not decode the stored next_kwargs of %s; failing it instead of resuming it",
-            task_instance,
-        )
-        _fail_unresumable_task_instance(
-            task_instance,
-            "Could not resume the task: its stored next_kwargs could not be decoded "
-            f"({type(exc).__name__}: {exc})",
-            exc,
-            session=session,
-        )
-        return
+        next_kwargs = deserialize(next_kwargs_raw)
+    except (ImportError, KeyError, AttributeError, TypeError):
+        from airflow.serialization.serialized_objects import BaseSerialization
 
-    # Encode only the event and add it next to the stored values, keeping the stored encoding. The
-    # Execution API version converter (ModifyDeferredTaskKwargsToJsonValue) handles converting
-    # serde to BaseSerialization format when serving old workers.
-    try:
-        if is_legacy:
-            from airflow._shared.serialization import OLD_DATA
-            from airflow.serialization.serialized_objects import BaseSerialization
+        next_kwargs = BaseSerialization.deserialize(next_kwargs_raw)
 
-            serialized_next_kwargs = {
-                **next_kwargs_raw,
-                OLD_DATA: {**stored_kwargs, "event": BaseSerialization.serialize(event.payload, strict=True)},
-            }
-        else:
-            serialized_next_kwargs = {**stored_kwargs, "event": serialize(event.payload)}
-    except Exception as exc:
-        log.exception(
-            "Could not serialize the event payload for %s; failing it instead of resuming it",
-            task_instance,
-        )
-        _fail_unresumable_task_instance(
-            task_instance,
-            f"Could not resume the task: the event payload could not be serialized "
-            f"({type(exc).__name__}: {exc})",
-            exc,
-            session=session,
-        )
-        return
+    # Add event to the plain dict, then serialize everything together so nested
+    # non-primitive values get proper serde encoding.
+    if TYPE_CHECKING:
+        assert isinstance(next_kwargs, dict)
+    next_kwargs["event"] = event.payload
 
-    task_instance.next_kwargs = serialized_next_kwargs
+    # Re-serialize using serde. The Execution API version converter
+    # (ModifyDeferredTaskKwargsToJsonValue) handles converting this to
+    # BaseSerialization format when serving old workers.
+    task_instance.next_kwargs = serialize(next_kwargs)
 
     # Remove ourselves as its trigger
     task_instance.trigger_id = None
@@ -893,57 +516,25 @@ def _(event: BaseTaskEndEvent, *, task_instance: TaskInstance, session: Session)
     :param task_instance: The task instance to be submitted.
     :param session: The session to be used for the database callback sink.
     """
-    from airflow.api_fastapi.execution_api.datamodels.taskinstance import (
-        TaskInstance as TIDataModel,
-        task_instance_to_runtime,
-    )
     from airflow.callbacks.callback_requests import TaskCallbackRequest
     from airflow.callbacks.database_callback_sink import DatabaseCallbackSink
-    from airflow.models.dagbag import DBDagBag
-    from airflow.models.task_coordinates import TaskCoordinateResolver
     from airflow.utils.state import TaskInstanceState
 
-    callback_type = event.task_instance_state
-    should_retry = False
-    dag_bag = DBDagBag()
-
-    if event.task_instance_state == TaskInstanceState.FAILED:
-        # Load the serialized task so retry eligibility matches the normal task path.
-        try:
-            dag = dag_bag.get_dag_for_run(dag_run=task_instance.dag_run, session=session)
-            if dag is not None:
-                task_instance.task = dag.get_task(task_instance.task_id)
-                should_retry = task_instance.is_eligible_to_retry()
-        except Exception:
-            log.exception(
-                "Could not load task for %s; failing terminally without retry routing", task_instance
-            )
-        if should_retry:
-            callback_type = TaskInstanceState.UP_FOR_RETRY
+    # Mark the task with terminal state and prevent it from resuming on worker
+    task_instance.trigger_id = None
+    task_instance.set_state(event.task_instance_state, session=session)
 
     def _submit_callback_if_necessary() -> None:
-        """Submit a callback request if the task state is SUCCESS, FAILED, or UP_FOR_RETRY."""
-        if callback_type in (
-            TaskInstanceState.SUCCESS,
-            TaskInstanceState.FAILED,
-            TaskInstanceState.UP_FOR_RETRY,
-        ):
+        """Submit a callback request if the task state is SUCCESS or FAILED."""
+        if event.task_instance_state in (TaskInstanceState.SUCCESS, TaskInstanceState.FAILED):
             if task_instance.dag_model.relative_fileloc is None:
                 raise RuntimeError("relative_fileloc should not be None for a finished task")
-            from airflow.models.dag_version import _resolve_ti_callback_bundle_info
-
-            bundle_name, bundle_version, version_data = _resolve_ti_callback_bundle_info(task_instance)
             request = TaskCallbackRequest(
                 filepath=task_instance.dag_model.relative_fileloc,
-                ti=task_instance_to_runtime(
-                    task_instance,
-                    model=TIDataModel,
-                    map_index=TaskCoordinateResolver(dag_bag, session).public_map_index(task_instance),
-                ),
-                task_callback_type=callback_type,
-                bundle_name=bundle_name,
-                bundle_version=bundle_version,
-                version_data=version_data,
+                ti=task_instance,
+                task_callback_type=event.task_instance_state,
+                bundle_name=task_instance.dag_model.bundle_name,
+                bundle_version=task_instance.dag_run.bundle_version,
             )
             log.info("Sending callback: %s", request)
             try:
@@ -953,23 +544,10 @@ def _(event: BaseTaskEndEvent, *, task_instance: TaskInstance, session: Session)
 
     def _push_xcoms_if_necessary() -> None:
         """Pushes XComs to the database if they are provided."""
-        if event.xcoms and callback_type != TaskInstanceState.UP_FOR_RETRY:
+        if event.xcoms:
             for key, value in event.xcoms.items():
                 task_instance.xcom_push(key=key, value=value)
 
-    # Send the callback before mutating task state so it reflects the retry-vs-terminal
-    # decision derived above.
     _submit_callback_if_necessary()
-
-    if should_retry:
-        task_instance.end_date = timezone.utcnow()
-        task_instance.set_duration()
-        task_instance.clear_next_method_args()
-        task_instance = task_instance.prepare_db_for_next_try(session)
-        task_instance.state = TaskInstanceState.UP_FOR_RETRY
-    else:
-        task_instance.trigger_id = None
-        task_instance.set_state(event.task_instance_state, session=session)
-
     _push_xcoms_if_necessary()
     session.flush()

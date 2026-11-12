@@ -109,8 +109,6 @@ class AzureBlobStorageToGCSOperator(BaseOperator):
         "bucket_name",
         "object_name",
         "filename",
-        "wasb_conn_id",
-        "gcp_conn_id",
     )
 
     def execute(self, context: Context) -> str | list[str]:

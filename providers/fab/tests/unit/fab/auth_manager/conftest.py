@@ -35,6 +35,7 @@ def minimal_app_for_auth_api():
             "init_appbuilder",
             "init_api_auth",
             "init_airflow_session_interface",
+            "init_appbuilder_views",
         ]
     )
     def factory():

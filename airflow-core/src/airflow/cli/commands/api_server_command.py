@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import os
-import ssl
 import sys
 import textwrap
 from collections.abc import Callable
@@ -65,7 +64,7 @@ def _run_api_server_with_gunicorn(
     """
     from airflow.api_fastapi.gunicorn_app import create_gunicorn_app
 
-    ssl_cert, ssl_key, ssl_ca_file = _get_ssl_filepaths(args)
+    ssl_cert, ssl_key = _get_ssl_cert_and_key_filepaths(args)
 
     log_level = conf.get("logging", "uvicorn_logging_level", fallback="info").lower()
 
@@ -76,9 +75,6 @@ def _run_api_server_with_gunicorn(
         worker_timeout=worker_timeout,
         ssl_cert=ssl_cert,
         ssl_key=ssl_key,
-        ssl_ca_file=ssl_ca_file,
-        ssl_cert_reqs=_ssl_cert_reqs(args),
-        ssl_ciphers=_ssl_ciphers(args),
         log_level=log_level,
         proxy_headers=proxy_headers,
     )
@@ -100,7 +96,7 @@ def _run_api_server_with_uvicorn(
     This is the default mode. Note that uvicorn's multiprocess mode does not
     share memory between workers (each worker loads everything independently).
     """
-    ssl_cert, ssl_key, ssl_ca_file = _get_ssl_filepaths(args)
+    ssl_cert, ssl_key = _get_ssl_cert_and_key_filepaths(args)
 
     # setproctitle causes issue on Mac OS: https://github.com/benoitc/gunicorn/issues/3021
     os_type = sys.platform
@@ -122,9 +118,6 @@ def _run_api_server_with_uvicorn(
         "timeout_worker_healthcheck": worker_timeout,
         "ssl_keyfile": ssl_key,
         "ssl_certfile": ssl_cert,
-        "ssl_ca_certs": ssl_ca_file,
-        "ssl_cert_reqs": _ssl_cert_reqs(args),
-        "ssl_ciphers": _ssl_ciphers(args),
         # HttpAccessLogMiddleware handles access logging; disable uvicorn's built-in access log.
         "access_log": False,
         "log_level": uvicorn_log_level,
@@ -152,13 +145,11 @@ def _run_api_server(args, apps: str, num_workers: int, worker_timeout: int, prox
     if server_type == "gunicorn":
         try:
             import gunicorn  # noqa: F401
-            import uvicorn_worker  # noqa: F401
 
             run = _run_api_server_with_gunicorn
         except ImportError:
             raise AirflowConfigException(
-                "The gunicorn server type needs the 'gunicorn' extra. "
-                "Install it with: pip install 'apache-airflow-core[gunicorn]'"
+                "Gunicorn is not installed. Install it with: pip install 'apache-airflow-core[gunicorn]'"
             )
 
     log_file = args.log_file or None
@@ -263,46 +254,21 @@ def api_server(args: Namespace):
     )
 
 
-def _get_ssl_filepaths(cli_arguments) -> tuple[str | None, str | None, str | None]:
+def _get_ssl_cert_and_key_filepaths(cli_arguments) -> tuple[str | None, str | None]:
     error_template_1 = "Need both, have provided {} but not {}"
     error_template_2 = "SSL related file does not exist {}"
 
-    ssl_cert, ssl_key, ssl_ca_file = cli_arguments.ssl_cert, cli_arguments.ssl_key, cli_arguments.ssl_ca_file
+    ssl_cert, ssl_key = cli_arguments.ssl_cert, cli_arguments.ssl_key
     if ssl_cert and ssl_key:
         if not os.path.isfile(ssl_cert):
             raise AirflowConfigException(error_template_2.format(ssl_cert))
         if not os.path.isfile(ssl_key):
             raise AirflowConfigException(error_template_2.format(ssl_key))
-        if ssl_ca_file is not None and not os.path.isfile(ssl_ca_file):
-            raise AirflowConfigException(error_template_2.format(ssl_ca_file))
 
-        return (ssl_cert, ssl_key, ssl_ca_file)
+        return (ssl_cert, ssl_key)
     if ssl_cert:
         raise AirflowConfigException(error_template_1.format("SSL certificate", "SSL key"))
     if ssl_key:
         raise AirflowConfigException(error_template_1.format("SSL key", "SSL certificate"))
 
-    return (None, None, None)
-
-
-def _ssl_cert_reqs(cli_arguments):
-    cert_reqs = cli_arguments.ssl_cert_reqs
-    if cert_reqs is None or cert_reqs == "none":
-        return ssl.CERT_NONE
-    if cert_reqs == "required":
-        return ssl.CERT_REQUIRED
-    if cert_reqs == "optional":
-        return ssl.CERT_OPTIONAL
-    raise ValueError(f"Invalid ssl_cert_reqs option: {cert_reqs}")
-
-
-def _ssl_ciphers(cli_arguments) -> str | None:
-    ciphers = cli_arguments.ssl_ciphers
-    if not ciphers:
-        return None
-    # Reject an unusable cipher list here rather than letting the server fail while binding the socket.
-    try:
-        ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).set_ciphers(ciphers)
-    except ssl.SSLError as e:
-        raise AirflowConfigException(f"Invalid ssl_ciphers option {ciphers!r}: {e}") from e
-    return ciphers
+    return (None, None)

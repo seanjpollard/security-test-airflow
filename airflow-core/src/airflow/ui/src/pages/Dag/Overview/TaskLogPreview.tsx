@@ -16,21 +16,16 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { Box, Flex, Link, Button } from "@chakra-ui/react";
 import { useState } from "react";
-
-import { Box, Flex, Button } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
+import { Link as RouterLink } from "react-router-dom";
 
 import type { TaskInstanceResponse } from "openapi/requests/types.gen";
-
-import { RouterLink } from "src/system-components";
-
-import { TaskLogContent } from "src/pages/TaskInstance/Logs/TaskLogContent";
-
 import { ClearTaskInstanceButton } from "src/components/Clear";
 import { StateBadge } from "src/components/StateBadge";
 import Time from "src/components/Time";
-
+import { TaskLogContent } from "src/pages/TaskInstance/Logs/TaskLogContent";
 import { useLogs } from "src/queries/useLogs";
 import { getTaskInstanceLink } from "src/utils/links";
 
@@ -72,15 +67,17 @@ export const TaskLogPreview = ({
           <Time datetime={taskInstance.run_after} ml={1} />
         </Box>
         <Flex gap={1}>
-          <Button fontSize="sm" onClick={() => setIsExpanded(!isExpanded)} variant="ghost">
+          <Button fontSize="sm" onClick={() => setIsExpanded(!isExpanded)} size="sm" variant="ghost">
             {isExpanded
               ? translate("overview.failedLogs.hideLogs")
               : translate("overview.failedLogs.showLogs")}
           </Button>
           <ClearTaskInstanceButton taskInstance={taskInstance} />
-          <RouterLink fontSize="sm" to={getTaskInstanceLink(taskInstance, "logs")}>
-            {translate("overview.failedLogs.viewFullLogs")}
-          </RouterLink>
+          <Link asChild color="fg.info" fontSize="sm">
+            <RouterLink to={getTaskInstanceLink(taskInstance)}>
+              {translate("overview.failedLogs.viewFullLogs")}
+            </RouterLink>
+          </Link>
         </Flex>
       </Flex>
       {isExpanded ? (

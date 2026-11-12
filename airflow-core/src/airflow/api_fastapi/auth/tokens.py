@@ -26,7 +26,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 import attrs
-import httpx2
+import httpx
 import jwt
 import structlog
 from asgiref.sync import async_to_sync
@@ -107,7 +107,7 @@ class JWKS:
     fetched_at: float = 0
     last_fetch_attempt_at: float = 0
 
-    client: httpx2.AsyncClient = attrs.field(factory=httpx2.AsyncClient)
+    client: httpx.AsyncClient = attrs.field(factory=httpx.AsyncClient)
 
     _jwks: jwt.PyJWKSet | None = None
     refresh_jwks: bool = True
@@ -279,8 +279,7 @@ class JWTValidator:
     )
     # By default, we just validate these
     required_claims: frozenset[str] = frozenset({"exp", "iat", "nbf"})
-    # ``None`` is passed straight to ``jwt.decode`` and accepts only tokens without an ``aud`` claim.
-    audience: str | Sequence[str] | None
+    audience: str | Sequence[str]
     algorithm: list[str] = attrs.field(
         factory=_conf_list_factory("api_auth", "jwt_algorithm", fallback="GUESS"), converter=_to_list
     )
@@ -320,10 +319,7 @@ class JWTValidator:
         self, unvalidated: str, required_claims: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Decode the JWT token, returning the validated claims or raising an exception."""
-        try:
-            key = await self._get_validation_key(unvalidated)
-        except KeyError:
-            raise jwt.InvalidTokenError("Kid did not match any validation keys")
+        key = await self._get_validation_key(unvalidated)
         algorithms = self.algorithm
         validation_key: str | jwt.PyJWK | Any = key
         if algorithms == ["GUESS"] and isinstance(key, jwt.PyJWK):
@@ -353,27 +349,13 @@ class JWTValidator:
         return claims
 
     def revoke_token(self, token: str) -> None:
-        """
-        Validate the token, extract jti and exp, and revoke it in the database.
-
-        A token that does not validate is not revoked: it is already unusable, so this is logged as a
-        warning. A valid token whose revocation cannot be recorded is still usable until it expires,
-        so that failure is logged as an error rather than being reported the same way.
-        """
+        """Validate the token, extract jti and exp, and revoke it in the database."""
         try:
             claims = self.validated_claims(token)
-        except Exception:
-            log.warning("Not revoking a token that does not validate", exc_info=True)
-            return
-        if not ((jti := claims.get("jti")) and (exp := claims.get("exp"))):
-            log.warning("Not revoking a token that carries no jti or exp claim")
-            return
-        try:
-            RevokedToken.revoke(jti, datetime.fromtimestamp(exp, tz=timezone.utc))
-        except Exception:
-            log.exception(
-                "Failed to record the revocation of token %s; it remains valid until it expires", jti
-            )
+            if (jti := claims.get("jti")) and (exp := claims.get("exp")):
+                RevokedToken.revoke(jti, datetime.fromtimestamp(exp, tz=timezone.utc))
+        except (jwt.InvalidTokenError, Exception):
+            log.warning("Failed to revoke token", exc_info=True)
 
     def status(self):
         if self.jwks:

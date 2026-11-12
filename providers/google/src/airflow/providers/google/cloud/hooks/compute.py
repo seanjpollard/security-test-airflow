@@ -244,6 +244,7 @@ class ComputeEngineHook(GoogleBaseHook):
         :param metadata: Additional metadata that is provided to the method.
         :return: Instance Template representation as object according to
             https://cloud.google.com/compute/docs/reference/rest/v1/instanceTemplates
+        :rtype: object
         """
         client = self.get_compute_instance_template_client()
         instance_template = client.get(
@@ -368,6 +369,7 @@ class ComputeEngineHook(GoogleBaseHook):
         :param metadata: Additional metadata that is provided to the method.
         :return: Instance representation as object according to
             https://cloud.google.com/compute/docs/reference/rest/v1/instances
+        :rtype: object
         """
         client = self.get_compute_instance_client()
         instance = client.get(
@@ -619,6 +621,7 @@ class ComputeEngineHook(GoogleBaseHook):
         :param metadata: Additional metadata that is provided to the method.
         :return: Instance Group Managers representation as object according to
             https://cloud.google.com/compute/docs/reference/rest/v1/instanceGroupManagers
+        :rtype: object
         """
         client = self.get_compute_instance_group_managers_client()
         instance_group_manager = client.get(

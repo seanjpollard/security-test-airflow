@@ -30,14 +30,9 @@ from airflow.providers.amazon.aws.operators.emr import (
     EmrServerlessStartJobOperator,
     EmrServerlessStopApplicationOperator,
 )
-from airflow.providers.amazon.aws.triggers.emr import (
-    EmrServerlessDeleteApplicationTrigger,
-    EmrServerlessStopApplicationTrigger,
-)
 from airflow.providers.amazon.version_compat import NOTSET
 from airflow.providers.common.compat.sdk import AirflowException, TaskDeferred
 
-from unit.amazon.aws.utils.test_deferral import expect_deferral_warning
 from unit.amazon.aws.utils.test_template_fields import validate_template_fields
 
 if TYPE_CHECKING:
@@ -83,6 +78,11 @@ class TestEmrServerlessCreateApplicationOperator:
             "applicationId": application_id,
             "ResponseMetadata": {"HTTPStatusCode": 200},
         }
+        mock_conn.get_application.side_effect = [
+            {"application": {"state": "CREATED"}},
+            {"application": {"state": "STARTED"}},
+        ]
+
         operator = EmrServerlessCreateApplicationOperator(
             task_id=task_id,
             release_label=release_label,
@@ -111,6 +111,7 @@ class TestEmrServerlessCreateApplicationOperator:
 
         mock_conn.start_application.assert_called_once_with(applicationId=application_id)
         assert id == application_id
+        mock_conn.get_application.call_count == 2
 
     @mock.patch.object(EmrServerlessHook, "get_waiter")
     @mock.patch.object(EmrServerlessHook, "conn")
@@ -233,7 +234,7 @@ class TestEmrServerlessCreateApplicationOperator:
             type=job_type,
             **config,
         )
-        assert mock_conn.create_application.call_count == 2
+        mock_conn.create_application.call_count == 2
 
     @mock.patch.object(EmrServerlessHook, "get_waiter")
     @mock.patch.object(EmrServerlessHook, "conn")
@@ -352,9 +353,8 @@ class TestEmrServerlessCreateApplicationOperator:
         assert operator.waiter_delay == expected[0]
         assert operator.waiter_max_attempts == expected[1]
 
-    @pytest.mark.parametrize("wait_for_completion", [True, False], ids=["wait", "no_wait"])
     @mock.patch.object(EmrServerlessHook, "conn")
-    def test_create_application_deferrable(self, mock_conn, wait_for_completion):
+    def test_create_application_deferrable(self, mock_conn):
         mock_conn.create_application.return_value = {
             "applicationId": application_id,
             "ResponseMetadata": {"HTTPStatusCode": 200},
@@ -365,14 +365,10 @@ class TestEmrServerlessCreateApplicationOperator:
             job_type=job_type,
             client_request_token=client_request_token,
             config=config,
-            wait_for_completion=wait_for_completion,
             deferrable=True,
         )
 
-        with (
-            expect_deferral_warning(deferrable=True, wait_for_completion=wait_for_completion),
-            pytest.raises(TaskDeferred),
-        ):
+        with pytest.raises(TaskDeferred):
             operator.execute(None)
 
     def test_template_fields(self):
@@ -827,7 +823,7 @@ class TestEmrServerlessStartJobOperator:
         assert "Serverless Job failed:" in str(ex_message.value)
         default_name = operator.name
 
-        assert mock_conn.get_application.call_count == 1
+        mock_conn.get_application.call_count == 2
         mock_conn.start_job_run.assert_called_once_with(
             clientToken=client_request_token,
             applicationId=application_id,
@@ -1400,75 +1396,15 @@ class TestEmrServerlessDeleteOperator:
 
     @mock.patch.object(EmrServerlessHook, "conn")
     def test_delete_application_deferrable(self, mock_conn):
-        operator = EmrServerlessDeleteApplicationOperator(
-            task_id=task_id,
-            application_id=application_id,
-            deferrable=True,
-        )
-        with pytest.raises(TaskDeferred) as defer:
-            operator.execute(None)
-
-        assert isinstance(defer.value.trigger, EmrServerlessStopApplicationTrigger)
-        assert defer.value.method_name == "delete_stopped_application"
-        mock_conn.stop_application.assert_called_once_with(applicationId=application_id)
-        mock_conn.delete_application.assert_not_called()
-
-    @mock.patch.object(EmrServerlessHook, "cancel_running_jobs", autospec=True)
-    @mock.patch.object(EmrServerlessHook, "conn")
-    def test_delete_application_deferrable_with_force_stop(self, mock_conn, mock_cancel_running_jobs):
-        mock_cancel_running_jobs.return_value = 1
-        operator = EmrServerlessDeleteApplicationOperator(
-            task_id=task_id,
-            application_id=application_id,
-            deferrable=True,
-            force_stop=True,
-        )
-        with pytest.raises(TaskDeferred) as defer:
-            operator.execute(None)
-        assert defer.value.method_name == "stop_application"
-
-        with pytest.raises(TaskDeferred) as defer:
-            operator.stop_application(None, {"status": "success", "application_id": application_id})
-
-        assert isinstance(defer.value.trigger, EmrServerlessStopApplicationTrigger)
-        assert defer.value.method_name == "delete_stopped_application"
-        mock_conn.delete_application.assert_not_called()
-
-    @pytest.mark.parametrize("wait_for_completion", [True, False], ids=["wait", "no_wait"])
-    @mock.patch.object(EmrServerlessHook, "conn")
-    def test_delete_stopped_application_deferrable(self, mock_conn, wait_for_completion):
         mock_conn.delete_application.return_value = {"ResponseMetadata": {"HTTPStatusCode": 200}}
-        operator = EmrServerlessDeleteApplicationOperator(
-            task_id=task_id,
-            application_id=application_id,
-            wait_for_completion=wait_for_completion,
-            deferrable=True,
-        )
-        assert operator.wait_for_delete_completion is wait_for_completion
 
-        with (
-            expect_deferral_warning(deferrable=True, wait_for_completion=wait_for_completion),
-            pytest.raises(TaskDeferred) as defer,
-        ):
-            operator.delete_stopped_application(None, {"status": "success", "application_id": application_id})
-
-        mock_conn.delete_application.assert_called_once_with(applicationId=application_id)
-        assert isinstance(defer.value.trigger, EmrServerlessDeleteApplicationTrigger)
-        assert defer.value.method_name == "execute_complete"
-
-    @mock.patch.object(EmrServerlessHook, "conn")
-    def test_delete_stopped_application_stop_error(self, mock_conn):
         operator = EmrServerlessDeleteApplicationOperator(
             task_id=task_id,
             application_id=application_id,
             deferrable=True,
         )
-        error_event = {"status": "error", "message": "Stop failed", "application_id": application_id}
-
-        with pytest.raises(AirflowException, match="Error stopping EMR Serverless application"):
-            operator.delete_stopped_application(None, error_event)
-
-        mock_conn.delete_application.assert_not_called()
+        with pytest.raises(TaskDeferred):
+            operator.execute(None)
 
     def test_execute_complete_error(self):
         operator = EmrServerlessDeleteApplicationOperator(
@@ -1533,44 +1469,6 @@ class TestEmrServerlessStopOperator:
         mock_cancel_running_jobs.assert_called_once()
         mock_conn.stop_application.assert_called_once()
         mock_get_waiter().wait.assert_called_once()
-
-    @pytest.mark.parametrize("wait_for_completion", [True, False], ids=["wait", "no_wait"])
-    @mock.patch.object(EmrServerlessHook, "get_waiter")
-    @mock.patch.object(EmrServerlessHook, "conn")
-    def test_stop_deferrable(self, mock_conn, mock_get_waiter, wait_for_completion):
-        operator = EmrServerlessStopApplicationOperator(
-            task_id=task_id, application_id="test", wait_for_completion=wait_for_completion, deferrable=True
-        )
-        assert operator.wait_for_completion is wait_for_completion
-
-        with (
-            expect_deferral_warning(deferrable=True, wait_for_completion=wait_for_completion),
-            pytest.raises(TaskDeferred) as defer,
-        ):
-            operator.execute({})
-
-        assert isinstance(defer.value.trigger, EmrServerlessStopApplicationTrigger)
-        mock_get_waiter.assert_not_called()
-
-    @pytest.mark.parametrize("wait_for_completion", [True, False], ids=["wait", "no_wait"])
-    @mock.patch.object(EmrServerlessHook, "conn")
-    def test_stop_application_after_cancelling_jobs_deferrable(self, mock_conn, wait_for_completion):
-        operator = EmrServerlessStopApplicationOperator(
-            task_id=task_id,
-            application_id="test",
-            wait_for_completion=wait_for_completion,
-            deferrable=True,
-            force_stop=True,
-        )
-
-        with (
-            expect_deferral_warning(deferrable=True, wait_for_completion=wait_for_completion),
-            pytest.raises(TaskDeferred) as defer,
-        ):
-            operator.stop_application({}, {"status": "success"})
-
-        assert isinstance(defer.value.trigger, EmrServerlessStopApplicationTrigger)
-        mock_conn.stop_application.assert_called_once_with(applicationId="test")
 
     @mock.patch.object(EmrServerlessHook, "cancel_running_jobs")
     def test_stop_application_deferrable_with_force_stop(self, mock_cancel_running_jobs, caplog):

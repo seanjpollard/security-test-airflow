@@ -16,10 +16,8 @@
     specific language governing permissions and limitations
     under the License.
 
-Airflow public REST API reference
-=================================
+Airflow public API reference
+============================
 
-.. swagger-plugin:: ../src/airflow/api_fastapi/core_api/openapi/v2-rest-api-generated.yaml
-    :id: core-rest-api-ref
-    :page-title: Airflow public REST API
-    :swagger-options: { "tryItOutEnabled": "false", "supportedSubmitMethods": [] }
+It's a stub file. It will be converted automatically during the build process
+to the valid documentation by the Sphinx plugin. See: airflow-core/docs/conf.py

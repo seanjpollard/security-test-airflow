@@ -24,9 +24,7 @@ import {
   useStructureServiceStructureData,
   useTaskInstanceServiceGetMappedTaskInstance,
 } from "openapi/queries";
-
 import { SearchParamsKeys } from "src/constants/searchParams";
-import { useTaskInstanceCoordinates } from "src/hooks/useTaskInstanceCoordinates";
 
 const useSelectedVersion = (): number | undefined => {
   const [searchParams] = useSearchParams();
@@ -35,7 +33,6 @@ const useSelectedVersion = (): number | undefined => {
   const selectedVersionUrl = selectedVersionUrlStr === null ? undefined : parseInt(selectedVersionUrlStr, 10);
 
   const { dagId = "", mapIndex = "-1", runId = "", taskId = "" } = useParams();
-  const coordinates = useTaskInstanceCoordinates();
 
   const { data: dagData } = useDagServiceGetDagDetails(
     {
@@ -72,7 +69,6 @@ const useSelectedVersion = (): number | undefined => {
 
   const { data: mappedTaskInstanceData } = useTaskInstanceServiceGetMappedTaskInstance(
     {
-      ...coordinates,
       dagId,
       dagRunId: runId,
       mapIndex: parsedMapIndex,

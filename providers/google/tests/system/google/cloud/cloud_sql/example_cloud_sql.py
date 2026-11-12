@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from airflow.models.dag import DAG
 from airflow.models.xcom_arg import XComArg
@@ -40,11 +41,11 @@ from airflow.providers.google.cloud.operators.cloud_sql import (
     CloudSQLPatchInstanceDatabaseOperator,
 )
 from airflow.providers.google.cloud.operators.gcs import (
-    GCSBucketAddIamBindingOperator,
+    GCSBucketCreateAclEntryOperator,
     GCSCreateBucketOperator,
     GCSDeleteBucketOperator,
+    GCSObjectCreateAclEntryOperator,
 )
-from airflow.providers.google.cloud.sensors.cloud_sql import CloudSQLNoOperationInProgressSensor
 
 try:
     from airflow.sdk import TriggerRule
@@ -144,9 +145,7 @@ with DAG(
     tags=["example", "cloud_sql"],
 ) as dag:
     create_bucket = GCSCreateBucketOperator(
-        task_id="create_bucket",
-        bucket_name=BUCKET_NAME,
-        resource={"iamConfiguration": {"uniformBucketLevelAccess": {"enabled": True}}},
+        task_id="create_bucket", bucket_name=BUCKET_NAME, resource={"predefined_acl": "public_read_write"}
     )
 
     # ############################################## #
@@ -187,16 +186,18 @@ with DAG(
     # ############################################## #
     # ### EXPORTING & IMPORTING SQL ################ #
     # ############################################## #
+    file_url_split = urlsplit(FILE_URI)
+
     # For export & import to work we need to add the Cloud SQL instance's Service Account
-    # object admin access to the GCS bucket.
+    # write access to the destination GCS bucket.
     service_account_email = XComArg(sql_instance_create_task, key="service_account_email")
 
     # [START howto_operator_cloudsql_export_gcs_permissions]
-    sql_gcp_add_bucket_permission_task = GCSBucketAddIamBindingOperator(
+    sql_gcp_add_bucket_permission_task = GCSBucketCreateAclEntryOperator(
+        entity=f"user-{service_account_email}",
+        role="WRITER",
+        bucket=file_url_split[1],  # netloc (bucket)
         task_id="sql_gcp_add_bucket_permission_task",
-        bucket=BUCKET_NAME,
-        role="roles/storage.objectAdmin",
-        member=f"serviceAccount:{service_account_email}",
     )
     # [END howto_operator_cloudsql_export_gcs_permissions]
 
@@ -215,14 +216,17 @@ with DAG(
     )
     # [END howto_operator_cloudsql_export_async]
 
-    # Cloud SQL serializes admin operations per instance, so wait until the export above has
-    # finished (no operation in progress) before submitting the import to avoid a 409.
-    # [START howto_sensor_cloudsql_no_operation_in_progress]
-    sql_wait_no_operation_task = CloudSQLNoOperationInProgressSensor(
-        instance=INSTANCE_NAME,
-        task_id="sql_wait_no_operation_task",
+    # For import to work we need to add the Cloud SQL instance's Service Account
+    # read access to the target GCS object.
+    # [START howto_operator_cloudsql_import_gcs_permissions]
+    sql_gcp_add_object_permission_task = GCSObjectCreateAclEntryOperator(
+        entity=f"user-{service_account_email}",
+        role="READER",
+        bucket=file_url_split[1],  # netloc (bucket)
+        object_name=file_url_split[2][1:],  # path (strip first '/')
+        task_id="sql_gcp_add_object_permission_task",
     )
-    # [END howto_sensor_cloudsql_no_operation_in_progress]
+    # [END howto_operator_cloudsql_import_gcs_permissions]
 
     # [START howto_operator_cloudsql_import]
     sql_import_task = CloudSQLImportInstanceOperator(
@@ -283,7 +287,7 @@ with DAG(
         >> sql_gcp_add_bucket_permission_task
         >> sql_export_task
         >> sql_export_def_task
-        >> sql_wait_no_operation_task
+        >> sql_gcp_add_object_permission_task
         >> sql_import_task
         >> sql_instance_clone
         >> sql_db_delete_task

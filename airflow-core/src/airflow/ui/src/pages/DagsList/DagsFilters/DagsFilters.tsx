@@ -16,48 +16,154 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { FilterBar } from "src/components/FilterBar";
+import { HStack } from "@chakra-ui/react";
+import type { MultiValue } from "chakra-react-select";
+import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
-import { SearchParamsKeys } from "src/constants/searchParams";
+import { useTableURLState } from "src/components/DataTable/useTableUrlState";
+import { SearchParamsKeys, type SearchParamsKeysType } from "src/constants/searchParams";
 import { useConfig } from "src/queries/useConfig";
-import { useFiltersHandler, type FilterableSearchParamsKeys } from "src/utils";
+import { useDagTagsInfinite } from "src/queries/useDagTagsInfinite";
 
-import { usePausedDefault } from "../usePausedDefault";
+import { useTagFilter } from "../useTagFilter";
+import { FavoriteFilter } from "./FavoriteFilter";
+import { PausedFilter } from "./PausedFilter";
+import { RequiredActionFilter } from "./RequiredActionFilter";
+import { StateFilters } from "./StateFilters";
+import { TagFilter } from "./TagFilter";
+
+const {
+  FAVORITE: FAVORITE_PARAM,
+  LAST_DAG_RUN_STATE: LAST_DAG_RUN_STATE_PARAM,
+  NEEDS_REVIEW: NEEDS_REVIEW_PARAM,
+  OFFSET: OFFSET_PARAM,
+  PAUSED: PAUSED_PARAM,
+}: SearchParamsKeysType = SearchParamsKeys;
+
+type StateValue = "all" | "failed" | "queued" | "running" | "success";
+type BooleanFilterValue = "all" | "false" | "true";
+
+const stateValues: ReadonlyArray<StateValue> = ["failed", "queued", "running", "success"];
+const booleanFilterValues: ReadonlyArray<BooleanFilterValue> = ["all", "true", "false"];
+
+const toStateValue = (value: string | null): StateValue =>
+  stateValues.includes(value as StateValue) ? (value as StateValue) : "all";
+
+const toBooleanFilterValue = (
+  value: string | null,
+  defaultValue: BooleanFilterValue = "all",
+): BooleanFilterValue =>
+  booleanFilterValues.includes(value as BooleanFilterValue) ? (value as BooleanFilterValue) : defaultValue;
 
 export const DagsFilters = () => {
-  const multiTeamEnabled = Boolean(useConfig("multi_team"));
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { selectedTags, setSelectedTags, setTagFilterMode, tagFilterMode } = useTagFilter();
 
-  usePausedDefault();
+  const showPaused = searchParams.get(PAUSED_PARAM);
+  const showFavorites = searchParams.get(FAVORITE_PARAM);
+  const needsReview = searchParams.get(NEEDS_REVIEW_PARAM);
+  const state = searchParams.get(LAST_DAG_RUN_STATE_PARAM);
 
-  const searchParamKeys: Array<FilterableSearchParamsKeys> = [
-    SearchParamsKeys.PAUSED,
-    SearchParamsKeys.RUN_STATE,
-    SearchParamsKeys.NEEDS_REVIEW,
-    SearchParamsKeys.TAGS,
-    SearchParamsKeys.OWNERS,
-    SearchParamsKeys.TIMETABLE_TYPE,
-    SearchParamsKeys.FAVORITE,
-    SearchParamsKeys.HAS_IMPORT_ERRORS,
-  ];
+  const [pattern, setPattern] = useState("");
 
-  if (multiTeamEnabled) {
-    searchParamKeys.push(SearchParamsKeys.TEAMS);
-  }
+  const { data, fetchNextPage, fetchPreviousPage } = useDagTagsInfinite({
+    limit: 10,
+    orderBy: ["name"],
+    tagNamePattern: pattern,
+  });
 
-  const { filterConfigs, handleFiltersChange, initialValues, searchParams } =
-    useFiltersHandler(searchParamKeys);
-  const hasFolderSelection =
-    searchParams.has(SearchParamsKeys.DAG_FOLDER) || searchParams.has(SearchParamsKeys.DAG_BUNDLE);
+  const hidePausedDagsByDefault = Boolean(useConfig("hide_paused_dags_by_default"));
+  const defaultShowPaused: BooleanFilterValue = hidePausedDagsByDefault ? "false" : "all";
+
+  const { setTableURLState, tableURLState } = useTableURLState();
+  const { pagination, sorting } = tableURLState;
+
+  const resetPagination = () => {
+    setTableURLState({
+      pagination: { ...pagination, pageIndex: 0 },
+      sorting,
+    });
+    searchParams.delete(OFFSET_PARAM);
+  };
+
+  const handlePausedChange = (value: BooleanFilterValue) => {
+    if (value === "all" && !hidePausedDagsByDefault) {
+      searchParams.delete(PAUSED_PARAM);
+    } else {
+      searchParams.set(PAUSED_PARAM, value);
+    }
+    resetPagination();
+    setSearchParams(searchParams);
+  };
+
+  const handleFavoriteChange = (value: BooleanFilterValue) => {
+    if (value === "all") {
+      searchParams.delete(FAVORITE_PARAM);
+    } else {
+      searchParams.set(FAVORITE_PARAM, value);
+    }
+    resetPagination();
+    setSearchParams(searchParams);
+  };
+
+  const handleStateChange = (value: StateValue) => {
+    if (value === "all") {
+      searchParams.delete(LAST_DAG_RUN_STATE_PARAM);
+    } else {
+      searchParams.set(LAST_DAG_RUN_STATE_PARAM, value);
+    }
+    resetPagination();
+    setSearchParams(searchParams);
+  };
+
+  const handleNeedsReviewToggle = () => {
+    if (needsReview === "true") {
+      searchParams.delete(NEEDS_REVIEW_PARAM);
+    } else {
+      searchParams.set(NEEDS_REVIEW_PARAM, "true");
+    }
+    resetPagination();
+    setSearchParams(searchParams);
+  };
+
+  const handleSelectTagsChange = (
+    tags: MultiValue<{
+      label: string;
+      value: string;
+    }>,
+  ) => {
+    setSelectedTags(tags.map(({ value }) => value));
+  };
+
+  const handleTagModeChange = ({ checked }: { checked: boolean }) => {
+    setTagFilterMode(checked ? "all" : "any");
+  };
+
+  const stateValue = toStateValue(state);
+  const pausedValue = toBooleanFilterValue(showPaused, defaultShowPaused);
+  const favoriteValue = toBooleanFilterValue(showFavorites);
 
   return (
-    <FilterBar
-      configs={filterConfigs}
-      hasExternalFilters={hasFolderSelection}
-      initialValues={initialValues}
-      onFiltersChange={handleFiltersChange}
-      onReset={() =>
-        handleFiltersChange({}, { clearKeys: [SearchParamsKeys.DAG_FOLDER, SearchParamsKeys.DAG_BUNDLE] })
-      }
-    />
+    <HStack flexWrap="wrap" gap={2} justifyContent="space-between">
+      <StateFilters onChange={handleStateChange} value={stateValue} />
+      <RequiredActionFilter needsReview={needsReview === "true"} onToggle={handleNeedsReviewToggle} />
+      <PausedFilter onChange={handlePausedChange} value={pausedValue} />
+      <TagFilter
+        onMenuScrollToBottom={() => {
+          void fetchNextPage();
+        }}
+        onMenuScrollToTop={() => {
+          void fetchPreviousPage();
+        }}
+        onSelectTagsChange={handleSelectTagsChange}
+        onTagModeChange={handleTagModeChange}
+        onUpdate={setPattern}
+        selectedTags={selectedTags}
+        tagFilterMode={tagFilterMode}
+        tags={data?.pages.flatMap((dagResponse) => dagResponse.tags) ?? []}
+      />
+      <FavoriteFilter onChange={handleFavoriteChange} value={favoriteValue} />
+    </HStack>
   );
 };

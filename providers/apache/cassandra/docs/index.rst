@@ -76,7 +76,7 @@ apache-airflow-providers-apache-cassandra package
 `Apache Cassandra <https://cassandra.apache.org/>`__.
 
 
-Release: 3.10.1
+Release: 3.9.4
 
 Provider package
 ----------------
@@ -101,11 +101,29 @@ PIP package                                 Version required
 ==========================================  ==================================================================
 ``apache-airflow``                          ``>=2.11.0``
 ``apache-airflow-providers-common-compat``  ``>=1.8.0``
-``cassandra-driver``                        ``>=3.30.1; python_version >= "3.14"``
 ``cassandra-driver``                        ``>=3.29.3; python_version >= "3.13" and python_version < "3.14"``
 ``cassandra-driver``                        ``>=3.29.2; python_version >= "3.12" and python_version < "3.13"``
 ``cassandra-driver``                        ``>=3.29.1; python_version < "3.12"``
 ==========================================  ==================================================================
+
+Cross provider package dependencies
+-----------------------------------
+
+Those are dependencies that might be needed in order to use all the features of the package.
+You need to install the specified provider distributions in order to use them.
+
+You can install such cross-provider dependencies when installing from PyPI. For example:
+
+.. code-block:: bash
+
+    pip install apache-airflow-providers-apache-cassandra[common.compat]
+
+
+==================================================================================================================  =================
+Dependent package                                                                                                   Extra
+==================================================================================================================  =================
+`apache-airflow-providers-common-compat <https://airflow.apache.org/docs/apache-airflow-providers-common-compat>`_  ``common.compat``
+==================================================================================================================  =================
 
 Downloading official packages
 -----------------------------
@@ -113,5 +131,5 @@ Downloading official packages
 You can download officially released packages and verify their checksums and signatures from the
 `Official Apache Download site <https://downloads.apache.org/airflow/providers/>`_
 
-* `The apache-airflow-providers-apache-cassandra 3.10.1 sdist package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_cassandra-3.10.1.tar.gz>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_cassandra-3.10.1.tar.gz.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_cassandra-3.10.1.tar.gz.sha512>`__)
-* `The apache-airflow-providers-apache-cassandra 3.10.1 wheel package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_cassandra-3.10.1-py3-none-any.whl>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_cassandra-3.10.1-py3-none-any.whl.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_cassandra-3.10.1-py3-none-any.whl.sha512>`__)
+* `The apache-airflow-providers-apache-cassandra 3.9.4 sdist package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_cassandra-3.9.4.tar.gz>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_cassandra-3.9.4.tar.gz.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_cassandra-3.9.4.tar.gz.sha512>`__)
+* `The apache-airflow-providers-apache-cassandra 3.9.4 wheel package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_cassandra-3.9.4-py3-none-any.whl>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_cassandra-3.9.4-py3-none-any.whl.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_cassandra-3.9.4-py3-none-any.whl.sha512>`__)

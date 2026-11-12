@@ -47,7 +47,7 @@ class ADLSCreateObjectOperator(BaseOperator):
     :param azure_data_lake_conn_id: Reference to the :ref:`Azure Data Lake connection<howto/connection:azure_data_lake>`.
     """
 
-    template_fields: Sequence[str] = ("file_system_name", "file_name", "data", "azure_data_lake_conn_id")
+    template_fields: Sequence[str] = ("file_system_name", "file_name", "data")
     ui_color = "#e4f0e8"
 
     def __init__(
@@ -92,10 +92,7 @@ class ADLSDeleteOperator(BaseOperator):
     :param azure_data_lake_conn_id: Reference to the :ref:`Azure Data Lake connection<howto/connection:azure_data_lake>`.
     """
 
-    template_fields: Sequence[str] = (
-        "path",
-        "azure_data_lake_conn_id",
-    )
+    template_fields: Sequence[str] = ("path",)
     ui_color = "#901dd2"
 
     def __init__(
@@ -134,10 +131,7 @@ class ADLSListOperator(BaseOperator):
     :param azure_data_lake_conn_id: Reference to the :ref:`Azure Data Lake connection<howto/connection:azure_data_lake>`.
     """
 
-    template_fields: Sequence[str] = (
-        "path",
-        "azure_data_lake_conn_id",
-    )
+    template_fields: Sequence[str] = ("path",)
     ui_color = "#901dd2"
 
     def __init__(

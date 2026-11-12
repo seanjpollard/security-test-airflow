@@ -16,21 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import type { SimpleGridProps } from "@chakra-ui/react";
+import type { ColumnDef, PaginationState, SortingState, VisibilityState } from "@tanstack/react-table";
 import type { JSX, ReactNode } from "react";
 
-import type { SimpleGridProps } from "@chakra-ui/react";
-import type {
-  ColumnDef,
-  ColumnVisibilityState,
-  PaginationState,
-  RowData,
-  SortingState,
-} from "@tanstack/react-table";
-
-import type { DataTableFeatures } from "./features";
-
 export type TableState = {
-  columnVisibility?: ColumnVisibilityState;
+  columnVisibility?: VisibilityState;
   cursor?: string;
   pagination: PaginationState;
   sorting: SortingState;
@@ -44,9 +35,9 @@ export type CardDef<TData> = {
   };
 };
 
-export type MetaColumn<TData extends RowData> = {
+export type MetaColumn<TData> = {
   meta?: {
     customSkeleton?: ReactNode;
     skeletonWidth?: number;
-  } & ColumnDef<DataTableFeatures, TData>["meta"];
-} & ColumnDef<DataTableFeatures, TData>;
+  } & ColumnDef<TData>["meta"];
+} & ColumnDef<TData>;

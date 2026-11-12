@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 /**
  * Page Object Model fixtures for E2E tests.
  *
@@ -30,10 +31,8 @@ import { AssetListPage } from "../pages/AssetListPage";
 import { BackfillPage } from "../pages/BackfillPage";
 import { ConfigurationPage } from "../pages/ConfigurationPage";
 import { ConnectionsPage } from "../pages/ConnectionsPage";
-import { DagBundlesPage } from "../pages/DagBundlesPage";
 import { DagCalendarTab } from "../pages/DagCalendarTab";
 import { DagCodePage } from "../pages/DagCodePage";
-import { DagRunPage } from "../pages/DagRunPage";
 import { DagRunsPage } from "../pages/DagRunsPage";
 import { DagRunsTabPage } from "../pages/DagRunsTabPage";
 import { DagsPage } from "../pages/DagsPage";
@@ -59,10 +58,8 @@ export type PomFixtures = {
   backfillPage: BackfillPage;
   configurationPage: ConfigurationPage;
   connectionsPage: ConnectionsPage;
-  dagBundlesPage: DagBundlesPage;
   dagCalendarTab: DagCalendarTab;
   dagCodePage: DagCodePage;
-  dagRunPage: DagRunPage;
   dagRunsPage: DagRunsPage;
   dagRunsTabPage: DagRunsTabPage;
   dagsPage: DagsPage;
@@ -108,17 +105,11 @@ export const test = base.extend<PomFixtures, PomWorkerFixtures>({
   connectionsPage: async ({ page }, use) => {
     await use(new ConnectionsPage(page));
   },
-  dagBundlesPage: async ({ page }, use) => {
-    await use(new DagBundlesPage(page));
-  },
   dagCalendarTab: async ({ page }, use) => {
     await use(new DagCalendarTab(page));
   },
   dagCodePage: async ({ page }, use) => {
     await use(new DagCodePage(page));
-  },
-  dagRunPage: async ({ page }, use) => {
-    await use(new DagRunPage(page));
   },
   dagRunsPage: async ({ page }, use) => {
     await use(new DagRunsPage(page));

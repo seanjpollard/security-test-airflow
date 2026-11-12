@@ -16,7 +16,9 @@
 # under the License.
 from __future__ import annotations
 
-from typing import NotRequired, Required, TypedDict
+from typing import TypedDict
+
+from typing_extensions import NotRequired, Required  # For compat with Python < 3.11
 
 
 class CreateAlertPayload(TypedDict):

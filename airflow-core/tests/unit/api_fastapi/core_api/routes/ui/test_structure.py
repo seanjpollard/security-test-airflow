@@ -18,14 +18,21 @@
 from __future__ import annotations
 
 import copy
+from unittest import mock
 
 import pendulum
 import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from airflow._shared.timezones import timezone
+from airflow.models.asset import AssetAliasModel, AssetEvent, AssetModel
 from airflow.models.dagbag import DBDagBag
 from airflow.providers.standard.operators.empty import EmptyOperator
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.providers.standard.sensors.external_task import ExternalTaskSensor
-from airflow.sdk.definitions.taskgroup import TaskGroup
+from airflow.sdk import Metadata, task
+from airflow.sdk.definitions.asset import Asset, AssetAlias, Dataset
 
 from tests_common.test_utils.asserts import assert_queries_count
 from tests_common.test_utils.db import clear_db_assets, clear_db_runs
@@ -33,6 +40,8 @@ from tests_common.test_utils.db import clear_db_assets, clear_db_runs
 pytestmark = pytest.mark.db_test
 
 DAG_ID = "dag_with_multiple_versions"
+DAG_ID_EXTERNAL_TRIGGER = "external_trigger"
+DAG_ID_RESOLVED_ASSET_ALIAS = "dag_with_resolved_asset_alias"
 DAG_ID_LINEAR_DEPTH = "linear_depth_dag"
 DAG_ID_NONLINEAR_DEPTH = "nonlinear_depth_dag"
 LATEST_VERSION_DAG_RESPONSE: dict = {
@@ -41,56 +50,35 @@ LATEST_VERSION_DAG_RESPONSE: dict = {
         {
             "children": None,
             "id": "task1",
-            "is_loop": None,
-            "loop_max_iterations": None,
-            "loop_exit_task_id": None,
-            "loop_exit_criteria_doc": None,
             "is_mapped": None,
             "label": "task1",
             "tooltip": None,
             "setup_teardown_type": None,
             "type": "task",
-            "team": None,
             "operator": "EmptyOperator",
             "asset_condition_type": None,
-            "ui_color": "#e8f7e4",
-            "ui_fgcolor": "#000",
         },
         {
             "children": None,
             "id": "task2",
-            "is_loop": None,
-            "loop_max_iterations": None,
-            "loop_exit_task_id": None,
-            "loop_exit_criteria_doc": None,
             "is_mapped": None,
             "label": "task2",
             "tooltip": None,
             "setup_teardown_type": None,
             "type": "task",
-            "team": None,
             "operator": "EmptyOperator",
             "asset_condition_type": None,
-            "ui_color": "#e8f7e4",
-            "ui_fgcolor": "#000",
         },
         {
             "children": None,
             "id": "task3",
-            "is_loop": None,
-            "loop_max_iterations": None,
-            "loop_exit_task_id": None,
-            "loop_exit_criteria_doc": None,
             "is_mapped": None,
             "label": "task3",
             "tooltip": None,
             "setup_teardown_type": None,
             "type": "task",
-            "team": None,
             "operator": "EmptyOperator",
             "asset_condition_type": None,
-            "ui_color": "#e8f7e4",
-            "ui_fgcolor": "#000",
         },
     ],
 }
@@ -119,18 +107,82 @@ def clean():
 
 
 @pytest.fixture
-def make_dags(dag_maker, session, time_machine) -> None:
+def asset1() -> Asset:
+    return Asset(uri="s3://bucket/next-run-asset/1", name="asset1")
+
+
+@pytest.fixture
+def asset2() -> Asset:
+    return Asset(uri="s3://bucket/next-run-asset/2", name="asset2")
+
+
+@pytest.fixture
+def asset3() -> Dataset:
+    return Dataset(uri="s3://dataset-bucket/example.csv")
+
+
+@pytest.fixture
+def make_dags(dag_maker, session, time_machine, asset1: Asset, asset2: Asset, asset3: Dataset) -> None:
+    with dag_maker(
+        dag_id=DAG_ID_EXTERNAL_TRIGGER,
+        serialized=True,
+        session=session,
+        start_date=pendulum.DateTime(2023, 2, 1, 0, 0, 0, tzinfo=pendulum.UTC),
+    ):
+        TriggerDagRunOperator(task_id="trigger_dag_run_operator", trigger_dag_id=DAG_ID)
+    dag_maker.sync_dagbag_to_db()
+
     with dag_maker(
         dag_id=DAG_ID,
         serialized=True,
         session=session,
         start_date=pendulum.DateTime(2023, 2, 1, 0, 0, 0, tzinfo=pendulum.UTC),
+        schedule=(asset1 & asset2 & AssetAlias("example-alias")),
     ):
         (
-            EmptyOperator(task_id="task_1")
+            EmptyOperator(task_id="task_1", outlets=[asset3])
             >> ExternalTaskSensor(task_id="external_task_sensor", external_dag_id=DAG_ID)
             >> EmptyOperator(task_id="task_2")
         )
+    dag_maker.sync_dagbag_to_db()
+
+    with dag_maker(
+        dag_id=DAG_ID_RESOLVED_ASSET_ALIAS,
+        serialized=True,
+        session=session,
+        start_date=pendulum.DateTime(2023, 2, 1, 0, 0, 0, tzinfo=pendulum.UTC),
+    ):
+
+        @task(outlets=[AssetAlias("example-alias-resolved")])
+        def task_1(**context):
+            yield Metadata(
+                asset=Asset("resolved_example_asset_alias"),
+                extra={"k": "v"},  # extra has to be provided, can be {}
+                alias=AssetAlias("example-alias-resolved"),
+            )
+
+        task_1() >> EmptyOperator(task_id="task_2")
+
+    dr = dag_maker.create_dagrun()
+    asset_alias = session.scalar(
+        select(AssetAliasModel).where(AssetAliasModel.name == "example-alias-resolved")
+    )
+    asset_model = AssetModel(name="resolved_example_asset_alias")
+    session.add(asset_model)
+    session.flush()
+    asset_alias.assets.append(asset_model)
+    asset_alias.asset_events.append(
+        AssetEvent(
+            id=1,
+            timestamp=timezone.parse("2021-01-01T00:00:00"),
+            asset_id=asset_model.id,
+            source_dag_id=DAG_ID_RESOLVED_ASSET_ALIAS,
+            source_task_id="task_1",
+            source_run_id=dr.run_id,
+            source_map_index=-1,
+        )
+    )
+    session.commit()
     dag_maker.sync_dagbag_to_db()
 
     # Linear DAG with 5 tasks for depth testing
@@ -170,6 +222,29 @@ def make_dags(dag_maker, session, time_machine) -> None:
     dag_maker.sync_dagbag_to_db()
 
 
+def _fetch_asset_id(asset: Asset, session: Session) -> str:
+    return str(
+        session.scalar(
+            select(AssetModel.id).where(AssetModel.name == asset.name, AssetModel.uri == asset.uri)
+        )
+    )
+
+
+@pytest.fixture
+def asset1_id(make_dags, asset1, session: Session) -> str:
+    return _fetch_asset_id(asset1, session)
+
+
+@pytest.fixture
+def asset2_id(make_dags, asset2, session) -> str:
+    return _fetch_asset_id(asset2, session)
+
+
+@pytest.fixture
+def asset3_id(make_dags, asset3, session) -> str:
+    return _fetch_asset_id(asset3, session)
+
+
 class TestStructureDataEndpoint:
     @pytest.mark.parametrize(
         ("params", "expected", "expected_queries_count"),
@@ -180,12 +255,14 @@ class TestStructureDataEndpoint:
                     "edges": [
                         {
                             "is_setup_teardown": None,
+                            "is_source_asset": None,
                             "label": None,
                             "source_id": "external_task_sensor",
                             "target_id": "task_2",
                         },
                         {
                             "is_setup_teardown": None,
+                            "is_source_asset": None,
                             "label": None,
                             "source_id": "task_1",
                             "target_id": "external_task_sensor",
@@ -194,56 +271,35 @@ class TestStructureDataEndpoint:
                     "nodes": [
                         {
                             "asset_condition_type": None,
-                            "ui_color": "#e8f7e4",
-                            "ui_fgcolor": "#000",
                             "children": None,
                             "id": "task_1",
-                            "is_loop": None,
-                            "loop_max_iterations": None,
-                            "loop_exit_task_id": None,
-                            "loop_exit_criteria_doc": None,
                             "is_mapped": None,
                             "label": "task_1",
                             "tooltip": None,
                             "setup_teardown_type": None,
                             "type": "task",
-                            "team": None,
                             "operator": "EmptyOperator",
                         },
                         {
                             "asset_condition_type": None,
-                            "ui_color": "#4db7db",
-                            "ui_fgcolor": "#000",
                             "children": None,
                             "id": "external_task_sensor",
-                            "is_loop": None,
-                            "loop_max_iterations": None,
-                            "loop_exit_task_id": None,
-                            "loop_exit_criteria_doc": None,
                             "is_mapped": None,
                             "label": "external_task_sensor",
                             "tooltip": None,
                             "setup_teardown_type": None,
                             "type": "task",
-                            "team": None,
                             "operator": "ExternalTaskSensor",
                         },
                         {
                             "asset_condition_type": None,
-                            "ui_color": "#e8f7e4",
-                            "ui_fgcolor": "#000",
                             "children": None,
                             "id": "task_2",
-                            "is_loop": None,
-                            "loop_max_iterations": None,
-                            "loop_exit_task_id": None,
-                            "loop_exit_criteria_doc": None,
                             "is_mapped": None,
                             "label": "task_2",
                             "tooltip": None,
                             "setup_teardown_type": None,
                             "type": "task",
-                            "team": None,
                             "operator": "EmptyOperator",
                         },
                     ],
@@ -270,25 +326,57 @@ class TestStructureDataEndpoint:
                     "nodes": [
                         {
                             "asset_condition_type": None,
-                            "ui_color": "#e8f7e4",
-                            "ui_fgcolor": "#000",
                             "children": None,
                             "id": "task_1",
-                            "is_loop": None,
-                            "loop_max_iterations": None,
-                            "loop_exit_task_id": None,
-                            "loop_exit_criteria_doc": None,
                             "is_mapped": None,
                             "label": "task_1",
                             "operator": "EmptyOperator",
                             "setup_teardown_type": None,
                             "tooltip": None,
                             "type": "task",
-                            "team": None,
                         },
                     ],
                 },
                 7,
+            ),
+            (
+                {"dag_id": DAG_ID_EXTERNAL_TRIGGER, "external_dependencies": True},
+                {
+                    "edges": [
+                        {
+                            "is_source_asset": None,
+                            "is_setup_teardown": None,
+                            "label": None,
+                            "source_id": "trigger_dag_run_operator",
+                            "target_id": "trigger:external_trigger:dag_with_multiple_versions:trigger_dag_run_operator",
+                        }
+                    ],
+                    "nodes": [
+                        {
+                            "asset_condition_type": None,
+                            "children": None,
+                            "id": "trigger_dag_run_operator",
+                            "is_mapped": None,
+                            "label": "trigger_dag_run_operator",
+                            "tooltip": None,
+                            "setup_teardown_type": None,
+                            "type": "task",
+                            "operator": "TriggerDagRunOperator",
+                        },
+                        {
+                            "asset_condition_type": None,
+                            "children": None,
+                            "id": "trigger:external_trigger:dag_with_multiple_versions:trigger_dag_run_operator",
+                            "is_mapped": None,
+                            "label": "trigger_dag_run_operator",
+                            "tooltip": None,
+                            "setup_teardown_type": None,
+                            "type": "trigger",
+                            "operator": None,
+                        },
+                    ],
+                },
+                14,
             ),
         ],
     )
@@ -296,6 +384,266 @@ class TestStructureDataEndpoint:
     def test_should_return_200(self, test_client, params, expected, expected_queries_count):
         with assert_queries_count(expected_queries_count):
             response = test_client.get("/structure/structure_data", params=params)
+        assert response.status_code == 200
+        assert response.json() == expected
+
+    @pytest.mark.usefixtures("make_dags")
+    def test_should_return_200_with_asset(self, test_client, asset1_id, asset2_id, asset3_id):
+        params = {
+            "dag_id": DAG_ID,
+            "external_dependencies": True,
+        }
+        expected = {
+            "edges": [
+                {
+                    "is_setup_teardown": None,
+                    "label": None,
+                    "source_id": "external_task_sensor",
+                    "target_id": "task_2",
+                    "is_source_asset": None,
+                },
+                {
+                    "is_setup_teardown": None,
+                    "label": None,
+                    "source_id": "task_1",
+                    "target_id": "external_task_sensor",
+                    "is_source_asset": None,
+                },
+                {
+                    "is_setup_teardown": None,
+                    "label": None,
+                    "source_id": "and-gate-0",
+                    "target_id": "task_1",
+                    "is_source_asset": True,
+                },
+                {
+                    "is_setup_teardown": None,
+                    "label": None,
+                    "source_id": asset1_id,
+                    "target_id": "and-gate-0",
+                    "is_source_asset": None,
+                },
+                {
+                    "is_setup_teardown": None,
+                    "label": None,
+                    "source_id": asset2_id,
+                    "target_id": "and-gate-0",
+                    "is_source_asset": None,
+                },
+                {
+                    "is_setup_teardown": None,
+                    "label": None,
+                    "source_id": "example-alias",
+                    "target_id": "and-gate-0",
+                    "is_source_asset": None,
+                },
+                {
+                    "is_setup_teardown": None,
+                    "label": None,
+                    "source_id": "sensor:dag_with_multiple_versions:dag_with_multiple_versions:external_task_sensor",
+                    "target_id": "task_1",
+                    "is_source_asset": None,
+                },
+                {
+                    "is_setup_teardown": None,
+                    "label": None,
+                    "source_id": "trigger:external_trigger:dag_with_multiple_versions:trigger_dag_run_operator",
+                    "target_id": "task_1",
+                    "is_source_asset": None,
+                },
+                {
+                    "is_setup_teardown": None,
+                    "label": None,
+                    "source_id": "task_1",
+                    "target_id": f"asset:{asset3_id}",
+                    "is_source_asset": None,
+                },
+            ],
+            "nodes": [
+                {
+                    "children": None,
+                    "id": "task_1",
+                    "is_mapped": None,
+                    "label": "task_1",
+                    "tooltip": None,
+                    "setup_teardown_type": None,
+                    "type": "task",
+                    "operator": "EmptyOperator",
+                    "asset_condition_type": None,
+                },
+                {
+                    "children": None,
+                    "id": "external_task_sensor",
+                    "is_mapped": None,
+                    "label": "external_task_sensor",
+                    "tooltip": None,
+                    "setup_teardown_type": None,
+                    "type": "task",
+                    "operator": "ExternalTaskSensor",
+                    "asset_condition_type": None,
+                },
+                {
+                    "children": None,
+                    "id": "task_2",
+                    "is_mapped": None,
+                    "label": "task_2",
+                    "tooltip": None,
+                    "setup_teardown_type": None,
+                    "type": "task",
+                    "operator": "EmptyOperator",
+                    "asset_condition_type": None,
+                },
+                {
+                    "children": None,
+                    "id": f"asset:{asset3_id}",
+                    "is_mapped": None,
+                    "label": "s3://dataset-bucket/example.csv",
+                    "tooltip": None,
+                    "setup_teardown_type": None,
+                    "type": "asset",
+                    "operator": None,
+                    "asset_condition_type": None,
+                },
+                {
+                    "children": None,
+                    "id": "sensor:dag_with_multiple_versions:dag_with_multiple_versions:external_task_sensor",
+                    "is_mapped": None,
+                    "label": "external_task_sensor",
+                    "tooltip": None,
+                    "setup_teardown_type": None,
+                    "type": "sensor",
+                    "operator": None,
+                    "asset_condition_type": None,
+                },
+                {
+                    "children": None,
+                    "id": "trigger:external_trigger:dag_with_multiple_versions:trigger_dag_run_operator",
+                    "is_mapped": None,
+                    "label": "trigger_dag_run_operator",
+                    "tooltip": None,
+                    "setup_teardown_type": None,
+                    "type": "trigger",
+                    "operator": None,
+                    "asset_condition_type": None,
+                },
+                {
+                    "children": None,
+                    "id": "and-gate-0",
+                    "is_mapped": None,
+                    "label": "and-gate-0",
+                    "tooltip": None,
+                    "setup_teardown_type": None,
+                    "type": "asset-condition",
+                    "operator": None,
+                    "asset_condition_type": "and-gate",
+                },
+                {
+                    "children": None,
+                    "id": asset1_id,
+                    "is_mapped": None,
+                    "label": "asset1",
+                    "tooltip": None,
+                    "setup_teardown_type": None,
+                    "type": "asset",
+                    "operator": None,
+                    "asset_condition_type": None,
+                },
+                {
+                    "children": None,
+                    "id": asset2_id,
+                    "is_mapped": None,
+                    "label": "asset2",
+                    "tooltip": None,
+                    "setup_teardown_type": None,
+                    "type": "asset",
+                    "operator": None,
+                    "asset_condition_type": None,
+                },
+                {
+                    "children": None,
+                    "id": "example-alias",
+                    "is_mapped": None,
+                    "label": "example-alias",
+                    "tooltip": None,
+                    "setup_teardown_type": None,
+                    "type": "asset-alias",
+                    "operator": None,
+                    "asset_condition_type": None,
+                },
+            ],
+        }
+
+        with assert_queries_count(14):
+            response = test_client.get("/structure/structure_data", params=params)
+        assert response.status_code == 200
+        assert response.json() == expected
+
+    @pytest.mark.usefixtures("make_dags")
+    def test_should_return_200_with_resolved_asset_alias_attached_to_the_corrrect_producing_task(
+        self, test_client, session
+    ):
+        resolved_asset = session.scalar(
+            select(AssetModel).where(AssetModel.name == "resolved_example_asset_alias")
+        )
+        params = {
+            "dag_id": DAG_ID_RESOLVED_ASSET_ALIAS,
+            "external_dependencies": True,
+        }
+        expected = {
+            "edges": [
+                {
+                    "source_id": "task_1",
+                    "target_id": "task_2",
+                    "is_setup_teardown": None,
+                    "label": None,
+                    "is_source_asset": None,
+                },
+                {
+                    "source_id": "task_1",
+                    "target_id": f"asset:{resolved_asset.id}",
+                    "is_setup_teardown": None,
+                    "label": None,
+                    "is_source_asset": None,
+                },
+            ],
+            "nodes": [
+                {
+                    "id": "task_1",
+                    "label": "task_1",
+                    "type": "task",
+                    "children": None,
+                    "is_mapped": None,
+                    "tooltip": None,
+                    "setup_teardown_type": None,
+                    "operator": "@task",
+                    "asset_condition_type": None,
+                },
+                {
+                    "id": "task_2",
+                    "label": "task_2",
+                    "type": "task",
+                    "children": None,
+                    "is_mapped": None,
+                    "tooltip": None,
+                    "setup_teardown_type": None,
+                    "operator": "EmptyOperator",
+                    "asset_condition_type": None,
+                },
+                {
+                    "id": f"asset:{resolved_asset.id}",
+                    "label": "resolved_example_asset_alias",
+                    "type": "asset",
+                    "children": None,
+                    "is_mapped": None,
+                    "tooltip": None,
+                    "setup_teardown_type": None,
+                    "operator": None,
+                    "asset_condition_type": None,
+                },
+            ],
+        }
+
+        response = test_client.get("/structure/structure_data", params=params)
         assert response.status_code == 200
         assert response.json() == expected
 
@@ -337,6 +685,24 @@ class TestStructureDataEndpoint:
     def test_delete_dag_should_response_403(self, unauthorized_test_client):
         response = unauthorized_test_client.get("/structure/structure_data", params={"dag_id": DAG_ID})
         assert response.status_code == 403
+
+    @mock.patch(
+        "airflow.api_fastapi.auth.managers.base_auth_manager.BaseAuthManager.get_authorized_dag_ids",
+        return_value={DAG_ID_EXTERNAL_TRIGGER},
+    )
+    @pytest.mark.usefixtures("make_dags")
+    def test_external_deps_filters_unreadable_dags(self, _, test_client):
+        response = test_client.get(
+            "/structure/structure_data",
+            params={"dag_id": DAG_ID_EXTERNAL_TRIGGER, "external_dependencies": True},
+        )
+        assert response.status_code == 200
+        result = response.json()
+        node_ids = {node["id"] for node in result["nodes"]}
+        assert "trigger_dag_run_operator" in node_ids
+        assert not any(DAG_ID in nid for nid in node_ids if nid != "trigger_dag_run_operator")
+        edge_targets = {edge["target_id"] for edge in result["edges"]}
+        assert not any(DAG_ID in tid for tid in edge_targets)
 
     def test_should_return_404(self, test_client):
         response = test_client.get("/structure/structure_data", params={"dag_id": "not_existing"})
@@ -420,62 +786,6 @@ class TestStructureDataEndpoint:
         )
         assert mapped_in_group["is_mapped"] is True
         assert mapped_in_group["operator"] == "PythonOperator"
-
-    def test_filter_creating_task_group_cycle(self, dag_maker, test_client, session):
-        """Dropping ``g.guard`` makes ``g.second`` a root of ``g``, so ``g`` and ``bridge`` depend on each other."""
-        with dag_maker(dag_id="filtered_task_group_cycle", serialized=True, session=session):
-            with TaskGroup(group_id="g"):
-                first = EmptyOperator(task_id="first")
-                second = EmptyOperator(task_id="second")
-                guard = EmptyOperator(task_id="guard")
-                guard >> second
-            bridge = EmptyOperator(task_id="bridge")
-            first >> bridge >> second
-        dag_maker.sync_dagbag_to_db()
-
-        response = test_client.get(
-            "/structure/structure_data",
-            params={"dag_id": "filtered_task_group_cycle", "root": "g.first", "include_downstream": True},
-        )
-
-        assert response.status_code == 200
-        nodes = response.json()["nodes"]
-        assert [node["id"] for node in nodes] == ["bridge", "g"]
-        assert [child["id"] for child in nodes[1]["children"]] == ["g.first", "g.second"]
-
-    def test_ui_colors_passed_through_to_graph(self, dag_maker, test_client, session):
-        """Both raw hex colors and Chakra palette tokens reach the graph unchanged, for operators and groups."""
-
-        class TokenOperator(EmptyOperator):
-            ui_color = "blue.500"
-            ui_fgcolor = "red.700"
-
-        class HexOperator(EmptyOperator):
-            ui_color = "#e8b7e4"
-            ui_fgcolor = "#000000"
-
-        with dag_maker(
-            dag_id="test_ui_colors_dag",
-            serialized=True,
-            session=session,
-            start_date=pendulum.DateTime(2023, 2, 1, 0, 0, 0, tzinfo=pendulum.UTC),
-        ):
-            TokenOperator(task_id="token")
-            HexOperator(task_id="hex")
-            with TaskGroup(group_id="grp", ui_color="teal.400", ui_fgcolor="#ffffff"):
-                EmptyOperator(task_id="inner")
-
-        dag_maker.sync_dagbag_to_db()
-        response = test_client.get("/structure/structure_data", params={"dag_id": "test_ui_colors_dag"})
-        assert response.status_code == 200
-        nodes = {node["id"]: node for node in response.json()["nodes"]}
-
-        assert nodes["token"]["ui_color"] == "blue.500"
-        assert nodes["token"]["ui_fgcolor"] == "red.700"
-        assert nodes["hex"]["ui_color"] == "#e8b7e4"
-        assert nodes["hex"]["ui_fgcolor"] == "#000000"
-        assert nodes["grp"]["ui_color"] == "teal.400"
-        assert nodes["grp"]["ui_fgcolor"] == "#ffffff"
 
     @pytest.mark.parametrize(
         ("params", "expected_task_ids", "description"),

@@ -16,43 +16,10 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useTranslation } from "react-i18next";
 import { AiOutlineGroup } from "react-icons/ai";
-import { FiBookOpen } from "react-icons/fi";
-import { useParams } from "react-router-dom";
 
-import DisplayMarkdownButton from "src/components/DisplayMarkdownButton";
 import { HeaderCard } from "src/components/HeaderCard";
 
-import { useLoopRuleStats } from "src/hooks/useLoopRuleStats";
-
-export const GroupTaskHeader = ({
-  docMd,
-  title,
-}: {
-  readonly docMd?: string | null;
-  readonly title: string;
-}) => {
-  const { t: translate } = useTranslation();
-  const { groupId } = useParams();
-  const loopStats = useLoopRuleStats(groupId);
-
-  return (
-    <HeaderCard
-      actions={
-        docMd === undefined || docMd === null ? undefined : (
-          <DisplayMarkdownButton
-            header={translate("taskGroup.documentation")}
-            icon={<FiBookOpen />}
-            mdContent={docMd}
-            text={translate("docs.documentation")}
-          />
-        )
-      }
-      icon={<AiOutlineGroup />}
-      stats={loopStats}
-      title={title}
-      type="taskGroup"
-    />
-  );
-};
+export const GroupTaskHeader = ({ title }: { readonly title: string }) => (
+  <HeaderCard icon={<AiOutlineGroup />} stats={[]} title={title} />
+);

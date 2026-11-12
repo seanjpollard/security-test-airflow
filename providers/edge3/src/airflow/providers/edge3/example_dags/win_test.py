@@ -140,7 +140,7 @@ class CmdOperator(BaseOperator):
 
     template_fields: Sequence[str] = ("command", "env", "cwd")
     template_fields_renderers = {"command": "bash", "env": "json"}
-    template_ext: Sequence[str] = (".bat",)
+    template_ext: Sequence[str] = ".bat"
 
     subprocess: Popen | None = None
 
@@ -252,7 +252,7 @@ with DAG(
     doc_md=__doc__,
     schedule=None,
     start_date=datetime(2025, 1, 1),
-    tags=["example", "edge", "Windows"],
+    tags=["edge", "Windows"],
     default_args={"queue": "windows"},
     params={
         "mapping_count": Param(

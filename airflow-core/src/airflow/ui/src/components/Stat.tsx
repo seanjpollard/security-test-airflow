@@ -16,9 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import type { ReactNode } from "react";
-
 import { Center, Heading, type StackProps, VStack } from "@chakra-ui/react";
+import type { ReactNode } from "react";
 
 type Props = {
   readonly label: ReactNode | string;

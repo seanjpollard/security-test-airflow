@@ -24,8 +24,8 @@ import inspect
 import traceback
 import warnings
 from collections.abc import Callable, MutableMapping
-from typing import TYPE_CHECKING, Any, NamedTuple
-from urllib.parse import SplitResult, urlsplit
+from typing import TYPE_CHECKING, Any
+from urllib.parse import SplitResult
 
 import structlog
 
@@ -53,14 +53,6 @@ if TYPE_CHECKING:
     from airflow.sdk.definitions.asset import Asset
 
 log = structlog.getLogger(__name__)
-
-
-class RemoteLoggingInfo(NamedTuple):
-    """Remote logging IO handler registered by a provider."""
-
-    classpath: str
-    scheme: str
-    package_name: str
 
 
 def _correctness_check(provider_package: str, class_name: str, provider_info: ProviderInfo) -> Any:
@@ -158,8 +150,6 @@ class ProvidersManagerTaskRuntime(LoggingMixin):
         # Keeps dict of hooks keyed by connection type. They are lazy evaluated at access time
         self._hooks_lazy_dict: LazyDictWithCache[str, HookInfo | Callable] = LazyDictWithCache()
         self._plugins_set: set[PluginInfo] = set()
-        self._remote_logging_info_list: list[RemoteLoggingInfo] = []
-        self._remote_logging_by_scheme: dict[str, RemoteLoggingInfo] = {}
         self._provider_schema_validator = _create_provider_info_schema_validator()
         self._init_airflow_core_hooks()
         # Populated by initialize_provider_configs(); holds provider-contributed config sections.
@@ -223,12 +213,6 @@ class ProvidersManagerTaskRuntime(LoggingMixin):
         """Lazy initialization of providers plugins."""
         self.initialize_providers_list()
         self._discover_plugins()
-
-    @provider_info_cache("remote_logging")
-    def initialize_providers_remote_logging(self):
-        """Lazy initialization of providers remote logging IO handlers."""
-        self.initialize_providers_list()
-        self._discover_remote_logging()
 
     @provider_info_cache("taskflow_decorators")
     def initialize_providers_taskflow_decorator(self):
@@ -395,80 +379,6 @@ class ProvidersManagerTaskRuntime(LoggingMixin):
                 provider_uses_connection_types,
             )
         self._hook_provider_dict = dict(sorted(self._hook_provider_dict.items()))
-        self._warn_about_unresolvable_connection_types()
-
-    @staticmethod
-    def _connection_type_as_stored(connection_type: str) -> str:
-        """
-        Return the connection type that a stored connection presents for this declaration.
-
-        This follows what a connection goes through on the way out and back in.
-        ``Connection.get_uri()`` lowercases the type and encodes '_' as '-', because RFC 3986
-        forbids '_' in a URI scheme, and reading a connection back from a URI or from JSON
-        decodes it again. A declaration that does not come back unchanged is registered under
-        a name no such connection ever presents.
-        """
-        # Imported here because airflow.sdk.definitions.connection imports this module at
-        # module level. _normalize_conn_type is the decoder itself, so calling it keeps this
-        # in step with the aliases it applies rather than restating them.
-        from airflow.sdk.definitions.connection import Connection
-
-        scheme = urlsplit(f"{connection_type.lower().replace('_', '-')}://host").scheme
-        return Connection._normalize_conn_type(scheme)
-
-    def _warn_about_unresolvable_connection_types(self) -> None:
-        """
-        Warn about a declared connection type that a stored connection cannot resolve.
-
-        A hook registers under the ``connection-type`` string verbatim, while a connection
-        read from a URI, from JSON, or rebuilt from the secrets cache presents the decoded
-        form of that string. Where the two differ, the hook is unreachable for those
-        connections. A connection created directly through the UI, the REST API or
-        ``connections add --conn-type`` keeps the declared spelling and does resolve, which is
-        what lets the mismatch go unnoticed until a connection is served from somewhere else.
-
-        Where two providers declare two spellings of one name it is worse than unreachable: a
-        connection for either resolves whichever hook holds the decoded name, and because that
-        resolves rather than failing, there is no error anywhere to carry the explanation.
-
-        Discovery is the only place either can be reported. provider.yaml.schema.json
-        validates the providers in this repository alone, so a third-party distribution never
-        passes through it, and Connection.get_hook() is reached only once a lookup has already
-        failed, which the collision never does.
-        """
-        declared_by_stored_name: dict[str, list[str]] = {}
-        for connection_type in self._hook_provider_dict:
-            stored_name = self._connection_type_as_stored(connection_type)
-            declared_by_stored_name.setdefault(stored_name, []).append(connection_type)
-
-        for stored_name, declared in declared_by_stored_name.items():
-            if len(declared) == 1 and declared[0] == stored_name:
-                continue
-            connection_types = sorted(declared)
-            packages = [self._hook_provider_dict[name].package_name for name in connection_types]
-            if not stored_name:
-                log.warning(
-                    "A declared connection type cannot be carried in a connection URI, so a "
-                    "connection read from a URI or from JSON has no connection type at all.",
-                    connection_types=connection_types,
-                    packages=packages,
-                )
-            elif len(connection_types) > 1:
-                log.warning(
-                    "Several declared connection types are read back under one name, so a "
-                    "connection for any of them resolves whichever hook holds that name.",
-                    connection_types=connection_types,
-                    packages=packages,
-                    read_back_as=stored_name,
-                )
-            else:
-                log.warning(
-                    "A declared connection type is read back under a different name, so a "
-                    "connection read from a URI or from JSON cannot reach its hook.",
-                    connection_types=connection_types,
-                    packages=packages,
-                    read_back_as=stored_name,
-                )
 
     @staticmethod
     def _get_attr(obj: Any, attr_name: str):
@@ -624,31 +534,6 @@ class ProvidersManagerTaskRuntime(LoggingMixin):
                     )
                 )
 
-    def _discover_remote_logging(self) -> None:
-        """Retrieve all remote logging IO handlers defined in the providers."""
-        for provider_package, provider in self._provider_dict.items():
-            entries = provider.data.get("remote-logging") or []
-            for entry in entries:
-                classpath = entry["classpath"]
-                if not _correctness_check(provider_package, classpath, provider):
-                    continue
-                info = RemoteLoggingInfo(
-                    classpath=classpath,
-                    scheme=entry["scheme"],
-                    package_name=provider_package,
-                )
-                if (existing := self._remote_logging_by_scheme.get(info.scheme)) is not None:
-                    log.warning(
-                        "Remote logging scheme '%s' is already registered by %s; ignoring "
-                        "duplicate registration from %s.",
-                        info.scheme,
-                        existing.package_name,
-                        info.package_name,
-                    )
-                    continue
-                self._remote_logging_info_list.append(info)
-                self._remote_logging_by_scheme[info.scheme] = info
-
     def _discover_taskflow_decorators(self) -> None:
         for name, info in self._provider_dict.items():
             for taskflow_decorator in info.data.get("task-decorators", []):
@@ -727,17 +612,6 @@ class ProvidersManagerTaskRuntime(LoggingMixin):
         return sorted(self._plugins_set, key=lambda x: x.plugin_class)
 
     @property
-    def remote_logging_handlers(self) -> list[RemoteLoggingInfo]:
-        """Return all remote logging IO handlers contributed by providers."""
-        self.initialize_providers_remote_logging()
-        return list(self._remote_logging_info_list)
-
-    def remote_logging_handler_by_scheme(self, scheme: str) -> RemoteLoggingInfo | None:
-        """Return the remote logging IO handler registered for the given URL scheme, if any."""
-        self.initialize_providers_remote_logging()
-        return self._remote_logging_by_scheme.get(scheme)
-
-    @property
     def provider_configs(self) -> list[tuple[str, dict[str, Any]]]:
         self.initialize_provider_configs()
         return sorted(self._provider_configs.items(), key=lambda x: x[0])
@@ -766,8 +640,6 @@ class ProvidersManagerTaskRuntime(LoggingMixin):
         self._hook_provider_dict.clear()
         self._hooks_lazy_dict.clear()
         self._plugins_set.clear()
-        self._remote_logging_info_list.clear()
-        self._remote_logging_by_scheme.clear()
         self._asset_uri_handlers.clear()
         self._asset_factories.clear()
         self._asset_to_openlineage_converters.clear()

@@ -25,16 +25,10 @@ import {
   useTaskInstanceServiceGetTaskInstancesKey,
   useDagRunServiceGetDagRunsKey,
   UseDagRunServiceGetDagRunKeyFn,
-  UseGanttServiceGetGanttDataKeyFn,
   useTaskInstanceServiceGetHitlDetailsKey,
-  useTaskInstanceServiceGetMappedTaskInstanceKey,
 } from "openapi/queries";
-
-import { toaster } from "src/system-components";
-
+import { toaster } from "src/components/ui";
 import { createErrorToaster } from "src/utils";
-
-import { gridQueryKeys, tiPerAttemptQueryKeys } from "./gridViewQueryKeys";
 
 type DeleteTaskInstanceParams = {
   dagId: string;
@@ -72,15 +66,9 @@ export const useDeleteTaskInstance = ({
       [useTaskInstanceServiceGetTaskInstancesKey],
       [useTaskInstanceServiceGetTaskInstanceKey, { dagId, dagRunId, mapIndex, taskId }],
       [useTaskInstanceServiceGetHitlDetailsKey],
-      UseGanttServiceGetGanttDataKeyFn({ dagId, runId: dagRunId }),
-      [useTaskInstanceServiceGetMappedTaskInstanceKey],
-      ...tiPerAttemptQueryKeys,
     ];
 
-    await Promise.all([
-      ...queryKeys.map((key) => queryClient.invalidateQueries({ queryKey: key })),
-      ...gridQueryKeys(dagId).map((key) => queryClient.invalidateQueries({ queryKey: key })),
-    ]);
+    await Promise.all(queryKeys.map((key) => queryClient.invalidateQueries({ queryKey: key })));
 
     toaster.create({
       description: translate("dags:runAndTaskActions.delete.success.description", {

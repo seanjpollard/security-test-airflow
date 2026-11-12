@@ -19,7 +19,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-from typing import TYPE_CHECKING
 
 import pytest
 
@@ -38,9 +37,6 @@ from unit.listeners import (
     throwing_listener,
 )
 from unit.utils.test_helpers import MockJobRunner
-
-if TYPE_CHECKING:
-    from sqlalchemy.orm import Session
 
 pytestmark = pytest.mark.db_test
 
@@ -69,7 +65,7 @@ def clean_listener_state():
 
 
 @provide_session
-def test_listener_gets_calls(create_task_instance, listener_manager, *, session: Session):
+def test_listener_gets_calls(create_task_instance, session, listener_manager):
     listener_manager(full_listener)
 
     ti = create_task_instance(session=session, state=TaskInstanceState.QUEUED)
@@ -83,7 +79,7 @@ def test_listener_gets_calls(create_task_instance, listener_manager, *, session:
 
 
 @provide_session
-def test_multiple_listeners(create_task_instance, listener_manager, *, session: Session):
+def test_multiple_listeners(create_task_instance, session, listener_manager):
     listener_manager(full_listener)
     listener_manager(lifecycle_listener)
     class_based_listener = class_listener.ClassBasedListener()
@@ -103,7 +99,7 @@ def test_multiple_listeners(create_task_instance, listener_manager, *, session: 
 
 
 @provide_session
-def test_listener_gets_only_subscribed_calls(create_task_instance, listener_manager, *, session: Session):
+def test_listener_gets_only_subscribed_calls(create_task_instance, session, listener_manager):
     listener_manager(partial_listener)
 
     ti = create_task_instance(session=session, state=TaskInstanceState.QUEUED)
@@ -117,9 +113,7 @@ def test_listener_gets_only_subscribed_calls(create_task_instance, listener_mana
 
 
 @provide_session
-def test_listener_suppresses_exceptions(
-    create_task_instance, cap_structlog, listener_manager, *, session: Session
-):
+def test_listener_suppresses_exceptions(create_task_instance, session, cap_structlog, listener_manager):
     listener_manager(throwing_listener)
 
     ti = create_task_instance(session=session, state=TaskInstanceState.QUEUED)
@@ -128,9 +122,7 @@ def test_listener_suppresses_exceptions(
 
 
 @provide_session
-def test_listener_captures_failed_taskinstances(
-    create_task_instance_of_operator, listener_manager, *, session: Session
-):
+def test_listener_captures_failed_taskinstances(create_task_instance_of_operator, session, listener_manager):
     listener_manager(full_listener)
 
     ti = create_task_instance_of_operator(
@@ -145,7 +137,7 @@ def test_listener_captures_failed_taskinstances(
 
 @provide_session
 def test_listener_captures_longrunning_taskinstances(
-    create_task_instance_of_operator, listener_manager, *, session: Session
+    create_task_instance_of_operator, session, listener_manager
 ):
     listener_manager(full_listener)
 
@@ -159,7 +151,7 @@ def test_listener_captures_longrunning_taskinstances(
 
 
 @provide_session
-def test_class_based_listener(create_task_instance, listener_manager, *, session: Session):
+def test_class_based_listener(create_task_instance, session, listener_manager):
     listener = class_listener.ClassBasedListener()
     listener_manager(listener)
 
@@ -169,7 +161,7 @@ def test_class_based_listener(create_task_instance, listener_manager, *, session
     assert listener.state == [TaskInstanceState.RUNNING, TaskInstanceState.SUCCESS, DagRunState.SUCCESS]
 
 
-def test_listener_logs_call(caplog, create_task_instance, listener_manager, *, session: Session):
+def test_listener_logs_call(caplog, create_task_instance, session, listener_manager):
     caplog.set_level(logging.DEBUG, logger="airflow.sdk._shared.listeners.listener")
     listener_manager(full_listener)
 

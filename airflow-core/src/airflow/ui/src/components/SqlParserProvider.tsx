@@ -16,9 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { type ReactNode, useEffect, useState } from "react";
-
 import { init } from "@guanmingchiu/sqlparser-ts";
+import { type ReactNode, useEffect, useState } from "react";
 
 /**
  * Waits for the sqlparser WASM module to load before rendering children.
@@ -35,5 +34,9 @@ export const SqlParserProvider = ({ children }: { readonly children: ReactNode }
       .finally(() => setIsReady(true));
   }, []);
 
-  return isReady ? children : undefined;
+  if (!isReady) {
+    return undefined;
+  }
+
+  return children;
 };

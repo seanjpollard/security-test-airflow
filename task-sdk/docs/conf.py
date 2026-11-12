@@ -55,10 +55,8 @@ extensions = [
     "sphinx.ext.autodoc",
     "autoapi.extension",
     "sphinx.ext.intersphinx",
-    "airflow_intersphinx",
     "exampleinclude",
-    "mermaid_svg",
-    "airflow_spelling",
+    "sphinxcontrib.spelling",
 ]
 
 autoapi_dirs = [CONF_DIR.joinpath("..", "src").resolve()]
@@ -102,8 +100,6 @@ rst_epilog = "\n".join(f".. |{key}| replace:: {replace}" for key, replace in glo
 
 
 intersphinx_resolve_self = "airflow"
-# ``airflow:`` resolves against the published site; ``apache-airflow:`` (added by
-# airflow_intersphinx) against the local inventory — use it for not-yet-published pages.
 intersphinx_mapping = {
     "airflow": ("https://airflow.apache.org/docs/apache-airflow/stable/", None),
 }

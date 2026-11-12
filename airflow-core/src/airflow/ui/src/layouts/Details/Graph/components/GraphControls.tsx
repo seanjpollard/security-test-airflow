@@ -20,15 +20,7 @@ import { ControlButton, Controls, useReactFlow } from "@xyflow/react";
 import { useTranslation } from "react-i18next";
 import { MdCenterFocusStrong } from "react-icons/md";
 
-import { DownloadButton } from "src/components/Graph/DownloadButton";
-
-export const GraphControls = ({
-  dagId,
-  selectedNodeId,
-}: {
-  readonly dagId: string;
-  readonly selectedNodeId?: string;
-}) => {
+export const GraphControls = ({ selectedNodeId }: { readonly selectedNodeId?: string }) => {
   const { t: translate } = useTranslation("components");
   const { fitView } = useReactFlow();
 
@@ -45,7 +37,6 @@ export const GraphControls = ({
           <MdCenterFocusStrong />
         </ControlButton>
       )}
-      <DownloadButton name={dagId} />
     </Controls>
   );
 };

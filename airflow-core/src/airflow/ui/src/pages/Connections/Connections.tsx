@@ -16,43 +16,31 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from "react";
-
-import { Flex } from "@chakra-ui/react";
+import { Flex, HStack, Spacer, VStack } from "@chakra-ui/react";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { TFunction } from "i18next";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { useConnectionServiceGetConnections } from "openapi/queries";
 import type { ConnectionResponse } from "openapi/requests/types.gen";
-
-import { Tooltip, ActionBar } from "src/system-components";
-
 import { DataTable } from "src/components/DataTable";
-import type { DataTableFeatures } from "src/components/DataTable/features";
-import {
-  SelectionHeaderCheckbox,
-  SelectionProvider,
-  SelectionRowCheckbox,
-  useRowSelection,
-  type GetColumnsParams,
-} from "src/components/DataTable/useRowSelection";
+import { useRowSelection, type GetColumnsParams } from "src/components/DataTable/useRowSelection";
 import { useTableURLState } from "src/components/DataTable/useTableUrlState";
 import { ErrorAlert } from "src/components/ErrorAlert";
 import { SearchBar } from "src/components/SearchBar";
-import { TeamName } from "src/components/TeamName";
-
+import { Tooltip } from "src/components/ui";
+import { ActionBar } from "src/components/ui/ActionBar";
+import { Checkbox } from "src/components/ui/Checkbox";
 import { SearchParamsKeys, type SearchParamsKeysType } from "src/constants/searchParams";
 import { useAdvancedSearch } from "src/hooks/useAdvancedSearch";
 import { useConfig } from "src/queries/useConfig.tsx";
 import { useConnectionTypeMeta } from "src/queries/useConnectionTypeMeta";
-import { formatNumber, useDocumentTitle } from "src/utils";
 
 import AddConnectionButton from "./AddConnectionButton";
 import DeleteConnectionButton from "./DeleteConnectionButton";
 import DeleteConnectionsButton from "./DeleteConnectionsButton";
-import DuplicateConnectionButton from "./DuplicateConnectionButton";
 import EditConnectionButton from "./EditConnectionButton";
 import { NothingFoundInfo } from "./NothingFoundInfo";
 import TestConnectionButton from "./TestConnectionButton";
@@ -71,20 +59,34 @@ export type ConnectionBody = {
 };
 
 const getColumns = ({
-  hasSelection,
+  allRowsSelected,
   multiTeam,
+  onRowSelect,
+  onSelectAll,
+  selectedRows,
   translate,
-}: {
-  hasSelection: boolean;
-  translate: TFunction;
-} & GetColumnsParams): Array<ColumnDef<DataTableFeatures, ConnectionResponse>> => {
-  const columns: Array<ColumnDef<DataTableFeatures, ConnectionResponse>> = [
+}: { translate: TFunction } & GetColumnsParams): Array<ColumnDef<ConnectionResponse>> => {
+  const columns: Array<ColumnDef<ConnectionResponse>> = [
     {
       accessorKey: "select",
-      cell: ({ row }) => <SelectionRowCheckbox rowKey={row.original.connection_id} />,
+      cell: ({ row }) => (
+        <Checkbox
+          borderWidth={1}
+          checked={selectedRows.get(row.original.connection_id)}
+          colorPalette="brand"
+          onCheckedChange={(event) => onRowSelect(row.original.connection_id, Boolean(event.checked))}
+        />
+      ),
       enableHiding: false,
       enableSorting: false,
-      header: () => <SelectionHeaderCheckbox />,
+      header: () => (
+        <Checkbox
+          borderWidth={1}
+          checked={allRowsSelected}
+          colorPalette="brand"
+          onCheckedChange={(event) => onSelectAll(Boolean(event.checked))}
+        />
+      ),
       meta: {
         skeletonWidth: 10,
       },
@@ -113,9 +115,6 @@ const getColumns = ({
       ? [
           {
             accessorKey: "team_name",
-            cell: ({ row: { original } }: { row: { original: ConnectionResponse } }) => (
-              <TeamName teamName={original.team_name} />
-            ),
             header: translate("columns.team"),
           },
         ]
@@ -125,12 +124,10 @@ const getColumns = ({
       cell: ({ row: { original } }) => (
         <Flex justifyContent="end">
           <TestConnectionButton connection={original} />
-          <EditConnectionButton connection={original} disabled={hasSelection} />
-          <DuplicateConnectionButton connection={original} disabled={hasSelection} />
-          <DeleteConnectionButton connectionId={original.connection_id} disabled={hasSelection} />
+          <EditConnectionButton connection={original} disabled={selectedRows.size > 0} />
+          <DeleteConnectionButton connectionId={original.connection_id} disabled={selectedRows.size > 0} />
         </Flex>
       ),
-      enableHiding: false,
       enableSorting: false,
       header: "",
       meta: {
@@ -143,10 +140,7 @@ const getColumns = ({
 };
 
 export const Connections = () => {
-  const { i18n, t: translate } = useTranslation(["admin", "common"]);
-
-  useDocumentTitle(translate("common:admin.Connections"));
-
+  const { t: translate } = useTranslation(["admin", "common"]);
   const { setTableURLState, tableURLState } = useTableURLState();
   const [searchParams, setSearchParams] = useSearchParams();
   const { NAME_PATTERN, OFFSET }: SearchParamsKeysType = SearchParamsKeys;
@@ -158,7 +152,7 @@ export const Connections = () => {
   const { pagination, sorting } = tableURLState;
   const [sort] = sorting;
   const orderBy = sort ? [`${sort.desc ? "-" : ""}${sort.id}`] : ["connection_id"];
-  const { data, error, isLoading } = useConnectionServiceGetConnections({
+  const { data, error, isFetching, isLoading } = useConnectionServiceGetConnections({
     ...(advancedSearch.enabled
       ? { connectionIdPattern: connectionIdPattern ?? undefined }
       : { connectionIdPrefixPattern: connectionIdPattern ?? undefined }),
@@ -174,8 +168,11 @@ export const Connections = () => {
     });
 
   const columns = getColumns({
-    hasSelection: selectedRows.size > 0,
+    allRowsSelected,
     multiTeam: multiTeamEnabled,
+    onRowSelect: handleRowSelect,
+    onSelectAll: handleSelectAll,
+    selectedRows,
     translate,
   });
 
@@ -195,36 +192,36 @@ export const Connections = () => {
   };
 
   return (
-    <SelectionProvider
-      allRowsSelected={allRowsSelected}
-      onRowSelect={handleRowSelect}
-      onSelectAll={handleSelectAll}
-      selectedRows={selectedRows}
-    >
+    <>
+      <VStack alignItems="none">
+        <SearchBar
+          advancedSearch={advancedSearch}
+          defaultValue={connectionIdPattern ?? ""}
+          onChange={handleSearchChange}
+          placeholder={translate("connections.searchPlaceholder")}
+        />
+        <HStack gap={4} mt={2}>
+          <Spacer />
+          <AddConnectionButton />
+        </HStack>
+      </VStack>
+
       <DataTable
         columns={columns}
         data={data?.connections ?? []}
         errorMessage={<ErrorAlert error={error} />}
-        filterActions={
-          <SearchBar
-            advancedSearch={advancedSearch}
-            defaultValue={connectionIdPattern ?? ""}
-            onChange={handleSearchChange}
-            placeholder={translate("connections.searchPlaceholder")}
-          />
-        }
         initialState={tableURLState}
+        isFetching={isFetching}
         isLoading={isLoading}
         modelName="admin:connections.connection"
         noRowsMessage={<NothingFoundInfo />}
         onStateChange={setTableURLState}
-        primaryActions={<AddConnectionButton />}
         total={data?.total_entries ?? 0}
       />
       <ActionBar.Root closeOnInteractOutside={false} open={Boolean(selectedRows.size)}>
         <ActionBar.Content>
           <ActionBar.SelectionTrigger>
-            {formatNumber(selectedRows.size, i18n.language)} {translate("deleteActions.selected")}
+            {selectedRows.size} {translate("deleteActions.selected")}
           </ActionBar.SelectionTrigger>
           <ActionBar.Separator />
           <Tooltip content={translate("deleteActions.tooltip")}>
@@ -236,6 +233,6 @@ export const Connections = () => {
           <ActionBar.CloseTrigger onClick={clearSelections} />
         </ActionBar.Content>
       </ActionBar.Root>
-    </SelectionProvider>
+    </>
   );
 };

@@ -17,22 +17,19 @@
  * under the License.
  */
 import { useToken } from "@chakra-ui/react";
-import { Background, Controls, MiniMap, ReactFlow, type Node as ReactFlowNode } from "@xyflow/react";
+import { ReactFlow, Controls, Background, MiniMap, type Node as ReactFlowNode } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useParams } from "react-router-dom";
 import { useLocalStorage } from "usehooks-ts";
 
 import type { AssetResponse } from "openapi/requests/types.gen";
-
 import type { Direction } from "src/components/Graph/DirectionDropdown";
 import { DownloadButton } from "src/components/Graph/DownloadButton";
 import { edgeTypes, nodeTypes } from "src/components/Graph/graphTypes";
-import { getGatePathEdgeIdsForSelection, type CustomNodeProps } from "src/components/Graph/reactflowUtils";
+import type { CustomNodeProps } from "src/components/Graph/reactflowUtils";
 import { useGraphLayout } from "src/components/Graph/useGraphLayout";
-
 import { directionKey } from "src/constants/localStorage";
 import { useColorMode } from "src/context/colorMode";
-import { useDefaultGraphDirection } from "src/hooks/useUserSettings";
 import { useDependencyGraph } from "src/queries/useDependencyGraph";
 import { getReactFlowThemeStyle } from "src/theme";
 
@@ -51,8 +48,7 @@ export const AssetGraph = ({
     dependencyType,
   });
 
-  const [defaultDirection] = useDefaultGraphDirection();
-  const [direction] = useLocalStorage<Direction>(directionKey(assetId ?? ""), defaultDirection);
+  const [direction] = useLocalStorage<Direction>(directionKey(assetId ?? ""), "RIGHT");
 
   const { data: layoutData } = useGraphLayout({
     ...graphData,
@@ -64,15 +60,9 @@ export const AssetGraph = ({
 
   const selectedColor = colorMode === "dark" ? selectedDarkColor : selectedLightColor;
 
-  const isNodeSelected = (nodeId: string) => nodeId === `asset:${assetId}`;
-
   const nodes = layoutData?.nodes.map((node) =>
-    isNodeSelected(node.id) ? { ...node, data: { ...node.data, isSelected: true } } : node,
+    node.id === `asset:${assetId}` ? { ...node, data: { ...node.data, isSelected: true } } : node,
   );
-
-  const gatePathEdgeIds = layoutData
-    ? getGatePathEdgeIdsForSelection(layoutData.nodes, layoutData.edges, isNodeSelected)
-    : new Set<string>();
 
   const edges = (layoutData?.edges ?? []).map((edge) => ({
     ...edge,
@@ -81,10 +71,7 @@ export const AssetGraph = ({
       rest: {
         ...edge.data?.rest,
         edgeType: dependencyType,
-        isSelected:
-          `asset:${asset?.id}` === edge.source ||
-          `asset:${asset?.id}` === edge.target ||
-          gatePathEdgeIds.has(edge.id),
+        isSelected: `asset:${asset?.id}` === edge.source || `asset:${asset?.id}` === edge.target,
       },
     },
   }));
@@ -106,9 +93,7 @@ export const AssetGraph = ({
       style={getReactFlowThemeStyle(colorMode)}
     >
       <Background />
-      <Controls showInteractive={false}>
-        <DownloadButton name={asset?.name ?? asset?.uri ?? "asset"} />
-      </Controls>
+      <Controls showInteractive={false} />
       <MiniMap
         nodeStrokeColor={(node: ReactFlowNode<CustomNodeProps>) =>
           node.data.isSelected && selectedColor !== undefined ? selectedColor : ""
@@ -117,6 +102,7 @@ export const AssetGraph = ({
         pannable
         zoomable
       />
+      <DownloadButton name={asset?.name ?? asset?.uri ?? "asset"} />
     </ReactFlow>
   );
 };

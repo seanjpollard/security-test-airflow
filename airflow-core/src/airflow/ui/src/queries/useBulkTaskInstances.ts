@@ -17,6 +17,7 @@
  * under the License.
  */
 import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -24,67 +25,81 @@ import {
   useTaskInstanceServiceBulkTaskInstances,
   useTaskInstanceServiceGetTaskInstancesKey,
 } from "openapi/queries";
-import type { BulkBody_BulkTaskInstanceBody_, BulkResponse } from "openapi/requests/types.gen";
-
-import { toaster } from "src/system-components";
-
-import { tiPerAttemptQueryKeys } from "./gridViewQueryKeys";
+import type {
+  BulkActionResponse,
+  BulkBody_BulkTaskInstanceBody_,
+  BulkResponse,
+} from "openapi/requests/types.gen";
+import { toaster } from "src/components/ui";
 
 type Props = {
-  readonly deselectKeys: (keys: Array<string>) => void;
+  readonly clearSelections: VoidFunction;
   readonly onSuccessConfirm: VoidFunction;
 };
 
-export const useBulkTaskInstances = ({ deselectKeys, onSuccessConfirm }: Props) => {
+const handleActionResult = (
+  actionResult: BulkActionResponse,
+  setError: (error: unknown) => void,
+  onSuccess: (count: number, keys: Array<string>) => void,
+) => {
+  const { errors, success } = actionResult;
+
+  if (Array.isArray(errors) && errors.length > 0) {
+    const apiError = errors[0] as { error: string };
+
+    setError({ body: { detail: apiError.error } });
+  } else if (Array.isArray(success) && success.length > 0) {
+    onSuccess(success.length, success);
+  }
+};
+
+export const useBulkTaskInstances = ({ clearSelections, onSuccessConfirm }: Props) => {
   const queryClient = useQueryClient();
+  const [error, setError] = useState<unknown>(undefined);
   const { t: translate } = useTranslation(["common", "dags"]);
 
   const onSuccess = async (responseData: BulkResponse) => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: [useTaskInstanceServiceGetTaskInstancesKey] }),
       queryClient.invalidateQueries({ queryKey: [useDagRunServiceGetDagRunsKey] }),
-      ...tiPerAttemptQueryKeys.map((key) => queryClient.invalidateQueries({ queryKey: key })),
     ]);
 
     const isDelete = Boolean(responseData.delete);
     const actionResult = responseData.delete ?? responseData.update;
     const toasterKey = isDelete ? "toaster.bulkDelete" : "toaster.bulkUpdate";
 
-    if (!actionResult) {
-      return;
-    }
-
-    const successKeys = actionResult.success ?? [];
-    const actionErrors = actionResult.errors ?? [];
-
-    if (successKeys.length > 0) {
-      toaster.create({
-        description: translate(`${toasterKey}.success.description`, {
-          count: successKeys.length,
-          keys: successKeys.join(", "),
-          resourceName: translate("taskInstance_other"),
-        }),
-        title: translate(`${toasterKey}.success.title`, {
-          resourceName: translate("taskInstance_other"),
-        }),
-        type: "success",
+    if (actionResult) {
+      handleActionResult(actionResult, setError, (count, keys) => {
+        toaster.create({
+          description: translate(`${toasterKey}.success.description`, {
+            count,
+            keys: keys.join(", "),
+            resourceName: translate("taskInstance_other"),
+          }),
+          title: translate(`${toasterKey}.success.title`, {
+            resourceName: translate("taskInstance_other"),
+          }),
+          type: "success",
+        });
+        clearSelections();
+        onSuccessConfirm();
       });
-      deselectKeys(successKeys);
-    }
-
-    // Per-entity failures (status 200 with items in ``errors``) keep the dialog open
-    // so the user can see what failed; the consumer renders ``data.<action>.errors``.
-    if (actionErrors.length === 0) {
-      onSuccessConfirm();
     }
   };
 
-  const { data, error, isPending, mutate, reset } = useTaskInstanceServiceBulkTaskInstances({ onSuccess });
+  const onError = (_error: unknown) => {
+    setError(_error);
+  };
+
+  const { isPending, mutate } = useTaskInstanceServiceBulkTaskInstances({
+    onError,
+    onSuccess,
+  });
 
   const bulkAction = (requestBody: BulkBody_BulkTaskInstanceBody_) => {
-    reset();
+    setError(undefined);
     mutate({ dagId: "~", dagRunId: "~", requestBody });
   };
 
-  return { bulkAction, data, error, isPending, reset };
+  return { bulkAction, error, isPending, setError };
 };

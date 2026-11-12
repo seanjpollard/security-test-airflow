@@ -20,13 +20,11 @@ import { VStack, Text, Box } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
 
 import type { DAGRunResponse } from "openapi/requests/types.gen";
-
-import { Tooltip } from "src/system-components";
-
 import { StateBadge } from "src/components/StateBadge";
 import Time from "src/components/Time";
-
-import { useDurationFormat } from "src/utils";
+import { Tooltip } from "src/components/ui";
+import { getDuration } from "src/utils";
+import { getRelativeTime } from "src/utils/datetimeUtils";
 
 type Props = {
   readonly endDate?: string | null;
@@ -37,8 +35,7 @@ type Props = {
 };
 
 const DagRunInfo = ({ endDate, logicalDate, runAfter, startDate, state }: Props) => {
-  const { t: translate } = useTranslation();
-  const { formatElapsed, formatRelative } = useDurationFormat();
+  const { t: translate } = useTranslation("common");
 
   return (
     <Tooltip
@@ -46,7 +43,7 @@ const DagRunInfo = ({ endDate, logicalDate, runAfter, startDate, state }: Props)
         <VStack align="left" gap={0}>
           {state === undefined ? (
             <Text>
-              {translate("dagDetails.nextRun")}: {formatRelative(runAfter)}
+              {translate("dagDetails.nextRun")}: {getRelativeTime(runAfter)}
             </Text>
           ) : (
             <>
@@ -70,7 +67,7 @@ const DagRunInfo = ({ endDate, logicalDate, runAfter, startDate, state }: Props)
               )}
               {Boolean(startDate) && (
                 <Text>
-                  {translate("duration")}: {formatElapsed(startDate, endDate)}
+                  {translate("duration")}: {getDuration(startDate, endDate)}
                 </Text>
               )}
             </>

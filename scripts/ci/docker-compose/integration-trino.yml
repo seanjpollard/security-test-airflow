@@ -19,9 +19,6 @@ services:
   trino:
     image: ghcr.io/apache/airflow-trino:359-2021.07.04
     labels:
-      org.apache.airflow.breeze: "true"
-      org.apache.airflow.breeze.worktree: "${BREEZE_WORKTREE_PATH:-}"
-      org.apache.airflow.breeze.host: "${BREEZE_HOST_ID:-}"
       breeze.description: "Integration required for Trino hooks."
     hostname: trino
     domainname: example.com
@@ -34,7 +31,6 @@ services:
       interval: 5s
       timeout: 30s
       start_period: 30s
-      start_interval: 1s
       retries: 50
     restart: "on-failure"
 
@@ -63,7 +59,3 @@ services:
 
 volumes:
   trino-db-volume:
-    labels:
-      org.apache.airflow.breeze: "true"
-      org.apache.airflow.breeze.worktree: "${BREEZE_WORKTREE_PATH:-}"
-      org.apache.airflow.breeze.host: "${BREEZE_HOST_ID:-}"

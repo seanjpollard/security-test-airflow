@@ -21,17 +21,12 @@ from unittest.mock import Mock, call, patch
 
 import pytest
 
-from airflow.api_fastapi.auth.managers.models.resource_details import AccessView
 from airflow.api_fastapi.common.types import MenuItem
 from airflow.cli import cli_parser
 from airflow.providers.keycloak.auth_manager.cli.commands import (
-    SUPER_ADMIN_ROLE_NAME,
-    TEAM_ROLE_NAMES,
     TEAM_SCOPED_RESOURCE_NAMES,
     _get_extended_resource_methods,
     _get_resource_methods,
-    _update_admin_permission_resources,
-    _update_read_only_permission_resources,
     add_user_to_team_command,
     create_all_command,
     create_permissions_command,
@@ -43,15 +38,6 @@ from airflow.providers.keycloak.auth_manager.resources import KeycloakResource
 
 from tests_common.test_utils.config import conf_vars
 from tests_common.test_utils.version_compat import AIRFLOW_V_3_2_PLUS
-
-# Every team role keeps "Dag Bundles" on Airflow 3.4.0, which has the menu item but not its view.
-DAG_BUNDLES_MENU = (
-    ["Dag Bundles"] if hasattr(MenuItem, "DAG_BUNDLES") and not hasattr(AccessView, "DAG_BUNDLES") else []
-)
-EXPECTED_TEAM_MENU_RESOURCES = sorted(["Assets", "Dags", "Docs", *DAG_BUNDLES_MENU])
-EXPECTED_TEAM_ADMIN_MENU_RESOURCES = sorted(
-    ["Assets", "Connections", "Dags", "Docs", "Pools", "Variables", "XComs", *DAG_BUNDLES_MENU]
-)
 
 
 @pytest.mark.db_test
@@ -227,14 +213,10 @@ class TestCommands:
         }
         assert expected_team_resources.issubset(created_resource_names)
 
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._attach_default_role_permissions")
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._ensure_default_role_policies")
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._get_client")
     def test_create_permissions(
         self,
         mock_get_client,
-        mock_ensure_default_role_policies,
-        mock_attach_default_role_permissions,
     ):
         client = Mock()
         mock_get_client.return_value = client
@@ -327,8 +309,6 @@ class TestCommands:
             ),
         ]
         client.create_client_authz_resource_based_permission.assert_has_calls(resource_calls, any_order=True)
-        mock_ensure_default_role_policies.assert_called_once_with(client, "test-id", _dry_run=False)
-        mock_attach_default_role_permissions.assert_called_once_with(client, "test-id", _dry_run=False)
 
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._get_client")
     def test_create_permissions_with_teams(self, mock_get_client):
@@ -352,7 +332,6 @@ class TestCommands:
             {"_id": "r10", "name": "Asset"},
             {"_id": "r11", "name": "AssetAlias"},
             {"_id": "r12", "name": "Configuration"},
-            {"_id": "r13", "name": "AdminView"},
         ]
 
         client.get_clients.return_value = [
@@ -420,17 +399,6 @@ class TestCommands:
         client.create_client_authz_scope_permission.assert_any_call(
             client_id="test-id",
             payload={
-                "name": "AdminViewAccess",
-                "type": "scope",
-                "logic": "POSITIVE",
-                "decisionStrategy": "UNANIMOUS",
-                "scopes": ["1"],
-                "resources": ["r13"],
-            },
-        )
-        client.create_client_authz_scope_permission.assert_any_call(
-            client_id="test-id",
-            payload={
                 "name": "ReadOnly-team-a",
                 "type": "scope",
                 "logic": "POSITIVE",
@@ -450,159 +418,8 @@ class TestCommands:
             },
             skip_exists=True,
         )
-        client.create_client_authz_resource_based_permission.assert_any_call(
-            client_id="test-id",
-            payload={
-                "name": "Op-team-a",
-                "type": "scope",
-                "logic": "POSITIVE",
-                "decisionStrategy": "UNANIMOUS",
-                "resources": ["r1", "r2", "r3", "r4"],  # Dag, Connection, Pool, Variable
-            },
-            skip_exists=True,
-        )
-
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._get_permission_policy_ids")
-    def test_update_read_only_permission_resources_excludes_team_resources(
-        self, mock_get_permission_policy_ids
-    ):
-        client = Mock()
-        client.get_client_authz_permissions.return_value = [{"id": "readonly-id", "name": "ReadOnly"}]
-        client.get_client_authz_scopes.return_value = [
-            {"id": "scope-get", "name": "GET"},
-            {"id": "scope-list", "name": "LIST"},
-            {"id": "scope-menu", "name": "MENU"},
-            {"id": "scope-put", "name": "PUT"},
-        ]
-        client.get_client_authz_resources.return_value = [
-            {"_id": "dag-global", "name": "Dag"},
-            {"_id": "dag-team-a", "name": "Dag:team-a"},
-            {"_id": "variable-global", "name": "Variable"},
-            {"_id": "variable-team-a", "name": "Variable:team-a"},
-            {"_id": "asset-global", "name": "Asset"},
-        ]
-        mock_get_permission_policy_ids.return_value = ["viewer-policy", "admin-policy"]
-
-        _update_read_only_permission_resources(client, "test-id")
-
-        client.update_client_authz_scope_permission.assert_called_once_with(
-            client_id="test-id",
-            scope_id="readonly-id",
-            payload={
-                "id": "readonly-id",
-                "name": "ReadOnly",
-                "type": "scope",
-                "logic": "POSITIVE",
-                "decisionStrategy": "AFFIRMATIVE",
-                "scopes": ["scope-get", "scope-list", "scope-menu"],
-                "resources": ["dag-global", "variable-global", "asset-global"],
-                "policies": ["viewer-policy", "admin-policy"],
-            },
-        )
-
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._get_policy_id")
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._get_permission_policy_ids")
-    def test_update_admin_permission_resources_removes_admin_role_policy(
-        self, mock_get_permission_policy_ids, mock_get_policy_id
-    ):
-        client = Mock()
-        client.get_client_authz_permissions.return_value = [{"id": "admin-id", "name": "Admin"}]
-        client.get_client_authz_scopes.return_value = [
-            {"id": "scope-get", "name": "GET"},
-            {"id": "scope-list", "name": "LIST"},
-            {"id": "scope-put", "name": "PUT"},
-        ]
-        client.get_client_authz_resources.return_value = [
-            {"_id": "dag-global", "name": "Dag"},
-            {"_id": "dag-team-a", "name": "Dag:team-a"},
-            {"_id": "dag-team-b", "name": "Dag:team-b"},
-            {"_id": "asset-global", "name": "Asset"},
-        ]
-        mock_get_permission_policy_ids.return_value = ["admin-policy", "superadmin-policy"]
-        mock_get_policy_id.return_value = "superadmin-policy"
-
-        _update_admin_permission_resources(client, "test-id")
-
-        client.update_client_authz_scope_permission.assert_called_once()
-        payload = client.update_client_authz_scope_permission.call_args.kwargs["payload"]
-        assert payload["policies"] == ["superadmin-policy"]
-        assert payload["resources"] == ["dag-global", "dag-team-a", "dag-team-b", "asset-global"]
-
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._attach_policy_to_resource_permission")
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._attach_policy_to_scope_permission")
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._ensure_role_policy")
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._create_permissions")
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._get_client")
-    def test_create_permissions_attaches_default_role_policies(
-        self,
-        mock_get_client,
-        mock_create_permissions,
-        mock_ensure_role_policy,
-        mock_attach_scope_policy,
-        mock_attach_resource_policy,
-    ):
-        client = Mock()
-        mock_get_client.return_value = client
-        client.get_clients.return_value = [
-            {"id": "test-id", "clientId": "test_client_id"},
-        ]
-
-        params = [
-            "keycloak-auth-manager",
-            "create-permissions",
-            "--username",
-            "test",
-            "--password",
-            "test",
-        ]
-        with conf_vars({("keycloak_auth_manager", "client_id"): "test_client_id"}):
-            create_permissions_command(self.arg_parser.parse_args(params))
-
-        for role_name in (*TEAM_ROLE_NAMES, SUPER_ADMIN_ROLE_NAME):
-            mock_ensure_role_policy.assert_any_call(client, "test-id", role_name, _dry_run=False)
-
-        mock_create_permissions.assert_called_once_with(client, "test-id", teams=[], _dry_run=False)
-        for role_name in TEAM_ROLE_NAMES:
-            mock_attach_scope_policy.assert_any_call(
-                client,
-                "test-id",
-                permission_name="ReadOnly",
-                policy_name=f"Allow-{role_name}",
-                scope_names=["GET", "MENU", "LIST"],
-                resource_names=[],
-                decision_strategy="AFFIRMATIVE",
-                _dry_run=False,
-            )
-        for role_name in ("Admin", SUPER_ADMIN_ROLE_NAME):
-            mock_attach_scope_policy.assert_any_call(
-                client,
-                "test-id",
-                permission_name="Admin",
-                policy_name=f"Allow-{role_name}",
-                scope_names=_get_extended_resource_methods() + ["LIST"],
-                resource_names=[],
-                decision_strategy="AFFIRMATIVE",
-                _dry_run=False,
-            )
-        mock_attach_resource_policy.assert_any_call(
-            client,
-            "test-id",
-            permission_name="User",
-            policy_name="Allow-User",
-            resource_names=["Dag", "Asset"],
-            _dry_run=False,
-        )
-        mock_attach_resource_policy.assert_any_call(
-            client,
-            "test-id",
-            permission_name="Op",
-            policy_name="Allow-Op",
-            resource_names=["Connection", "Pool", "Variable", "Backfill"],
-            _dry_run=False,
-        )
 
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._update_admin_permission_resources")
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._update_read_only_permission_resources")
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._ensure_scope_permission")
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._attach_policy_to_resource_permission")
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._attach_policy_to_scope_permission")
@@ -623,7 +440,6 @@ class TestCommands:
         mock_attach_policy,
         mock_attach_resource_policy,
         mock_ensure_scope_permission,
-        mock_update_read_only_permission_resources,
         mock_update_admin_permission_resources,
     ):
         client = Mock()
@@ -660,21 +476,18 @@ class TestCommands:
         mock_create_permissions.assert_called_once_with(
             client, "test-id", teams=["team-a"], include_global_admin=False, _dry_run=False
         )
-        mock_update_read_only_permission_resources.assert_called_once_with(client, "test-id", _dry_run=False)
         mock_update_admin_permission_resources.assert_called_once_with(client, "test-id", _dry_run=False)
         mock_ensure_group_policy.assert_called_once_with(client, "test-id", "team-a", _dry_run=False)
         assert mock_ensure_aggregate_policy.call_count == 4
-        for role_name in TEAM_ROLE_NAMES:
-            mock_attach_policy.assert_any_call(
-                client,
-                "test-id",
-                permission_name="ReadOnly-team-a",
-                policy_name=f"Allow-{role_name}-team-a",
-                scope_names=["GET", "LIST"],
-                resource_names=["Dag:team-a", "Team:team-a"],
-                decision_strategy="AFFIRMATIVE",
-                _dry_run=False,
-            )
+        mock_attach_policy.assert_any_call(
+            client,
+            "test-id",
+            permission_name="ReadOnly-team-a",
+            policy_name="Allow-Viewer-team-a",
+            scope_names=["GET", "LIST"],
+            resource_names=["Dag:team-a", "Team:team-a"],
+            _dry_run=False,
+        )
         mock_attach_policy.assert_any_call(
             client,
             "test-id",
@@ -705,7 +518,6 @@ class TestCommands:
             policy_name="Allow-Op-team-a",
             resource_names=[
                 "Connection:team-a",
-                "Dag:team-a",
                 "Pool:team-a",
                 "Variable:team-a",
             ],
@@ -717,7 +529,7 @@ class TestCommands:
             permission_name="MenuAccess-team-a",
             policy_name="Allow-Viewer-team-a",
             scope_names=["MENU"],
-            resource_names=EXPECTED_TEAM_MENU_RESOURCES,
+            resource_names=["Assets", "Dags", "Docs"],
             decision_strategy="AFFIRMATIVE",
             _dry_run=False,
         )
@@ -727,7 +539,7 @@ class TestCommands:
             permission_name="MenuAccess-Admin-team-a",
             policy_name="Allow-Admin-team-a",
             scope_names=["MENU"],
-            resource_names=EXPECTED_TEAM_ADMIN_MENU_RESOURCES,
+            resource_names=["Assets", "Connections", "Dags", "Docs", "Pools", "Variables", "XComs"],
             decision_strategy="AFFIRMATIVE",
             _dry_run=False,
         )
@@ -744,7 +556,6 @@ class TestCommands:
                 "Team:team-a",
                 "Variable:team-a",
             ],
-            decision_strategy="AFFIRMATIVE",
             _dry_run=False,
         )
         mock_attach_policy.assert_any_call(
@@ -757,39 +568,22 @@ class TestCommands:
             decision_strategy="AFFIRMATIVE",
             _dry_run=False,
         )
-        for role_name in TEAM_ROLE_NAMES:
-            mock_attach_policy.assert_any_call(
-                client,
-                "test-id",
-                permission_name="ViewAccess",
-                policy_name=f"Allow-{role_name}-team-a",
-                scope_names=["GET"],
-                resource_names=["View"],
-                decision_strategy="AFFIRMATIVE",
-                _dry_run=False,
-            )
         mock_attach_policy.assert_any_call(
             client,
             "test-id",
-            permission_name="AdminViewAccess",
-            policy_name="Allow-SuperAdmin",
+            permission_name="ViewAccess",
+            policy_name="Allow-Viewer-team-a",
             scope_names=["GET"],
-            resource_names=["AdminView"],
+            resource_names=["View"],
             decision_strategy="AFFIRMATIVE",
             _dry_run=False,
         )
-        admin_view_policies = [
-            c.kwargs["policy_name"]
-            for c in mock_attach_policy.call_args_list
-            if c.kwargs["permission_name"] == "AdminViewAccess" or "AdminView" in c.kwargs["resource_names"]
-        ]
-        assert admin_view_policies == ["Allow-SuperAdmin"]
         mock_ensure_scope_permission.assert_any_call(
             client,
             "test-id",
             name="MenuAccess-team-a",
             scope_names=["MENU"],
-            resource_names=EXPECTED_TEAM_MENU_RESOURCES,
+            resource_names=["Assets", "Dags", "Docs"],
             decision_strategy="AFFIRMATIVE",
             _dry_run=False,
         )
@@ -798,7 +592,7 @@ class TestCommands:
             "test-id",
             name="MenuAccess-Admin-team-a",
             scope_names=["MENU"],
-            resource_names=EXPECTED_TEAM_ADMIN_MENU_RESOURCES,
+            resource_names=["Assets", "Connections", "Dags", "Docs", "Pools", "Variables", "XComs"],
             decision_strategy="AFFIRMATIVE",
             _dry_run=False,
         )
@@ -834,8 +628,6 @@ class TestCommands:
         mock_ensure_group.assert_called_once_with(client, "team-a", _dry_run=False)
         mock_add_user.assert_called_once_with(client, username="user-a", team="team-a", _dry_run=False)
 
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._attach_default_role_permissions")
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._ensure_default_role_policies")
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._create_permissions")
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._create_resources")
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._create_scopes")
@@ -846,8 +638,6 @@ class TestCommands:
         mock_create_scopes,
         mock_create_resources,
         mock_create_permissions,
-        mock_ensure_default_role_policies,
-        mock_attach_default_role_permissions,
     ):
         client = Mock()
         mock_get_client.return_value = client
@@ -884,8 +674,6 @@ class TestCommands:
         mock_create_scopes.assert_called_once_with(client, "test-id", _dry_run=False)
         mock_create_resources.assert_called_once_with(client, "test-id", teams=[], _dry_run=False)
         mock_create_permissions.assert_called_once_with(client, "test-id", teams=[], _dry_run=False)
-        mock_ensure_default_role_policies.assert_called_once_with(client, "test-id", _dry_run=False)
-        mock_attach_default_role_permissions.assert_called_once_with(client, "test-id", _dry_run=False)
 
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._get_client")
     def test_create_scopes_dry_run(self, mock_get_client):
@@ -950,12 +738,8 @@ class TestCommands:
         # In dry-run mode, no resources should be created
         client.create_client_authz_resource.assert_not_called()
 
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._attach_default_role_permissions")
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._ensure_default_role_policies")
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._get_client")
-    def test_create_permissions_dry_run(
-        self, mock_get_client, mock_ensure_default_role_policies, mock_attach_default_role_permissions
-    ):
+    def test_create_permissions_dry_run(self, mock_get_client):
         client = Mock()
         mock_get_client.return_value = client
         scopes = [{"id": "1", "name": "GET"}, {"id": "2", "name": "MENU"}, {"id": "3", "name": "LIST"}]
@@ -993,11 +777,7 @@ class TestCommands:
         # In dry-run mode, no permissions should be created
         client.create_client_authz_scope_permission.assert_not_called()
         client.create_client_authz_resource_based_permission.assert_not_called()
-        mock_ensure_default_role_policies.assert_called_once_with(client, "test-id", _dry_run=True)
-        mock_attach_default_role_permissions.assert_called_once_with(client, "test-id", _dry_run=True)
 
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._attach_default_role_permissions")
-    @patch("airflow.providers.keycloak.auth_manager.cli.commands._ensure_default_role_policies")
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._create_permissions")
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._create_resources")
     @patch("airflow.providers.keycloak.auth_manager.cli.commands._create_scopes")
@@ -1008,8 +788,6 @@ class TestCommands:
         mock_create_scopes,
         mock_create_resources,
         mock_create_permissions,
-        mock_ensure_default_role_policies,
-        mock_attach_default_role_permissions,
     ):
         client = Mock()
         mock_get_client.return_value = client
@@ -1046,5 +824,3 @@ class TestCommands:
         mock_create_scopes.assert_called_once_with(client, "test-id", _dry_run=True)
         mock_create_resources.assert_called_once_with(client, "test-id", teams=[], _dry_run=True)
         mock_create_permissions.assert_called_once_with(client, "test-id", teams=[], _dry_run=True)
-        mock_ensure_default_role_policies.assert_called_once_with(client, "test-id", _dry_run=True)
-        mock_attach_default_role_permissions.assert_called_once_with(client, "test-id", _dry_run=True)

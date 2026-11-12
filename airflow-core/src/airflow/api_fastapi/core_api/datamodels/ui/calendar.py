@@ -35,7 +35,6 @@ class CalendarTimeRangeResponse(BaseModel):
         "planned",
     ]
     count: int
-    is_backfill: bool = False
 
 
 class CalendarTimeRangeCollectionResponse(BaseModel):
@@ -43,18 +42,3 @@ class CalendarTimeRangeCollectionResponse(BaseModel):
 
     total_entries: int
     dag_runs: list[CalendarTimeRangeResponse]
-
-
-class CalendarDeadlineResponse(BaseModel):
-    """Represents aggregated deadline counts for a specific calendar time bucket."""
-
-    date: datetime
-    missed: bool
-    count: int
-
-
-class CalendarDeadlineCollectionResponse(BaseModel):
-    """Response model for calendar deadline aggregation results."""
-
-    total_entries: int
-    deadlines: list[CalendarDeadlineResponse]

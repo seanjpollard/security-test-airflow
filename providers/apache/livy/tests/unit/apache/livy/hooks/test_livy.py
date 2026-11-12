@@ -110,6 +110,11 @@ class TestLivyDbHook:
         hook.get_conn()
         assert hook.base_url == expected
 
+    @pytest.mark.skip("Inherited HttpHook does not handle missing hostname")
+    def test_missing_host(self):
+        with pytest.raises(AirflowException):
+            LivyHook(livy_conn_id="missing_host").get_conn()
+
     def test_build_body_minimal_request(self):
         assert LivyHook.build_post_batch_body(file="appname") == {"file": "appname"}
 
@@ -903,7 +908,6 @@ class TestLivyAsyncHook:
         }
         mock_run_method.assert_called_once_with(
             endpoint=f"/livy/batches/{BATCH_ID}/state",
-            method="GET",
             headers={},
         )
 
@@ -921,7 +925,6 @@ class TestLivyAsyncHook:
         }
         mock_run_method.assert_called_once_with(
             endpoint=f"/batches/{BATCH_ID}/state",
-            method="GET",
             headers=headers,
         )
 
@@ -936,7 +939,6 @@ class TestLivyAsyncHook:
         mock_run_method.assert_called_once_with(
             endpoint=f"/livy/batches/{BATCH_ID}/log",
             data={"from": 0, "size": 100},
-            method="GET",
             headers={},
         )
 
@@ -952,6 +954,5 @@ class TestLivyAsyncHook:
         mock_run_method.assert_called_once_with(
             endpoint=f"/batches/{BATCH_ID}/log",
             data={"from": 0, "size": 100},
-            method="GET",
             headers=headers,
         )

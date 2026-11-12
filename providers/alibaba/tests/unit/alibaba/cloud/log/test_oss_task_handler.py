@@ -18,16 +18,15 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest import mock
 from unittest.mock import PropertyMock
 
 import pytest
 
-from airflow.providers.alibaba.cloud.log.oss_task_handler import OSSRemoteLogIO, OSSTaskHandler
-from airflow.providers.common.compat.sdk import timezone
+from airflow.providers.alibaba.cloud.log.oss_task_handler import OSSTaskHandler
 from airflow.utils.state import TaskInstanceState
+from airflow.utils.timezone import datetime
 
 from tests_common.test_utils.config import conf_vars
 from tests_common.test_utils.db import clear_db_dags, clear_db_runs
@@ -46,86 +45,6 @@ MOCK_CONTENT = "mock_content"
 MOCK_FILE_PATH = "mock_file_path"
 
 
-class TestOSSRemoteLogIOFromConfig:
-    @conf_vars(
-        {
-            ("logging", "base_log_folder"): "~/airflow/logs",
-            ("logging", "remote_base_log_folder"): "oss://bucket/remote/log/location",
-            ("logging", "delete_local_logs"): "True",
-        }
-    )
-    def test_from_config(self):
-        subject = OSSRemoteLogIO.from_config()
-
-        assert subject.remote_base == "oss://bucket/remote/log/location"
-        assert subject.base_log_folder == Path(os.path.expanduser("~/airflow/logs"))
-        assert subject.delete_local_copy is True
-
-    @conf_vars(
-        {
-            ("logging", "base_log_folder"): "/tmp/airflow/logs",
-            ("logging", "remote_base_log_folder"): "oss://bucket/remote/log/location",
-            ("logging", "delete_local_logs"): "False",
-            ("logging", "remote_task_handler_kwargs"): '{"delete_local_copy": true, "max_bytes": 1024}',
-        }
-    )
-    def test_from_config_applies_io_kwargs_and_filters_file_handler_kwargs(self):
-        subject = OSSRemoteLogIO.from_config()
-
-        assert subject.delete_local_copy is True
-        assert not hasattr(subject, "max_bytes")
-
-    @conf_vars({("logging", "remote_task_handler_kwargs"): '["not", "a", "dict"]'})
-    def test_from_config_rejects_non_dict_remote_task_handler_kwargs(self):
-        with pytest.raises(ValueError, match="remote_task_handler_kwargs"):
-            OSSRemoteLogIO.from_config()
-
-    def test_provider_registers_oss_scheme(self):
-        from airflow.providers_manager import ProvidersManager
-
-        manager = ProvidersManager()
-        if not hasattr(manager, "remote_logging_handler_by_scheme"):
-            pytest.skip("Airflow core does not support remote logging provider dispatch")
-
-        info = manager.remote_logging_handler_by_scheme("oss")
-
-        assert info is not None
-        assert info.classpath == "airflow.providers.alibaba.cloud.log.oss_task_handler.OSSRemoteLogIO"
-
-    @pytest.mark.parametrize(
-        "manager_classpath",
-        [
-            pytest.param("airflow.providers_manager.ProvidersManager", id="core"),
-            pytest.param(
-                "airflow.sdk.providers_manager_runtime.ProvidersManagerTaskRuntime", id="task-runtime"
-            ),
-        ],
-    )
-    @conf_vars(
-        {
-            ("logging", "remote_logging"): "True",
-            ("logging", "remote_base_log_folder"): "oss://bucket/remote/log/location",
-            ("logging", "remote_log_conn_id"): "oss_default",
-        }
-    )
-    def test_resolve_remote_task_log_uses_provider_dispatch_not_local_settings(self, manager_classpath):
-        factory = pytest.importorskip("airflow._shared.logging.factory")
-        from airflow._shared.module_loading import import_string
-        from airflow.configuration import conf
-
-        with mock.patch.object(factory, "discover_remote_log_handler", autospec=True) as legacy_discover:
-            remote_task_log, conn_id = factory.resolve_remote_task_log(
-                conf=conf,
-                providers_manager=import_string(manager_classpath)(),
-                import_string=import_string,
-            )
-
-        assert isinstance(remote_task_log, OSSRemoteLogIO)
-        assert remote_task_log.remote_base == "oss://bucket/remote/log/location"
-        assert conn_id == "oss_default"
-        legacy_discover.assert_not_called()
-
-
 class TestOSSTaskHandler:
     def setup_method(self):
         self.base_log_folder = "local/airflow/logs/1.log"
@@ -137,7 +56,7 @@ class TestOSSTaskHandler:
         self.ti = ti = create_task_instance(
             dag_id="dag_for_testing_oss_task_handler",
             task_id="task_for_testing_oss_task_handler",
-            logical_date=timezone.datetime(2020, 1, 1),
+            logical_date=datetime(2020, 1, 1),
             state=TaskInstanceState.RUNNING,
         )
         ti.try_number = 1
@@ -289,24 +208,3 @@ class TestOSSTaskHandler:
     def test_filename_template_for_backward_compatibility(self):
         # filename_template arg support for running the latest provider on airflow 2
         OSSTaskHandler(self.base_log_folder, self.oss_log_folder, filename_template=None)
-
-    @mock.patch(OSS_TASK_HANDLER_STRING.format("OSSRemoteLogIO.oss_read"))
-    @mock.patch(OSS_TASK_HANDLER_STRING.format("OSSRemoteLogIO.oss_log_exists"))
-    def test_read_calls_oss_methods_via_io(self, mock_log_exists, mock_oss_read):
-        mock_log_exists.return_value = True
-        mock_oss_read.return_value = "mock log content"
-
-        log, metadata = self.oss_task_handler._read(self.ti, self.ti.try_number)
-
-        mock_log_exists.assert_called_once()
-        mock_oss_read.assert_called_once()
-        assert "mock log content" in log
-        assert metadata == {"end_of_log": True}
-
-    @mock.patch(OSS_TASK_HANDLER_STRING.format("OSSRemoteLogIO.oss_log_exists"))
-    def test_read_falls_back_to_local_when_no_remote_log(self, mock_log_exists):
-        mock_log_exists.return_value = False
-
-        self.oss_task_handler._read(self.ti, self.ti.try_number)
-
-        mock_log_exists.assert_called_once()

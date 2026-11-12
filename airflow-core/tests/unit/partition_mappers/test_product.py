@@ -17,16 +17,11 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest
 
 from airflow.partition_mappers.identity import IdentityMapper
 from airflow.partition_mappers.product import ProductMapper
 from airflow.partition_mappers.temporal import StartOfDayMapper, StartOfHourMapper
-from airflow.serialization.decoders import decode_partition_mapper
-from airflow.serialization.encoders import encode_partition_mapper
-from airflow.serialization.enums import Encoding
 
 
 class TestProductMapper:
@@ -54,6 +49,8 @@ class TestProductMapper:
             pm.to_downstream("2024-01-15T10:30:00::2024-01-15T10:30:00::extra")
 
     def test_serialize(self):
+        from airflow.serialization.encoders import encode_partition_mapper
+
         pm = ProductMapper(StartOfHourMapper(), StartOfDayMapper())
         result = pm.serialize()
         assert result == {
@@ -65,6 +62,8 @@ class TestProductMapper:
         }
 
     def test_serialize_custom_delimiter(self):
+        from airflow.serialization.encoders import encode_partition_mapper
+
         pm = ProductMapper(StartOfHourMapper(), StartOfDayMapper(), delimiter="::")
         result = pm.serialize()
         assert result == {
@@ -96,6 +95,8 @@ class TestProductMapper:
 
     def test_deserialize_backward_compat(self):
         """Deserializing data without delimiter field defaults to '|'."""
+        from airflow.serialization.encoders import encode_partition_mapper
+
         data = {
             "mappers": [
                 encode_partition_mapper(StartOfHourMapper()),
@@ -110,53 +111,3 @@ class TestProductMapper:
         assert (
             pm.to_downstream("2024-01-15T10:30:00|2024-01-15T10:30:00|raw") == "2024-01-15T10|2024-01-15|raw"
         )
-
-    def test_max_downstream_keys_encode_decode_roundtrip(self):
-        """max_downstream_keys=5 survives encode_partition_mapper → decode_partition_mapper."""
-        mapper = ProductMapper(StartOfHourMapper(), StartOfDayMapper(), max_downstream_keys=5)
-        restored = decode_partition_mapper(encode_partition_mapper(mapper))
-        assert restored.max_downstream_keys == 5
-
-    def test_max_downstream_keys_absent_from_default_encoded_payload(self):
-        """max_downstream_keys must NOT appear in the encoded payload when not set (zero-bloat contract)."""
-        mapper = ProductMapper(StartOfHourMapper(), StartOfDayMapper())
-        encoded_var = encode_partition_mapper(mapper)[Encoding.VAR]
-        assert "max_downstream_keys" not in encoded_var
-
-    @pytest.mark.parametrize(
-        ("mapper", "downstream_key", "expected"),
-        [
-            pytest.param(
-                ProductMapper(StartOfDayMapper(), IdentityMapper()),
-                "2024-01-15|us-east-1",
-                datetime(2024, 1, 15, 0, 0, tzinfo=UTC),
-                id="one-temporal-one-categorical-returns-temporal-anchor",
-            ),
-            pytest.param(
-                ProductMapper(IdentityMapper(), StartOfDayMapper()),
-                "us-east-1|2024-01-15",
-                datetime(2024, 1, 15, 0, 0, tzinfo=UTC),
-                id="categorical-first-temporal-second-returns-temporal-anchor",
-            ),
-            pytest.param(
-                ProductMapper(StartOfDayMapper(), StartOfHourMapper()),
-                "2024-01-15|2024-01-15T10",
-                None,
-                id="two-temporal-children-returns-none",
-            ),
-            pytest.param(
-                ProductMapper(IdentityMapper(), IdentityMapper()),
-                "us-east-1|batch-42",
-                None,
-                id="all-categorical-returns-none",
-            ),
-            pytest.param(
-                ProductMapper(StartOfDayMapper(), IdentityMapper()),
-                "2024-01-15",
-                None,
-                id="wrong-segment-count-returns-none",
-            ),
-        ],
-    )
-    def test_to_partition_date(self, mapper, downstream_key, expected):
-        assert mapper.to_partition_date(downstream_key) == expected

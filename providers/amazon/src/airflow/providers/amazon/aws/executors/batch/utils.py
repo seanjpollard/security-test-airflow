@@ -19,24 +19,15 @@ from __future__ import annotations
 import datetime
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any
 
 from airflow.providers.amazon.aws.executors.utils.base_config_keys import BaseConfigKeys
 from airflow.utils.state import State
 
 if TYPE_CHECKING:
     from airflow.models.taskinstance import TaskInstanceKey
-    from airflow.providers.amazon.version_compat import AIRFLOW_V_3_3_PLUS
 
-    if AIRFLOW_V_3_3_PLUS:
-        from airflow.executors.workloads.types import WorkloadKey as _BatchWorkloadKey
-
-        BatchJobWorkloadKey: TypeAlias = _BatchWorkloadKey
-    else:
-        BatchJobWorkloadKey: TypeAlias = TaskInstanceKey  # type: ignore[no-redef, misc]
-
-
-CommandType: TypeAlias = list[str]
+CommandType = list[str]
 ExecutorConfigType = dict[str, Any]
 
 CONFIG_GROUP_NAME = "aws_batch_executor"
@@ -52,9 +43,9 @@ CONFIG_DEFAULTS = {
 class BatchQueuedJob:
     """Represents a Batch job that is queued. The job will be run in the next heartbeat."""
 
-    key: BatchJobWorkloadKey
+    key: TaskInstanceKey
     command: CommandType
-    queue: str | None
+    queue: str
     executor_config: ExecutorConfigType
     attempt_number: int
     next_attempt_time: datetime.datetime
@@ -100,48 +91,33 @@ class BatchJobCollection:
     """A collection to manage running Batch Jobs."""
 
     def __init__(self):
-        self.key_to_id: dict[BatchJobWorkloadKey, str] = {}
-        self.id_to_key: dict[str, BatchJobWorkloadKey] = {}
+        self.key_to_id: dict[TaskInstanceKey, str] = {}
+        self.id_to_key: dict[str, TaskInstanceKey] = {}
         self.id_to_failure_counts: dict[str, int] = defaultdict(int)
         self.id_to_job_info: dict[str, BatchJobInfo] = {}
 
     def add_job(
         self,
         job_id: str,
-        airflow_workload_key: BatchJobWorkloadKey,
+        airflow_task_key: TaskInstanceKey,
         airflow_cmd: CommandType,
         queue: str,
         exec_config: ExecutorConfigType,
         attempt_number: int,
     ):
         """Add a job to the collection."""
-        self.key_to_id[airflow_workload_key] = job_id
-        self.id_to_key[job_id] = airflow_workload_key
+        self.key_to_id[airflow_task_key] = job_id
+        self.id_to_key[job_id] = airflow_task_key
         self.id_to_failure_counts[job_id] = attempt_number
         self.id_to_job_info[job_id] = BatchJobInfo(cmd=airflow_cmd, queue=queue, config=exec_config)
 
-    def pop_by_id(self, job_id: str) -> BatchJobWorkloadKey:
+    def pop_by_id(self, job_id: str) -> TaskInstanceKey:
         """Delete job from collection based off of Batch Job ID."""
-        workload_key = self.id_to_key[job_id]
-        del self.key_to_id[workload_key]
+        task_key = self.id_to_key[job_id]
+        del self.key_to_id[task_key]
         del self.id_to_key[job_id]
         del self.id_to_failure_counts[job_id]
-        del self.id_to_job_info[job_id]
-        return workload_key
-
-    def remove_job(self, job_id: str) -> BatchJobWorkloadKey | None:
-        """
-        Remove a job from the collection, tolerating partially cleaned bookkeeping.
-
-        Unlike pop_by_id, this never raises: every mapping is popped defensively.
-        Returns the workload key if the job was still tracked, otherwise None.
-        """
-        workload_key = self.id_to_key.pop(job_id, None)
-        self.id_to_failure_counts.pop(job_id, None)
-        self.id_to_job_info.pop(job_id, None)
-        if workload_key is not None:
-            self.key_to_id.pop(workload_key, None)
-        return workload_key
+        return task_key
 
     def failure_count_by_id(self, job_id: str) -> int:
         """Get the number of times a job has failed given a Batch Job Id."""

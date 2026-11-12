@@ -20,13 +20,8 @@ import time
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
-from airflow.providers.common.compat.sdk import BaseSensorOperator, conf
-from airflow.providers.dbt.cloud.hooks.dbt import (
-    DbtCloudHook,
-    DbtCloudJobRunException,
-    DbtCloudJobRunStatus,
-    validate_execute_complete_event,
-)
+from airflow.providers.common.compat.sdk import AirflowException, BaseSensorOperator, conf
+from airflow.providers.dbt.cloud.hooks.dbt import DbtCloudHook, DbtCloudJobRunException, DbtCloudJobRunStatus
 from airflow.providers.dbt.cloud.triggers.dbt import DbtCloudRunJobTrigger
 from airflow.providers.dbt.cloud.utils.openlineage import generate_openlineage_events_from_dbt_cloud_run
 
@@ -84,12 +79,10 @@ class DbtCloudJobRunSensor(BaseSensorOperator):
         job_run_status = self.hook.get_job_run_status(run_id=self.run_id, account_id=self.account_id)
 
         if job_run_status == DbtCloudJobRunStatus.ERROR.value:
-            self.hook.log_job_run_failure_details(run_id=self.run_id, account_id=self.account_id)
             message = f"Job run {self.run_id} has failed."
             raise DbtCloudJobRunException(message)
 
         if job_run_status == DbtCloudJobRunStatus.CANCELLED.value:
-            self.hook.log_job_run_failure_details(run_id=self.run_id, account_id=self.account_id)
             message = f"Job run {self.run_id} has been cancelled."
             raise DbtCloudJobRunException(message)
 
@@ -121,16 +114,15 @@ class DbtCloudJobRunSensor(BaseSensorOperator):
                     method_name="execute_complete",
                 )
 
-    def execute_complete(self, context: Context, event: dict[str, Any] | None = None) -> int:
+    def execute_complete(self, context: Context, event: dict[str, Any]) -> int:
         """
         Execute when the trigger fires - returns immediately.
 
         This relies on trigger to throw an exception, otherwise it assumes
         execution was successful.
         """
-        event = validate_execute_complete_event(event)
-        if event["status"] != "success":
-            raise DbtCloudJobRunException(event["message"])
+        if event["status"] in ["error", "cancelled"]:
+            raise AirflowException()
         self.log.info(event["message"])
         return int(event["run_id"])
 

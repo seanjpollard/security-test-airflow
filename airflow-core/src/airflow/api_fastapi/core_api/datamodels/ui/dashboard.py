@@ -44,7 +44,6 @@ class TaskInstanceStateCount(BaseModel):
     upstream_failed: int
     skipped: int
     deferred: int
-    awaiting_input: int
 
 
 class HistoricalMetricDataResponse(BaseModel):
@@ -52,9 +51,7 @@ class HistoricalMetricDataResponse(BaseModel):
 
     dag_run_states: DAGRunStates
     task_instance_states: TaskInstanceStateCount
-    # True when the counts above are floors on the real values rather than exact figures.
-    dag_run_counts_are_lower_bounds: bool = False
-    task_instance_counts_are_lower_bounds: bool = False
+    state_count_limit: int
 
 
 class DashboardDagStatsResponse(BaseModel):

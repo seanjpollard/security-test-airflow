@@ -20,23 +20,17 @@ import { Flex, HStack, StackSeparator, Table, Text, VStack } from "@chakra-ui/re
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 
-import { useDagRunServiceGetDagRun, useDagRunServiceGetDagRunStats } from "openapi/queries";
-
-import { ClipboardRoot, ClipboardIconButton } from "src/system-components";
-
+import { useDagRunServiceGetDagRun } from "openapi/queries";
 import { DagVersionDetails } from "src/components/DagVersionDetails";
 import RenderedJsonField from "src/components/RenderedJsonField";
 import { RunTypeIcon } from "src/components/RunTypeIcon";
 import { StateBadge } from "src/components/StateBadge";
-import { TeamName } from "src/components/TeamName";
 import Time from "src/components/Time";
-
-import { useShowTeam } from "src/hooks/useShowTeam";
-import { hasDagRunConfig, isStatePending, useAutoRefresh, useDurationFormat } from "src/utils";
+import { ClipboardRoot, ClipboardIconButton } from "src/components/ui";
+import { getDuration, isStatePending, useAutoRefresh } from "src/utils";
 
 export const Details = () => {
   const { t: translate } = useTranslation(["common", "components"]);
-  const { formatElapsed, renderDuration } = useDurationFormat();
   const { dagId = "", runId = "" } = useParams();
 
   const refetchInterval = useAutoRefresh({ dagId });
@@ -47,12 +41,8 @@ export const Details = () => {
       dagRunId: runId,
     },
     undefined,
-    { refetchInterval: (query) => isStatePending(query.state.data?.state) && refetchInterval },
+    { refetchInterval: (query) => (isStatePending(query.state.data?.state) ? refetchInterval : false) },
   );
-
-  const { data: dagRunStats } = useDagRunServiceGetDagRunStats({ dagId, dagRunId: runId });
-
-  const showTeam = useShowTeam(dagRun?.team_name);
 
   if (!dagRun) {
     return undefined;
@@ -61,12 +51,6 @@ export const Details = () => {
   return (
     <Table.Root striped>
       <Table.Body>
-        <Table.Row>
-          <Table.Cell>{translate("dagRun.conf")}</Table.Cell>
-          <Table.Cell>
-            {hasDagRunConfig(dagRun.conf) ? <RenderedJsonField content={dagRun.conf} /> : undefined}
-          </Table.Cell>
-        </Table.Row>
         <Table.Row>
           <Table.Cell>{translate("state")}</Table.Cell>
           <Table.Cell data-testid="dag-run-state">
@@ -96,41 +80,10 @@ export const Details = () => {
             </HStack>
           </Table.Cell>
         </Table.Row>
-        {showTeam ? (
-          <Table.Row>
-            <Table.Cell>{translate("dagDetails.team")}</Table.Cell>
-            <Table.Cell>
-              <TeamName teamName={dagRun.team_name} />
-            </Table.Cell>
-          </Table.Row>
-        ) : undefined}
         <Table.Row>
           <Table.Cell>{translate("duration")}</Table.Cell>
-          <Table.Cell>{formatElapsed(dagRun.start_date, dagRun.end_date)}</Table.Cell>
+          <Table.Cell>{getDuration(dagRun.start_date, dagRun.end_date)}</Table.Cell>
         </Table.Row>
-        {dagRunStats?.duration ? (
-          <Table.Row>
-            <Table.Cell>{translate("dagRun.expectedDuration")}</Table.Cell>
-            <Table.Cell>
-              <VStack align="start" gap={1}>
-                <Text>
-                  {translate("dagRun.durationStats.mean")}: {renderDuration(dagRunStats.duration.mean)}
-                </Text>
-                {dagRunStats.duration.mode !== null && (
-                  <Text>
-                    {translate("dagRun.durationStats.mode")}: {renderDuration(dagRunStats.duration.mode)}
-                  </Text>
-                )}
-                {/* eslint-disable i18next/no-literal-string -- P-values are technical abbreviations not subject to translation */}
-                <Text>P50: {renderDuration(dagRunStats.duration.p50)}</Text>
-                <Text>P90: {renderDuration(dagRunStats.duration.p90)}</Text>
-                <Text>P95: {renderDuration(dagRunStats.duration.p95)}</Text>
-                <Text>P99: {renderDuration(dagRunStats.duration.p99)}</Text>
-                {/* eslint-enable i18next/no-literal-string */}
-              </VStack>
-            </Table.Cell>
-          </Table.Row>
-        ) : undefined}
         <Table.Row>
           <Table.Cell>{translate("dagRun.lastSchedulingDecision")}</Table.Cell>
           <Table.Cell>
@@ -167,14 +120,6 @@ export const Details = () => {
             <Time datetime={dagRun.data_interval_end} />
           </Table.Cell>
         </Table.Row>
-        {dagRun.partition_date !== null && (
-          <Table.Row>
-            <Table.Cell>{translate("dagRun.partitionDate")}</Table.Cell>
-            <Table.Cell>
-              <Time datetime={dagRun.partition_date} />
-            </Table.Cell>
-          </Table.Row>
-        )}
         <Table.Row>
           <Table.Cell>{translate("dagRun.triggeredBy")}</Table.Cell>
           <Table.Cell>{dagRun.triggered_by}</Table.Cell>
@@ -197,6 +142,12 @@ export const Details = () => {
                 <DagVersionDetails dagVersion={dagVersion} key={dagVersion.id} />
               ))}
             </VStack>
+          </Table.Cell>
+        </Table.Row>
+        <Table.Row>
+          <Table.Cell>{translate("dagRun.conf")}</Table.Cell>
+          <Table.Cell>
+            <RenderedJsonField content={dagRun.conf ?? {}} />
           </Table.Cell>
         </Table.Row>
       </Table.Body>

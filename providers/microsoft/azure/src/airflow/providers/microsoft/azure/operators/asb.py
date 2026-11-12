@@ -53,10 +53,7 @@ class AzureServiceBusCreateQueueOperator(BaseOperator):
         :ref:`Azure Service Bus connection<howto/connection:azure_service_bus>`.
     """
 
-    template_fields: Sequence[str] = (
-        "queue_name",
-        "azure_service_bus_conn_id",
-    )
+    template_fields: Sequence[str] = ("queue_name",)
     ui_color = "#e4f0e8"
 
     def __init__(
@@ -111,10 +108,7 @@ class AzureServiceBusSendMessageOperator(BaseOperator):
     :param message_headers: Headers to add to the message's application_properties field for Azure Service Bus.
     """
 
-    template_fields: Sequence[str] = (
-        "queue_name",
-        "azure_service_bus_conn_id",
-    )
+    template_fields: Sequence[str] = ("queue_name",)
     ui_color = "#e4f0e8"
 
     def __init__(
@@ -167,10 +161,7 @@ class AzureServiceBusReceiveMessageOperator(BaseOperator):
         message will be abandoned for future redelivery.
     """
 
-    template_fields: Sequence[str] = (
-        "queue_name",
-        "azure_service_bus_conn_id",
-    )
+    template_fields: Sequence[str] = ("queue_name",)
     ui_color = "#e4f0e8"
 
     def __init__(
@@ -218,10 +209,7 @@ class AzureServiceBusDeleteQueueOperator(BaseOperator):
         :ref: `Azure Service Bus connection <howto/connection:azure_service_bus>`.
     """
 
-    template_fields: Sequence[str] = (
-        "queue_name",
-        "azure_service_bus_conn_id",
-    )
+    template_fields: Sequence[str] = ("queue_name",)
     ui_color = "#e4f0e8"
 
     def __init__(
@@ -287,10 +275,7 @@ class AzureServiceBusTopicCreateOperator(BaseOperator):
      The minimum allowed value is 1024 while the maximum allowed value is 102400. Default value is 1024.
     """
 
-    template_fields: Sequence[str] = (
-        "topic_name",
-        "azure_service_bus_conn_id",
-    )
+    template_fields: Sequence[str] = ("topic_name",)
     ui_color = "#e4f0e8"
 
     def __init__(
@@ -401,7 +386,7 @@ class AzureServiceBusSubscriptionCreateOperator(BaseOperator):
         :ref:`Azure Service Bus connection<howto/connection:azure_service_bus>`.
     """
 
-    template_fields: Sequence[str] = ("topic_name", "subscription_name", "azure_service_bus_conn_id")
+    template_fields: Sequence[str] = ("topic_name", "subscription_name")
     ui_color = "#e4f0e8"
 
     def __init__(
@@ -492,7 +477,7 @@ class AzureServiceBusUpdateSubscriptionOperator(BaseOperator):
         :ref:`Azure Service Bus connection<howto/connection:azure_service_bus>`.
     """
 
-    template_fields: Sequence[str] = ("topic_name", "subscription_name", "azure_service_bus_conn_id")
+    template_fields: Sequence[str] = ("topic_name", "subscription_name")
     ui_color = "#e4f0e8"
 
     def __init__(
@@ -551,7 +536,7 @@ class ASBReceiveSubscriptionMessageOperator(BaseOperator):
         message will be abandoned for future redelivery.
     """
 
-    template_fields: Sequence[str] = ("topic_name", "subscription_name", "azure_service_bus_conn_id")
+    template_fields: Sequence[str] = ("topic_name", "subscription_name")
     ui_color = "#e4f0e8"
 
     def __init__(
@@ -603,7 +588,7 @@ class AzureServiceBusSubscriptionDeleteOperator(BaseOperator):
         :ref:`Azure Service Bus connection <howto/connection:azure_service_bus>`.
     """
 
-    template_fields: Sequence[str] = ("topic_name", "subscription_name", "azure_service_bus_conn_id")
+    template_fields: Sequence[str] = ("topic_name", "subscription_name")
     ui_color = "#e4f0e8"
 
     def __init__(
@@ -641,10 +626,7 @@ class AzureServiceBusTopicDeleteOperator(BaseOperator):
         :ref:`Azure Service Bus connection <howto/connection:azure_service_bus>`.
     """
 
-    template_fields: Sequence[str] = (
-        "topic_name",
-        "azure_service_bus_conn_id",
-    )
+    template_fields: Sequence[str] = ("topic_name",)
     ui_color = "#e4f0e8"
 
     def __init__(

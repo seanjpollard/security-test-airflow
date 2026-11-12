@@ -98,64 +98,36 @@ class MwaaServerlessCreateWorkflowOperator(AwsBaseOperator[AwsBaseHook]):
 
     :param workflow_name: The name of the workflow. (templated)
     :param definition_s3_location: Dict with ``Bucket`` and ``ObjectKey`` for the YAML definition. (templated)
-    :param code: Optional code location for ``PythonOperator`` and ``BashOperator`` tasks,
-        as a dict with an ``S3Location`` key containing ``Bucket``, ``ObjectKey``, and
-        optionally ``VersionId``. (templated)
     :param role_arn: The execution role ARN. (templated)
     :param description: Optional description. (templated)
-    :param environment_variables: Optional mapping of environment variable names to values
-        to set for tasks in the workflow. Sent to the API as ``Environment.Variables``.
-        If not specified, the workflow has no environment variables. Requires
-        ``botocore>=1.43.124``. (templated)
     :param tags: Optional tags dict.
-    :param create_workflow_kwargs: Optional parameters to pass to the ``CreateWorkflow`` API for
-        inputs this operator does not expose, such as ``NetworkConfiguration``,
-        ``LoggingConfiguration``, ``EngineVersion``, ``TriggerMode``, ``EncryptionConfiguration``
-        and ``ClientToken``. (templated)
     :param if_exists: Behavior when the workflow already exists.
         ``"fail"`` raises an error, ``"skip"`` returns the existing ARN.
     """
 
     aws_hook_class = AwsBaseHook
     template_fields: tuple[str, ...] = aws_template_fields(
-        "workflow_name",
-        "definition_s3_location",
-        "code",
-        "role_arn",
-        "description",
-        "environment_variables",
-        "create_workflow_kwargs",
+        "workflow_name", "definition_s3_location", "role_arn", "description"
     )
-    template_fields_renderers = {
-        "definition_s3_location": "json",
-        "code": "json",
-        "environment_variables": "json",
-        "create_workflow_kwargs": "json",
-    }
+    template_fields_renderers = {"definition_s3_location": "json"}
 
     def __init__(
         self,
         *,
         workflow_name: str,
         definition_s3_location: dict[str, str],
-        code: dict[str, Any] | None = None,
         role_arn: str,
         description: str | None = None,
-        environment_variables: dict[str, str] | None = None,
         tags: dict[str, str] | None = None,
-        create_workflow_kwargs: dict[str, Any] | None = None,
         if_exists: Literal["fail", "skip"] = "skip",
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.workflow_name = workflow_name
         self.definition_s3_location = definition_s3_location
-        self.code = code
         self.role_arn = role_arn
         self.description = description
-        self.environment_variables = environment_variables
         self.tags = tags
-        self.create_workflow_kwargs = create_workflow_kwargs or {}
         self.if_exists = if_exists
 
     @property
@@ -168,160 +140,23 @@ class MwaaServerlessCreateWorkflowOperator(AwsBaseOperator[AwsBaseHook]):
             {
                 "Name": self.workflow_name,
                 "DefinitionS3Location": self.definition_s3_location,
-                "Code": self.code,
                 "RoleArn": self.role_arn,
                 "Description": self.description,
                 "Tags": self.tags,
             }
         )
-        if self.environment_variables is not None:
-            kwargs["Environment"] = {"Variables": self.environment_variables}
         try:
-            response = self.hook.conn.create_workflow(**kwargs, **self.create_workflow_kwargs)
+            response = self.hook.conn.create_workflow(**kwargs)
             workflow_arn = response["WorkflowArn"]
         except ClientError as e:
             if e.response["Error"]["Code"] == "ConflictException" and self.if_exists == "skip":
                 self.log.info("Workflow %s already exists, skipping.", self.workflow_name)
-                resource_id = e.response["ResourceId"]
-                workflow_arn = (
-                    f"arn:{self.hook.conn_partition}:airflow-serverless"
-                    f":{self.hook.conn_region_name}:{self.hook.account_id}"
-                    f":workflow/{resource_id}"
-                )
+                response = self.hook.conn.get_workflow(WorkflowArn=self.workflow_name)
+                workflow_arn = response["WorkflowArn"]
             else:
                 raise
         self.log.info("Workflow %s: %s", self.workflow_name, workflow_arn)
         return workflow_arn
-
-
-class MwaaServerlessUpdateWorkflowOperator(AwsBaseOperator[AwsBaseHook]):
-    """
-    Update an existing Amazon MWAA Serverless workflow.
-
-    .. seealso::
-        For more information on how to use this operator, take a look at the guide:
-        :ref:`howto/operator:MwaaServerlessUpdateWorkflowOperator`
-
-    :param workflow_arn: The ARN of the workflow to update. (templated)
-    :param definition_s3_location: Dict with ``Bucket``, ``ObjectKey``, and optionally
-        ``VersionId`` for the updated YAML definition. (templated)
-    :param code: Optional code location for ``PythonOperator`` and ``BashOperator`` tasks,
-        as a dict with an ``S3Location`` key containing ``Bucket``, ``ObjectKey``, and
-        optionally ``VersionId``. (templated)
-    :param role_arn: The execution role ARN. (templated)
-    :param description: Optional updated description. (templated)
-    :param environment_variables: Optional mapping of environment variable names to values
-        to set for tasks in the workflow. Sent to the API as ``Environment.Variables``.
-        The variables specified replace all existing environment variables of the workflow;
-        if not specified, the updated workflow has no environment variables. Requires
-        ``botocore>=1.43.124``. (templated)
-    :param update_workflow_kwargs: Optional parameters to pass to the ``UpdateWorkflow`` API for
-        inputs this operator does not expose, such as ``NetworkConfiguration``,
-        ``LoggingConfiguration``, ``EngineVersion`` and ``TriggerMode``. (templated)
-    """
-
-    aws_hook_class = AwsBaseHook
-    template_fields: tuple[str, ...] = aws_template_fields(
-        "workflow_arn",
-        "definition_s3_location",
-        "code",
-        "role_arn",
-        "description",
-        "environment_variables",
-        "update_workflow_kwargs",
-    )
-    template_fields_renderers = {
-        "definition_s3_location": "json",
-        "code": "json",
-        "environment_variables": "json",
-        "update_workflow_kwargs": "json",
-    }
-
-    def __init__(
-        self,
-        *,
-        workflow_arn: str,
-        definition_s3_location: dict[str, str],
-        code: dict[str, Any] | None = None,
-        role_arn: str,
-        description: str | None = None,
-        environment_variables: dict[str, str] | None = None,
-        update_workflow_kwargs: dict[str, Any] | None = None,
-        **kwargs,
-    ) -> None:
-        super().__init__(**kwargs)
-        self.workflow_arn = workflow_arn
-        self.definition_s3_location = definition_s3_location
-        self.code = code
-        self.role_arn = role_arn
-        self.description = description
-        self.environment_variables = environment_variables
-        self.update_workflow_kwargs = update_workflow_kwargs or {}
-
-    @property
-    def _hook_parameters(self) -> dict[str, Any]:
-        return {**super()._hook_parameters, "client_type": "mwaa-serverless"}
-
-    def execute(self, context: Context) -> str:
-        self.log.info("Updating MWAA Serverless workflow %s", self.workflow_arn)
-        kwargs: dict[str, Any] = prune_dict(
-            {
-                "WorkflowArn": self.workflow_arn,
-                "DefinitionS3Location": self.definition_s3_location,
-                "Code": self.code,
-                "RoleArn": self.role_arn,
-                "Description": self.description,
-            }
-        )
-        if self.environment_variables is not None:
-            kwargs["Environment"] = {"Variables": self.environment_variables}
-        response = self.hook.conn.update_workflow(**kwargs, **self.update_workflow_kwargs)
-        workflow_arn = response["WorkflowArn"]
-        self.log.info("Workflow %s updated to version %s", workflow_arn, response.get("WorkflowVersion"))
-        return workflow_arn
-
-
-class MwaaServerlessDeleteWorkflowOperator(AwsBaseOperator[AwsBaseHook]):
-    """
-    Delete an Amazon MWAA Serverless workflow.
-
-    .. seealso::
-        For more information on how to use this operator, take a look at the guide:
-        :ref:`howto/operator:MwaaServerlessDeleteWorkflowOperator`
-
-    :param workflow_arn: The ARN of the workflow to delete. (templated)
-    :param workflow_version: Optional specific version to delete. If not specified,
-        all versions are deleted. (templated)
-    """
-
-    aws_hook_class = AwsBaseHook
-    template_fields: tuple[str, ...] = aws_template_fields("workflow_arn", "workflow_version")
-
-    def __init__(
-        self,
-        *,
-        workflow_arn: str,
-        workflow_version: str | None = None,
-        **kwargs,
-    ) -> None:
-        super().__init__(**kwargs)
-        self.workflow_arn = workflow_arn
-        self.workflow_version = workflow_version
-
-    @property
-    def _hook_parameters(self) -> dict[str, Any]:
-        return {**super()._hook_parameters, "client_type": "mwaa-serverless"}
-
-    def execute(self, context: Context) -> None:
-        self.log.info("Deleting MWAA Serverless workflow %s", self.workflow_arn)
-        kwargs: dict[str, Any] = prune_dict(
-            {
-                "WorkflowArn": self.workflow_arn,
-                "WorkflowVersion": self.workflow_version,
-            }
-        )
-        self.hook.conn.delete_workflow(**kwargs)
-        self.log.info("Workflow %s deleted.", self.workflow_arn)
 
 
 class MwaaServerlessStopWorkflowRunOperator(AwsBaseOperator[AwsBaseHook]):

@@ -16,8 +16,6 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useRef, useEffect } from "react";
-
 import { Box, useToken } from "@chakra-ui/react";
 import {
   Chart as ChartJS,
@@ -30,6 +28,7 @@ import {
   type ChartOptions,
 } from "chart.js";
 import dayjs from "dayjs";
+import { useRef, useEffect } from "react";
 import { Line } from "react-chartjs-2";
 
 import { useColorMode } from "src/context/colorMode";

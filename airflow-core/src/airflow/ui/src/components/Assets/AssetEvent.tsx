@@ -22,12 +22,8 @@ import { FiDatabase } from "react-icons/fi";
 import { Link } from "react-router-dom";
 
 import type { AssetEventResponse } from "openapi/requests/types.gen";
-
-import { Tooltip } from "src/system-components";
-
 import Time from "src/components/Time";
-
-import { getTaskInstanceLink } from "src/utils/links";
+import { Tooltip } from "src/components/ui";
 
 import RenderedJsonField from "../RenderedJsonField";
 import { TriggeredRuns } from "./TriggeredRuns";
@@ -75,27 +71,20 @@ export const AssetEvent = ({
             showArrow
           >
             <Link to={`/assets/${event.asset_id}`}>
-              <Box color="fg.info" overflowWrap="anywhere" padding={0}>
+              <Box color="fg.info" overflowWrap="anywhere" padding={0} wordWrap="break-word">
                 {event.name ?? ""}
               </Box>
             </Link>
           </Tooltip>
         </HStack>
       )}
-      <HStack flexWrap="wrap">
+      <HStack>
         <Box>{translate("source")}: </Box>
         {source === "" ? (
           <Link
-            to={getTaskInstanceLink({
-              dag_id: event.source_dag_id ?? "",
-              dag_run_id: event.source_run_id ?? "",
-              map_index: event.source_map_index,
-              region_id: event.source_region_id ?? undefined,
-              region_index: event.source_region_index ?? undefined,
-              task_id: event.source_task_id ?? "",
-            })}
+            to={`/dags/${event.source_dag_id}/runs/${event.source_run_id}/tasks/${event.source_task_id}${event.source_map_index > -1 ? `/mapped/${event.source_map_index}` : ""}`}
           >
-            <Box color="fg.info" overflowWrap="anywhere" padding={0}>
+            <Box color="fg.info" overflowWrap="anywhere" padding={0} wordWrap="break-word">
               {event.source_dag_id}
             </Box>
           </Link>
@@ -106,16 +95,13 @@ export const AssetEvent = ({
       <HStack>
         <TriggeredRuns dagRuns={event.created_dagruns} />
       </HStack>
-      {
-        // eslint-disable-next-line no-eq-null, eqeqeq
-        event.partition_key == null ? undefined : (
-          <HStack>
-            <Text>
-              {rootTranslate("dagRun.partitionKey")}: {event.partition_key}
-            </Text>
-          </HStack>
-        )
-      }
+      {event.partition_key === undefined ? undefined : (
+        <HStack>
+          <Text>
+            {rootTranslate("dagRun.partitionKey")}: {event.partition_key}
+          </Text>
+        </HStack>
+      )}
       {Object.keys(extra).length >= 1 ? <RenderedJsonField collapsed content={extra} /> : undefined}
     </Box>
   );

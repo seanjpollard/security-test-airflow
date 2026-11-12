@@ -23,12 +23,6 @@ import { initReactI18next } from "react-i18next";
 
 import { VersionService } from "openapi/requests/services.gen";
 
-// Also configures the generated client, which must happen before the version
-// request below. See src/basePath.
-import { basePath } from "src/basePath";
-
-import { registerDayjsLocaleSync } from "./dayjsLocale";
-
 export const supportedLanguages = [
   { code: "en", name: "English" },
   { code: "ar", name: "العربية" },
@@ -65,124 +59,44 @@ export const namespaces = [
   "hitl",
 ] as const;
 
-const supportedCodes: Array<string> = supportedLanguages.map((lang) => lang.code);
+const baseHref = document.querySelector("head > base")?.getAttribute("href") ?? "";
+const baseUrl = new URL(baseHref, globalThis.location.origin);
+const basePath = new URL(baseUrl).pathname.replace(/\/$/u, "");
 
-// i18next resolves navigator.languages with two global passes: it only reduces
-// a region code ("en-GB") to its base ("en") when NO exact match exists anywhere
-// in the list. So a browser list like ["en-GB", "hi-IN", "hi", "en-US", "en"]
-// matched the exact "hi" before "en-GB" was ever reduced to "en", and the UI
-// loaded in Hindi. The detector maps this function over each navigator.languages
-// entry (preserving order), so normalising per code makes the base-language
-// match happen in priority order. Preferred over nonExplicitSupportedLngs /
-// load:"languageOnly", which strip the region from every code and so collapse
-// "zh-CN"/"zh-TW" to the unsupported "zh".
-export const convertDetectedLanguage = (lng: string): string => {
-  let locale: Intl.Locale;
-
-  try {
-    locale = new Intl.Locale(lng);
-  } catch {
-    // Not a well-formed BCP-47 tag (e.g. a stale "zh_TW" cache value). Leave it
-    // for i18next to fall back rather than guess.
-    return lng;
-  }
-
-  // Exact supported code, tolerating browser casing ("ZH-CN" -> "zh-CN").
-  if (supportedCodes.includes(locale.baseName)) {
-    return locale.baseName;
-  }
-
-  // Region/script variant of a supported base language: "en-GB" -> "en", "pt-BR" -> "pt".
-  if (supportedCodes.includes(locale.language)) {
-    return locale.language;
-  }
-
-  // For a language whose base code isn't supported but which has region-specific
-  // supported locales, match by language + resolved script. maximize() derives
-  // the script from the region via CLDR data, so "zh-HK"/"zh-Hant" (Hant) map to
-  // "zh-TW" and "zh"/"zh-SG" (Hans) map to "zh-CN". A Chinese tag thus prefers
-  // Chinese over a lower-priority language.
-  const wanted = locale.maximize();
-
-  return (
-    supportedCodes.find((code) => {
-      const candidate = new Intl.Locale(code).maximize();
-
-      return candidate.language === wanted.language && candidate.script === wanted.script;
-    }) ?? lng
-  );
-};
-
-export const i18nBaseOptions = {
-  defaultNS: "common",
-  detection: {
-    caches: ["localStorage"],
-    convertDetectedLanguage,
-    order: ["localStorage", "navigator", "htmlTag"],
-  },
-  fallbackLng: defaultLanguage,
-  interpolation: {
-    escapeValue: false,
-  },
-  // i18next renders an explicitly undefined `{{count}}` as blank but prints `{{count, number}}`
-  // verbatim, because it looks the passed value up under the whole "count, number" expression.
-  missingInterpolationHandler: (
-    _text: string,
-    [placeholder, expression = ""]: RegExpExecArray,
-    options?: object,
-  ) =>
-    options !== undefined && Object.hasOwn(options, expression.split(",")[0]?.trim() ?? "")
-      ? ""
-      : placeholder,
-  ns: namespaces,
-  react: {
-    useSuspense: false,
-  },
-  supportedLngs: supportedCodes,
-};
-
-// Plugin-contributed languages listed by the server; fail soft to none if it cannot be fetched.
-export const resolveExtraLanguages = (): Promise<Array<string>> =>
-  Promise.resolve()
-    .then(() => fetch(`${basePath}/static/i18n/languages.json`))
-    .then((response) =>
-      response.ok ? (response.json() as Promise<{ languages?: Array<string> }>) : { languages: [] },
-    )
-    .then((data) => data.languages ?? [])
-    .catch(() => []);
-
-const initI18n = (version: string, extraLanguages: Array<string>) => {
+const initI18n = (version: string) => {
   const queryString = version ? `?v=${version}` : "";
-
-  // Subscribed before init so it precedes every react-i18next component listener, and
-  // because i18next emits `languageChanged` from init itself for the detected language.
-  registerDayjsLocaleSync(i18n);
 
   void i18n
     .use(Backend)
     .use(LanguageDetector)
     .use(initReactI18next)
     .init({
-      ...i18nBaseOptions,
       backend: {
         loadPath: `${basePath}/static/i18n/locales/{{lng}}/{{ns}}.json${queryString}`,
       },
-      supportedLngs: [...new Set([...supportedCodes, ...extraLanguages])],
+      defaultNS: "common",
+      detection: {
+        caches: ["localStorage"],
+        order: ["localStorage", "navigator", "htmlTag"],
+      },
+      fallbackLng: defaultLanguage,
+      interpolation: {
+        escapeValue: false,
+      },
+      ns: namespaces,
+      react: {
+        useSuspense: false,
+      },
+      supportedLngs: supportedLanguages.map((lang) => lang.code),
     });
 };
 
-// Falling back to an empty version on failure would drop the `?v=` cache
-// buster from the translation loadPath, letting a CDN/browser keep serving a
-// translation bundle cached from before the running version, indefinitely
-// missing any keys added since. A timestamp isn't the true version, but it
-// still busts the cache on every retry.
-export const resolveI18nVersion = (): Promise<string> =>
-  VersionService.getVersion()
-    .then((data) => data.version)
-    .catch(() => Date.now().toString());
-
-void Promise.all([resolveI18nVersion(), resolveExtraLanguages()]).then(([version, extraLanguages]) =>
-  initI18n(version, extraLanguages),
-);
+void VersionService.getVersion()
+  .then((data) => {
+    initI18n(data.version);
+  })
+  .catch(() => {
+    initI18n("");
+  });
 
 export { default } from "i18next";

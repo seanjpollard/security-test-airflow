@@ -16,8 +16,6 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from "react";
-
 import { Heading, HStack, Text } from "@chakra-ui/react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { useTranslation } from "react-i18next";
@@ -25,17 +23,11 @@ import { FiDatabase } from "react-icons/fi";
 
 import { usePartitionedDagRunServiceGetPartitionedDagRuns } from "openapi/queries";
 import type { PartitionedDagRunResponse } from "openapi/requests/types.gen";
-
-import { Modal } from "src/system-components";
-
 import { AssetProgressCell } from "src/components/AssetProgressCell";
 import { DataTable } from "src/components/DataTable";
-import type { DataTableFeatures } from "src/components/DataTable/features";
-import type { TableState } from "src/components/DataTable/types";
 import { ErrorAlert } from "src/components/ErrorAlert";
 import Time from "src/components/Time";
-
-import { useConfig } from "src/queries/useConfig";
+import { Dialog } from "src/components/ui";
 
 type PartitionScheduleModalProps = {
   readonly dagId: string;
@@ -46,7 +38,7 @@ type PartitionScheduleModalProps = {
 const getColumns = (
   translate: (key: string) => string,
   dagId: string,
-): Array<ColumnDef<DataTableFeatures, PartitionedDagRunResponse>> => [
+): Array<ColumnDef<PartitionedDagRunResponse>> => [
   {
     accessorKey: "partition_key",
     enableSorting: false,
@@ -67,7 +59,6 @@ const getColumns = (
     cell: ({ row }) => (
       <AssetProgressCell
         dagId={dagId}
-        partitionedDagRunId={row.original.id}
         partitionKey={row.original.partition_key}
         totalReceived={row.original.total_received}
         totalRequired={row.original.total_required}
@@ -79,25 +70,10 @@ const getColumns = (
 ];
 
 export const PartitionScheduleModal = ({ dagId, onClose, open }: PartitionScheduleModalProps) => {
-  const { t: translate } = useTranslation();
-  const pageSize = (useConfig("fallback_page_limit") as number | undefined) ?? 100;
-  const [pageIndex, setPageIndex] = useState(0);
-  const tableState = {
-    pagination: {
-      pageIndex,
-      pageSize,
-    },
-    sorting: [],
-  } satisfies TableState;
-  const { pagination } = tableState;
+  const { t: translate } = useTranslation("common");
 
-  const { data, error, isLoading } = usePartitionedDagRunServiceGetPartitionedDagRuns(
-    {
-      dagId,
-      hasCreatedDagRunId: false,
-      limit: pagination.pageSize,
-      offset: pagination.pageIndex * pagination.pageSize,
-    },
+  const { data, error, isFetching, isLoading } = usePartitionedDagRunServiceGetPartitionedDagRuns(
+    { dagId, hasCreatedDagRunId: false },
     undefined,
     { enabled: open },
   );
@@ -106,38 +82,29 @@ export const PartitionScheduleModal = ({ dagId, onClose, open }: PartitionSchedu
   const total = data?.total ?? 0;
   const columns = getColumns(translate, dagId);
 
-  const handleOpenChange = () => {
-    setPageIndex(0);
-    onClose();
-  };
-
   return (
-    <Modal
-      headerProps={{
-        children: (
-          <HStack gap={2}>
+    <Dialog.Root lazyMount onOpenChange={onClose} open={open} scrollBehavior="inside" size="xl" unmountOnExit>
+      <Dialog.Content backdrop>
+        <Dialog.Header>
+          <HStack>
             <FiDatabase />
-            <Heading fontSize="lg">{translate("pendingDagRun", { count: total })}</Heading>
+            <Heading size="md">{translate("pendingDagRun", { count: total })}</Heading>
           </HStack>
-        ),
-      }}
-      lazyMount
-      onOpenChange={handleOpenChange}
-      open={open}
-      scrollBehavior="inside"
-      unmountOnExit
-    >
-      <ErrorAlert error={error} />
-      <DataTable
-        columns={columns}
-        data={partitionedDagRuns}
-        hideRowCountHeading
-        initialState={tableState}
-        isLoading={isLoading}
-        modelName="partitionedDagRun"
-        onStateChange={(state) => setPageIndex(state.pagination.pageIndex)}
-        total={total}
-      />
-    </Modal>
+        </Dialog.Header>
+        <Dialog.CloseTrigger />
+        <Dialog.Body>
+          <ErrorAlert error={error} />
+          <DataTable
+            columns={columns}
+            data={partitionedDagRuns}
+            isFetching={isFetching}
+            isLoading={isLoading}
+            modelName="partitionedDagRun"
+            showRowCountHeading={false}
+            total={total}
+          />
+        </Dialog.Body>
+      </Dialog.Content>
+    </Dialog.Root>
   );
 };

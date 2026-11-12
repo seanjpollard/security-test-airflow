@@ -17,42 +17,21 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
-from uuid import UUID, uuid4
 
 import pytest
-from fastapi import HTTPException, status
 from sqlalchemy import delete, select
 
-from airflow.executors.workloads import BundleInfo, ExecuteTask
-from airflow.providers.common.compat.sdk import Stats, timezone
+from airflow.providers.common.compat.sdk import Stats
 from airflow.providers.edge3.models.edge_job import EdgeJobModel
-from airflow.providers.edge3.models.edge_worker import EdgeWorkerModel, EdgeWorkerState
-from airflow.providers.edge3.models.types import (
-    CALLBACK_JOB_MAP_INDEX,
-    CALLBACK_JOB_TRY_NUMBER,
-    EXECUTE_CALLBACK_TAG,
-    build_callback_run_id,
-)
 from airflow.providers.edge3.worker_api.datamodels import WorkerQueuesBody
-from airflow.providers.edge3.worker_api.routes import jobs
-from airflow.providers.edge3.worker_api.routes.jobs import fetch, parse_command, state
+from airflow.providers.edge3.worker_api.routes.jobs import fetch, state
 from airflow.utils.session import create_session
 from airflow.utils.state import TaskInstanceState
 
-from tests_common.test_utils.version_compat import AIRFLOW_V_3_3_PLUS
-
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
-
-    from airflow.executors.workloads import ExecuteCallback
-
-if AIRFLOW_V_3_3_PLUS:
-    from airflow.executors.workloads import CallbackFetchMethod, ExecuteCallback, TaskInstanceDTO
-    from airflow.executors.workloads.callback import CallbackDTO
 
 pytestmark = pytest.mark.db_test
 
@@ -89,59 +68,10 @@ class TestJobsApiRoutes:
     @pytest.fixture(autouse=True)
     def setup_test_cases(self, dag_maker, session: Session):
         session.execute(delete(EdgeJobModel))
-        session.execute(delete(EdgeWorkerModel))
-        session.commit()
-        yield
-        session.execute(delete(EdgeJobModel))
-        session.execute(delete(EdgeWorkerModel))
         session.commit()
 
-    @pytest.mark.parametrize("uuid_worker", [None, False, True])
-    def test_fetch_uuid_job_requires_worker_capability(self, session, uuid_worker, mocker):
-        warning = mocker.patch.object(jobs.log, "warning", autospec=True)
-        task_id = uuid4()
-        worker = EdgeWorkerModel(
-            worker_name="uuid_worker",
-            state=EdgeWorkerState.IDLE,
-            queues=[QUEUE],
-        )
-        worker.sysinfo = {"supports_task_instance_uuid": not uuid_worker}
-        job = EdgeJobModel(
-            dag_id=DAG_ID,
-            task_id=TASK_ID,
-            run_id=RUN_ID,
-            try_number=1,
-            map_index=-1,
-            task_instance_id=str(task_id),
-            state=TaskInstanceState.QUEUED,
-            queue=QUEUE,
-            concurrency_slots=1,
-            command=MOCK_COMMAND_STR,
-        )
-        session.add_all([worker, job])
-        session.flush()
-        body = WorkerQueuesBody(
-            free_concurrency=1,
-            queues=[QUEUE],
-            **({"supports_task_instance_uuid": uuid_worker} if uuid_worker is not None else {}),
-        )
-        if uuid_worker:
-            result = fetch("uuid_worker", body, session)
-            assert result.task_instance_id == task_id
-            assert job.state == TaskInstanceState.RESTARTING
-            warning.assert_not_called()
-        else:
-            with pytest.raises(HTTPException) as error:
-                fetch("uuid_worker", body, session)
-            assert error.value.status_code == 409
-            assert job.state == TaskInstanceState.QUEUED
-            warning.assert_called_once_with(
-                "Edge worker %s cannot fetch UUID-keyed jobs; upgrade the worker.", "uuid_worker"
-            )
-
-    @pytest.mark.parametrize("terminal_state", [TaskInstanceState.SUCCESS, TaskInstanceState.FAILED])
-    @patch(f"{Stats.__module__}.Stats.incr", autospec=True)
-    def test_state(self, mock_stats_incr, session: Session, terminal_state):
+    @patch(f"{Stats.__module__}.Stats.incr")
+    def test_state(self, mock_stats_incr, session: Session):
         with create_session() as session:
             job = EdgeJobModel(
                 dag_id=DAG_ID,
@@ -153,7 +83,6 @@ class TestJobsApiRoutes:
                 queue=QUEUE,
                 concurrency_slots=1,
                 command="execute",
-                team_name="team_a",
             )
             session.add(job)
             session.commit()
@@ -175,7 +104,7 @@ class TestJobsApiRoutes:
                 run_id=RUN_ID,
                 try_number=1,
                 map_index=-1,
-                state=terminal_state,
+                state=TaskInstanceState.SUCCESS,
                 session=session,
             )
 
@@ -184,327 +113,18 @@ class TestJobsApiRoutes:
                 tags={
                     "dag_id": DAG_ID,
                     "queue": QUEUE,
-                    "state": terminal_state,
+                    "state": TaskInstanceState.SUCCESS,
                     "task_id": TASK_ID,
-                    "team_name": "team_a",
                 },
             )
             assert mock_stats_incr.call_count == 1
 
             db_job: EdgeJobModel | None = session.scalar(select(EdgeJobModel))
             assert db_job is not None
-            assert db_job.state == terminal_state
+            assert db_job.state == TaskInstanceState.SUCCESS
 
-    @pytest.mark.parametrize(
-        "target", ["", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"]
-    )
-    def test_state_updates_only_matching_attempt(self, session, target, mocker):
-        warning = mocker.patch.object(jobs.log, "warning", autospec=True)
-        identities = ["", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"]
-        for identity in identities:
-            session.add(
-                EdgeJobModel(
-                    dag_id=DAG_ID,
-                    task_id=TASK_ID,
-                    run_id=RUN_ID,
-                    try_number=1,
-                    map_index=-1,
-                    task_instance_id=identity,
-                    state=TaskInstanceState.RUNNING,
-                    queue=QUEUE,
-                    concurrency_slots=1,
-                    command="execute",
-                )
-            )
-        session.flush()
-        state(
-            DAG_ID,
-            TASK_ID,
-            RUN_ID,
-            1,
-            -1,
-            TaskInstanceState.SUCCESS,
-            session,
-            task_instance_id=UUID(target) if target else None,
-        )
-        session.flush()
-        session.expire_all()
-        actual = {job.task_instance_id: job.state for job in session.scalars(select(EdgeJobModel))}
-        assert actual == {
-            identity: TaskInstanceState.SUCCESS if identity == target else TaskInstanceState.RUNNING
-            for identity in identities
-        }
-        warning.assert_not_called()
-
-    @pytest.mark.parametrize(
-        ("stored", "reported", "known_coordinates"),
-        [
-            ("00000000-0000-0000-0000-000000000001", None, True),
-            ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002", True),
-            ("", "00000000-0000-0000-0000-000000000002", True),
-            ("", None, False),
-        ],
-    )
-    def test_state_warns_only_for_attempt_identity_mismatch(
-        self, session, mocker, stored, reported, known_coordinates
-    ):
-        warning = mocker.patch.object(jobs.log, "warning", autospec=True)
-        job = EdgeJobModel(
-            dag_id=DAG_ID,
-            task_id=TASK_ID,
-            run_id=RUN_ID,
-            try_number=1,
-            map_index=-1,
-            task_instance_id=stored,
-            state=TaskInstanceState.RUNNING,
-            queue=QUEUE,
-            concurrency_slots=1,
-            command="execute",
-        )
-        session.add(job)
-        session.flush()
-        state(
-            DAG_ID if known_coordinates else "unknown",
-            TASK_ID,
-            RUN_ID,
-            1,
-            -1,
-            TaskInstanceState.SUCCESS,
-            session,
-            task_instance_id=UUID(reported) if reported else None,
-        )
-        session.flush()
-        session.expire_all()
-        assert session.scalar(select(EdgeJobModel)).state == TaskInstanceState.RUNNING
-        assert warning.call_count == int(known_coordinates)
-
-    @patch(f"{Stats.__module__}.Stats.incr")
-    def test_state_finish_metric_omits_team_name_for_global_job(self, mock_stats_incr, session: Session):
+    def test_fetch_filters_by_team_name(self, session: Session):
         with create_session() as session:
-            job = EdgeJobModel(
-                dag_id=DAG_ID,
-                task_id=TASK_ID,
-                run_id=RUN_ID,
-                try_number=1,
-                map_index=-1,
-                state=TaskInstanceState.RUNNING,
-                queue=QUEUE,
-                concurrency_slots=1,
-                command="execute",
-            )
-            session.add(job)
-            session.commit()
-
-            state(
-                dag_id=DAG_ID,
-                task_id=TASK_ID,
-                run_id=RUN_ID,
-                try_number=1,
-                map_index=-1,
-                state=TaskInstanceState.SUCCESS,
-                session=session,
-            )
-
-            mock_stats_incr.assert_called_once_with(
-                "edge_worker.ti.finish",
-                tags={
-                    "dag_id": DAG_ID,
-                    "queue": QUEUE,
-                    "state": TaskInstanceState.SUCCESS,
-                    "task_id": TASK_ID,
-                },
-            )
-
-    @patch(f"{Stats.__module__}.Stats.incr")
-    def test_fetch_returns_highest_priority_job_first(self, mock_stats_incr, session: Session):
-        with create_session() as session:
-            session.add(
-                EdgeWorkerModel(
-                    worker_name="worker1", state=EdgeWorkerState.IDLE, queues=[QUEUE], team_name=None
-                )
-            )
-            queued_dttm = timezone.datetime(2026, 1, 1)
-            for task_id, priority_weight, delay in [
-                ("low", 1, 0),
-                ("high", 100, 1),
-                ("medium_late", 10, 3),
-                ("medium_early", 10, 2),
-            ]:
-                session.add(
-                    EdgeJobModel(
-                        dag_id=DAG_ID,
-                        task_id=task_id,
-                        run_id=RUN_ID,
-                        try_number=1,
-                        map_index=-1,
-                        state=TaskInstanceState.QUEUED,
-                        queue=QUEUE,
-                        concurrency_slots=1,
-                        command=MOCK_COMMAND_STR,
-                        priority_weight=priority_weight,
-                        queued_dttm=queued_dttm + timedelta(seconds=delay),
-                    )
-                )
-            session.commit()
-
-            body = WorkerQueuesBody(free_concurrency=1, queues=[QUEUE], team_name=None)
-            fetched = [fetch("worker1", body, session) for _ in range(4)]
-
-            assert [job.task_id for job in fetched if job] == ["high", "medium_early", "medium_late", "low"]
-
-    @pytest.mark.skipif(not AIRFLOW_V_3_3_PLUS, reason="ExecuteCallback requires Airflow 3.3+")
-    @patch(f"{Stats.__module__}.Stats.incr")
-    def test_fetch_returns_callbacks_before_higher_priority_tasks(self, mock_stats_incr, session: Session):
-        """Callbacks are fetched in queue order regardless of their own priority_weight."""
-        queued_dttm = timezone.datetime(2026, 1, 1)
-        callbacks = [
-            ("11111111-1111-1111-1111-111111111111", 100, queued_dttm),
-            ("22222222-2222-2222-2222-222222222222", 1, queued_dttm - timedelta(seconds=1)),
-        ]
-        with create_session() as session:
-            session.add(
-                EdgeWorkerModel(
-                    worker_name="worker1", state=EdgeWorkerState.IDLE, queues=[QUEUE], team_name=None
-                )
-            )
-            for callback_id, priority_weight, callback_queued_dttm in callbacks:
-                callback = ExecuteCallback(
-                    callback=CallbackDTO(
-                        id=callback_id,
-                        fetch_method=CallbackFetchMethod.IMPORT_PATH,
-                        data={"path": "builtins.dict", "kwargs": {}},
-                    ),
-                    dag_rel_path=Path("test.py"),
-                    bundle_info=BundleInfo(name="test_bundle", version="1.0"),
-                    token="test_token",
-                    log_path="test.log",
-                )
-                session.add(
-                    EdgeJobModel(
-                        dag_id=EXECUTE_CALLBACK_TAG,
-                        task_id=callback_id,
-                        run_id=build_callback_run_id(callback_id),
-                        try_number=CALLBACK_JOB_TRY_NUMBER,
-                        map_index=CALLBACK_JOB_MAP_INDEX,
-                        state=TaskInstanceState.QUEUED,
-                        queue=QUEUE,
-                        concurrency_slots=1,
-                        command=callback.model_dump_json(),
-                        priority_weight=priority_weight,
-                        queued_dttm=callback_queued_dttm,
-                    )
-                )
-            session.add(
-                EdgeJobModel(
-                    dag_id=DAG_ID,
-                    task_id="high",
-                    run_id=RUN_ID,
-                    try_number=1,
-                    map_index=-1,
-                    state=TaskInstanceState.QUEUED,
-                    queue=QUEUE,
-                    concurrency_slots=1,
-                    command=MOCK_COMMAND_STR,
-                    priority_weight=100,
-                    queued_dttm=queued_dttm - timedelta(seconds=2),
-                )
-            )
-            session.commit()
-
-            body = WorkerQueuesBody(free_concurrency=1, queues=[QUEUE], team_name=None)
-            fetched = [fetch("worker1", body, session) for _ in range(3)]
-
-            assert [job.task_id for job in fetched if job] == [callbacks[1][0], callbacks[0][0], "high"]
-
-    @pytest.mark.parametrize(
-        ("dag_id", "run_id", "try_number", "map_index"),
-        [
-            pytest.param(
-                DAG_ID,
-                build_callback_run_id("low"),
-                CALLBACK_JOB_TRY_NUMBER,
-                CALLBACK_JOB_MAP_INDEX,
-                id="only-dag-id-differs",
-            ),
-            pytest.param(
-                EXECUTE_CALLBACK_TAG,
-                build_callback_run_id("other"),
-                CALLBACK_JOB_TRY_NUMBER,
-                CALLBACK_JOB_MAP_INDEX,
-                id="only-run-id-differs",
-            ),
-            pytest.param(
-                EXECUTE_CALLBACK_TAG,
-                build_callback_run_id("low"),
-                CALLBACK_JOB_TRY_NUMBER + 1,
-                CALLBACK_JOB_MAP_INDEX,
-                id="only-try-number-differs",
-            ),
-            pytest.param(
-                EXECUTE_CALLBACK_TAG,
-                build_callback_run_id("low"),
-                CALLBACK_JOB_TRY_NUMBER,
-                CALLBACK_JOB_MAP_INDEX + 1,
-                id="only-map-index-differs",
-            ),
-        ],
-    )
-    @patch(f"{Stats.__module__}.Stats.incr")
-    def test_fetch_needs_full_callback_identity_to_jump_the_queue(
-        self, mock_stats_incr, dag_id, run_id, try_number, map_index, session: Session
-    ):
-        queued_dttm = timezone.datetime(2026, 1, 1)
-        with create_session() as session:
-            session.add(
-                EdgeWorkerModel(
-                    worker_name="worker1", state=EdgeWorkerState.IDLE, queues=[QUEUE], team_name=None
-                )
-            )
-            session.add(
-                EdgeJobModel(
-                    dag_id=DAG_ID,
-                    task_id="high",
-                    run_id=RUN_ID,
-                    try_number=1,
-                    map_index=-1,
-                    state=TaskInstanceState.QUEUED,
-                    queue=QUEUE,
-                    concurrency_slots=1,
-                    command=MOCK_COMMAND_STR,
-                    priority_weight=100,
-                    queued_dttm=queued_dttm + timedelta(seconds=1),
-                )
-            )
-            session.add(
-                EdgeJobModel(
-                    dag_id=dag_id,
-                    task_id="low",
-                    run_id=run_id,
-                    try_number=try_number,
-                    map_index=map_index,
-                    state=TaskInstanceState.QUEUED,
-                    queue=QUEUE,
-                    concurrency_slots=1,
-                    command=MOCK_COMMAND_STR,
-                    priority_weight=1,
-                    queued_dttm=queued_dttm,
-                )
-            )
-            session.commit()
-
-            body = WorkerQueuesBody(free_concurrency=1, queues=[QUEUE], team_name=None)
-            fetched = [fetch("worker1", body, session) for _ in range(2)]
-
-            assert [job.task_id for job in fetched if job] == ["high", "low"]
-
-    @patch(f"{Stats.__module__}.Stats.incr")
-    def test_fetch_filters_by_worker_team_name(self, mock_stats_incr, session: Session):
-        with create_session() as session:
-            session.add(
-                EdgeWorkerModel(
-                    worker_name="worker1", state=EdgeWorkerState.IDLE, queues=[QUEUE], team_name="team_a"
-                )
-            )
             job_team_a = EdgeJobModel(
                 dag_id="dag_a",
                 task_id="task_a",
@@ -532,39 +152,15 @@ class TestJobsApiRoutes:
             session.add_all([job_team_a, job_team_b])
             session.commit()
 
-            body = WorkerQueuesBody(free_concurrency=1, queues=[QUEUE], team_name="team_b")
+            body = WorkerQueuesBody(free_concurrency=1, queues=[QUEUE], team_name="team_a")
             result = fetch("worker1", body, session)
             assert result is not None
             assert result.dag_id == "dag_a"
             assert result.task_id == "task_a"
-            mock_stats_incr.assert_called_once_with(
-                "edge_worker.ti.start",
-                tags={
-                    "dag_id": "dag_a",
-                    "queue": QUEUE,
-                    "task_id": "task_a",
-                    "team_name": "team_a",
-                },
-            )
 
-    def test_fetch_unknown_worker_raises_404(self, session: Session):
-        body = WorkerQueuesBody(free_concurrency=1, queues=[QUEUE], team_name="team_a")
-
-        with pytest.raises(HTTPException) as exc_info:
-            fetch("unknown-worker", body, session)
-
-        assert exc_info.value.status_code == status.HTTP_404_NOT_FOUND
-        assert exc_info.value.detail == "Worker not found"
-
-    @patch(f"{Stats.__module__}.Stats.incr")
-    def test_fetch_without_team_name_returns_any_team(self, mock_stats_incr, session: Session):
-        """When a worker has no team_name, no team filter is applied so any queued job can be returned."""
+    def test_fetch_without_team_name_returns_any_team(self, session: Session):
+        """When team_name is None, no team filter is applied so any queued job can be returned."""
         with create_session() as session:
-            session.add(
-                EdgeWorkerModel(
-                    worker_name="worker1", state=EdgeWorkerState.IDLE, queues=[QUEUE], team_name=None
-                )
-            )
             job_team_a = EdgeJobModel(
                 dag_id="dag_a",
                 task_id="task_a",
@@ -602,105 +198,3 @@ class TestJobsApiRoutes:
             assert result3 is None
             fetched_dag_ids = {result1.dag_id, result2.dag_id}
             assert fetched_dag_ids == {"dag_a", "dag_b"}
-            mock_stats_incr.assert_any_call(
-                "edge_worker.ti.start",
-                tags={"dag_id": "dag_a", "queue": QUEUE, "task_id": "task_a", "team_name": "team_a"},
-            )
-            mock_stats_incr.assert_any_call(
-                "edge_worker.ti.start",
-                tags={"dag_id": "dag_b", "queue": QUEUE, "task_id": "task_b"},
-            )
-            assert mock_stats_incr.call_count == 2
-
-
-@pytest.mark.skipif(not AIRFLOW_V_3_3_PLUS, reason="The tests should be skipped for Airflow < 3.3")
-class TestParseCommand:
-    def _make_execute_task(self) -> ExecuteTask:
-        ti = TaskInstanceDTO(
-            id=uuid4(),
-            dag_version_id=uuid4(),
-            task_id="test_task",
-            dag_id="test_dag",
-            run_id="test_run",
-            try_number=1,
-            map_index=-1,
-            pool_slots=1,
-            queue="default",
-            priority_weight=1,
-        )
-        return ExecuteTask(
-            ti=ti,
-            dag_rel_path=Path("test_dag.py"),
-            token="test_token",
-            bundle_info=BundleInfo(name="test_bundle", version="1.0"),
-            log_path="test.log",
-        )
-
-    def _make_execute_callback(self) -> ExecuteCallback:
-        callback_data = CallbackDTO(
-            id="12345678-1234-5678-1234-567812345678",
-            fetch_method=CallbackFetchMethod.IMPORT_PATH,
-            data={
-                "path": "builtins.dict",
-                "kwargs": {"a": 1, "b": 2, "c": 3},
-            },
-        )
-        return ExecuteCallback(
-            callback=callback_data,
-            dag_rel_path=Path("test.py"),
-            bundle_info=BundleInfo(name="test_bundle", version="1.0"),
-            token="test_token",
-            log_path="test.log",
-        )
-
-    def test_parse_command_execute_task(self):
-        workload = self._make_execute_task()
-        command_json = workload.model_dump_json()
-
-        result = parse_command(
-            command_json,
-            dag_id="test_dag",
-            task_id="test_task",
-            run_id="test_run",
-            try_number=1,
-            map_index=-1,
-        )
-
-        assert isinstance(result, ExecuteTask)
-        assert result.ti.dag_id == "test_dag"
-        assert result.ti.task_id == "test_task"
-
-    def test_parse_command_execute_callback(self):
-        workload = self._make_execute_callback()
-        command_json = workload.model_dump_json()
-
-        callback_id = workload.callback.id
-
-        result = parse_command(
-            command_json,
-            dag_id=EXECUTE_CALLBACK_TAG,
-            task_id=callback_id,
-            run_id=build_callback_run_id(callback_id),
-            try_number=CALLBACK_JOB_TRY_NUMBER,
-            map_index=CALLBACK_JOB_MAP_INDEX,
-        )
-
-        assert isinstance(result, ExecuteCallback)
-        assert result.callback.id == "12345678-1234-5678-1234-567812345678"
-        assert result.callback.fetch_method == CallbackFetchMethod.IMPORT_PATH
-
-    def test_parse_command_non_callback_dag_id_returns_execute_task(self):
-        """Even if run_id starts with ExecuteCallback, dag_id must also match."""
-        workload = self._make_execute_task()
-        command_json = workload.model_dump_json()
-
-        result = parse_command(
-            command_json,
-            dag_id="some_dag",
-            task_id="something",
-            run_id=build_callback_run_id("something"),
-            try_number=CALLBACK_JOB_TRY_NUMBER,
-            map_index=CALLBACK_JOB_MAP_INDEX,
-        )
-
-        assert isinstance(result, ExecuteTask)

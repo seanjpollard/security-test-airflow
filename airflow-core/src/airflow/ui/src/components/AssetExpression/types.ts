@@ -16,6 +16,31 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import type { DAGDetailsResponse } from "openapi/requests/types.gen";
 
-export type ExpressionType = NonNullable<DAGDetailsResponse["asset_expression"]>;
+type Asset = {
+  asset: {
+    group: string;
+    id: number;
+    name: string;
+    uri: string;
+  };
+};
+
+type Alias = {
+  alias: {
+    group: string;
+    name: string;
+  };
+};
+
+export type NextRunEvent = { id: number; lastUpdate: string | null; name: string | null; uri: string };
+
+export type AssetSummary = Alias | Asset;
+
+export type ExpressionType =
+  | Alias
+  | Asset
+  | {
+      all?: Array<AssetSummary | ExpressionType>;
+      any?: Array<AssetSummary | ExpressionType>;
+    };

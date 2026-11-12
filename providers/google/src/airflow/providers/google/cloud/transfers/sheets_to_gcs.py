@@ -64,7 +64,6 @@ class GoogleSheetsToGCSOperator(BaseOperator):
         "destination_path",
         "sheet_filter",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(

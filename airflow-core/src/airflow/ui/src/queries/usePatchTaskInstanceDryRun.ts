@@ -61,8 +61,6 @@ export const usePatchTaskInstanceDryRun = <TData = PatchTaskInstanceDryRunRespon
         include_upstream: requestBody.include_upstream,
         mapIndex,
         new_state: requestBody.new_state,
-        region_id: requestBody.region_id,
-        region_index: requestBody.region_index,
         taskId,
       },
     ],

@@ -126,7 +126,7 @@ class TestAnalyticsOperator:
             datasource_configs=[datasource_config],
             queries=["SELECT * FROM users_data"],
             engine=mock_engine,
-            result_output_format=["invalid"],
+            result_output_format=["invalid"],  # type: ignore
         )
 
         with pytest.raises(ValueError, match="Unsupported output format"):

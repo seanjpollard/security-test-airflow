@@ -36,20 +36,10 @@ def get_provider_info():
             }
         ],
         "asset-uris": [
-            {
-                "schemes": ["trino"],
-                "handler": "airflow.providers.trino.assets.trino.sanitize_uri",
-                "factory": "airflow.providers.trino.assets.trino.create_asset",
-                "to_openlineage_converter": "airflow.providers.trino.assets.trino.convert_asset_to_openlineage",
-            }
+            {"schemes": ["trino"], "handler": "airflow.providers.trino.assets.trino.sanitize_uri"}
         ],
         "dataset-uris": [
-            {
-                "schemes": ["trino"],
-                "handler": "airflow.providers.trino.assets.trino.sanitize_uri",
-                "factory": "airflow.providers.trino.assets.trino.create_asset",
-                "to_openlineage_converter": "airflow.providers.trino.assets.trino.convert_asset_to_openlineage",
-            }
+            {"schemes": ["trino"], "handler": "airflow.providers.trino.assets.trino.sanitize_uri"}
         ],
         "hooks": [{"integration-name": "Trino", "python-modules": ["airflow.providers.trino.hooks.trino"]}],
         "transfers": [

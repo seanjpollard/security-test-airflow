@@ -16,46 +16,34 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useCallback, useEffect, useState } from "react";
-
 import { Button, Box, Spacer, HStack, Field, Stack, Text, VStack } from "@chakra-ui/react";
 import dayjs from "dayjs";
+import { useEffect, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { FiPlay } from "react-icons/fi";
 
-import { useDagServiceGetDagDetails } from "openapi/queries";
-
-import { RadioCardItem, RadioCardRoot } from "src/system-components";
-
-import { useTimezone } from "src/context/timezone";
 import { useDagParams } from "src/queries/useDagParams";
 import { useParamStore } from "src/queries/useParamStore";
 import { useTogglePause } from "src/queries/useTogglePause";
-import { DATE_FORMAT, DEFAULT_DATETIME_FORMAT, formatDate } from "src/utils/datetimeUtils";
+import { DEFAULT_DATETIME_FORMAT } from "src/utils/datetimeUtils";
 
 import ConfigForm from "../ConfigForm";
 import { DateTimeInput } from "../DateTimeInput";
 import { ErrorAlert, type ExpandedApiError } from "../ErrorAlert";
-import PausedDagOptions from "./PausedDagOptions";
-import RecentConfigSelect from "./RecentConfigSelect";
+import { Checkbox } from "../ui/Checkbox";
+import { RadioCardItem, RadioCardRoot } from "../ui/RadioCard";
 import TriggerDAGAdvancedOptions from "./TriggerDAGAdvancedOptions";
-import {
-  dataIntervalModeOptions,
-  isDataIntervalMode,
-  type DagRunTriggerParams,
-  type PausedDagAction,
-} from "./types";
+import { dataIntervalModeOptions, type DagRunTriggerParams } from "./types";
 
 type TriggerDAGFormProps = {
+  readonly dagDisplayName: string;
   readonly dagId: string;
-  readonly disabled?: boolean;
   readonly error?: unknown;
   readonly hasSchedule: boolean;
   readonly isPartitioned: boolean;
   readonly isPaused: boolean;
   readonly isPending?: boolean;
-  readonly onPausedDagActionChange?: () => void;
   readonly onSubmitTrigger?: (params: DagRunTriggerParams) => void;
   readonly open: boolean;
   readonly prefillConfig?:
@@ -67,17 +55,14 @@ type TriggerDAGFormProps = {
     | undefined;
 };
 
-const DAG_DATE_FORMAT = `${DATE_FORMAT} HH:mm z`;
-
 const TriggerDAGForm = ({
+  dagDisplayName,
   dagId,
-  disabled = false,
   error,
   hasSchedule,
   isPartitioned,
   isPaused,
   isPending = false,
-  onPausedDagActionChange,
   onSubmitTrigger,
   open,
   prefillConfig,
@@ -86,10 +71,8 @@ const TriggerDAGForm = ({
   const [errors, setErrors] = useState<{ conf?: string; date?: unknown }>({});
   const [formError, setFormError] = useState(false);
   const initialParamsDict = useDagParams(dagId, open);
-  const { data: dagDetails } = useDagServiceGetDagDetails({ dagId }, undefined, { enabled: open });
-  const { selectedTimezone } = useTimezone();
   const { conf, initialParamDict, setConf, setInitialParamDict } = useParamStore();
-  const [pausedDagAction, setPausedDagAction] = useState<PausedDagAction>("unpause");
+  const [unpause, setUnpause] = useState(true);
   const [hasAppliedPrefill, setHasAppliedPrefill] = useState(false);
   const { mutate: togglePause } = useTogglePause({ dagId });
 
@@ -108,38 +91,8 @@ const TriggerDAGForm = ({
     },
   });
 
-  // Push a conf into the param store. Seed the initial params only once they are available,
-  // but always push the conf so a run's configuration propagates even
-  // for Dags with no declared params or before params load.
-  const syncConfToStore = useCallback(
-    (confString: string) => {
-      if (
-        Object.keys(initialParamsDict.paramsDict).length > 0 &&
-        Object.keys(initialParamDict).length === 0
-      ) {
-        setInitialParamDict(initialParamsDict.paramsDict);
-      }
-      setConf(confString);
-    },
-    [initialParamDict, initialParamsDict.paramsDict, setConf, setInitialParamDict],
-  );
-
-  // Selecting a recent configuration mid-edit only swaps the conf; whatever the user already
-  // typed into logical date, run id, note or data interval is kept.
-  const applyRecentConf = useCallback(
-    (confObj: Record<string, unknown>) => {
-      const confString = JSON.stringify(confObj, undefined, 2);
-
-      reset((prevValues) => ({ ...prevValues, conf: confString }));
-      syncConfToStore(confString);
-    },
-    [reset, syncConfToStore],
-  );
-
-  // Pre-fill form when prefillConfig is provided. This runs on open, before any user input, so
-  // the whole form is reset. Only 'conf' is copied from the prior run; its runId and logicalDate
-  // are deliberately dropped, because POST /dagRuns rejects a run whose id or logical date
-  // already exists with 409 Conflict.
+  // Pre-fill form when prefillConfig is provided (priority over conf)
+  // Only restore 'conf' (parameters), not logicalDate, runId, or partitionKey to avoid 409 conflicts
   useEffect(() => {
     if (prefillConfig && open) {
       const confString = prefillConfig.conf ? JSON.stringify(prefillConfig.conf, undefined, 2) : "";
@@ -154,14 +107,28 @@ const TriggerDAGForm = ({
         note: "",
         partitionKey: undefined,
       });
-      if (confString) {
-        syncConfToStore(confString);
+      // Also update the param store to keep it in sync.
+      // Wait until we have the initial params so section ordering stays consistent.
+      if (confString && Object.keys(initialParamsDict.paramsDict).length > 0) {
+        if (Object.keys(initialParamDict).length === 0) {
+          setInitialParamDict(initialParamsDict.paramsDict);
+        }
+        setConf(confString);
       }
       setHasAppliedPrefill(true);
     } else if (!open) {
       setHasAppliedPrefill(false);
     }
-  }, [prefillConfig, open, isPartitioned, reset, syncConfToStore]);
+  }, [
+    prefillConfig,
+    open,
+    reset,
+    setConf,
+    initialParamsDict.paramsDict,
+    initialParamDict,
+    setInitialParamDict,
+    isPartitioned,
+  ]);
 
   // Automatically reset form when conf is fetched (only if no prefillConfig)
   useEffect(() => {
@@ -172,33 +139,6 @@ const TriggerDAGForm = ({
 
   const resetDateError = () => setErrors((prev) => ({ ...prev, date: undefined }));
 
-  const logicalDate = watch("logicalDate");
-  const startDate = dagDetails?.start_date ?? undefined;
-  const endDate = dagDetails?.end_date ?? undefined;
-  const formatDagDate = (date: string) => formatDate(date, selectedTimezone, DAG_DATE_FORMAT);
-  let dagStartEndDate: string | undefined;
-
-  if (startDate !== undefined && endDate !== undefined) {
-    dagStartEndDate = translate("components:triggerDag.dagStartEndDate.both", {
-      endDate: formatDagDate(endDate),
-      startDate: formatDagDate(startDate),
-    });
-  } else if (startDate !== undefined) {
-    dagStartEndDate = translate("components:triggerDag.dagStartEndDate.start", {
-      startDate: formatDagDate(startDate),
-    });
-  } else if (endDate !== undefined) {
-    dagStartEndDate = translate("components:triggerDag.dagStartEndDate.end", {
-      endDate: formatDagDate(endDate),
-    });
-  }
-  // Every task's start and end dates are bounded by the Dag's, so a run outside them creates no
-  // task instances and is marked successful without running anything.
-  const isOutsideDagStartEndDate =
-    Boolean(logicalDate) &&
-    ((startDate !== undefined && dayjs(logicalDate).isBefore(startDate)) ||
-      (endDate !== undefined && dayjs(logicalDate).isAfter(endDate)));
-
   const dataIntervalMode = watch("dataIntervalMode");
   const dataIntervalStart = watch("dataIntervalStart");
   const dataIntervalEnd = watch("dataIntervalEnd");
@@ -207,13 +147,10 @@ const TriggerDAGForm = ({
     dataIntervalMode === "manual" &&
     (noDataInterval || dayjs(dataIntervalStart).isAfter(dayjs(dataIntervalEnd)));
   const onSubmit = (data: DagRunTriggerParams) => {
-    if (disabled) {
-      return;
-    }
-    if (pausedDagAction === "unpause" && isPaused) {
+    if (unpause && isPaused) {
       togglePause({ dagId, requestBody: { is_paused: false } });
     }
-    onSubmitTrigger?.({ ...data, drainDag: isPaused && pausedDagAction === "drain" });
+    onSubmitTrigger?.(data);
   };
 
   return (
@@ -234,13 +171,6 @@ const TriggerDAGForm = ({
                   </Stack>
                   <Stack css={{ flexBasis: "70%" }}>
                     <DateTimeInput {...field} onBlur={resetDateError} size="sm" />
-                    {dagStartEndDate === undefined ? undefined : (
-                      <Field.HelperText color={isOutsideDagStartEndDate ? "fg.warning" : undefined}>
-                        {isOutsideDagStartEndDate
-                          ? `${translate("components:triggerDag.dagStartEndDate.noTaskWillRun")} ${dagStartEndDate}`
-                          : dagStartEndDate}
-                      </Field.HelperText>
-                    )}
                   </Stack>
                 </Field.Root>
               )}
@@ -255,17 +185,11 @@ const TriggerDAGForm = ({
                   control={control}
                   name="dataIntervalMode"
                   render={({ field }) => (
-                    <RadioCardRoot
-                      onValueChange={(details) => {
-                        if (isDataIntervalMode(details.value)) {
-                          field.onChange(details.value);
-                        }
-                      }}
-                      value={field.value}
-                    >
+                    <RadioCardRoot defaultValue={String(field.value)} onChange={field.onChange}>
                       <HStack align="stretch">
                         {dataIntervalModeOptions.map((mode) => (
                           <RadioCardItem
+                            colorPalette="brand"
                             indicatorPlacement="start"
                             key={mode.value}
                             label={translate(mode.label)}
@@ -308,20 +232,17 @@ const TriggerDAGForm = ({
         )}
         {isPaused ? (
           <>
-            <PausedDagOptions
-              dagId={dagId}
-              onChange={(action) => {
-                setPausedDagAction(action);
-                onPausedDagActionChange?.();
-              }}
-              value={pausedDagAction}
-            />
+            <Checkbox
+              checked={unpause}
+              colorPalette="brand"
+              onChange={() => setUnpause(!unpause)}
+              wordBreak="break-all"
+            >
+              {translate("components:triggerDag.unpause", { dagDisplayName })}
+            </Checkbox>
             <Spacer />
           </>
         ) : undefined}
-        {prefillConfig ? undefined : (
-          <RecentConfigSelect dagId={dagId} onSelectConf={applyRecentConf} open={open} />
-        )}
         <ConfigForm
           control={control}
           errors={errors}
@@ -329,16 +250,16 @@ const TriggerDAGForm = ({
           setErrors={setErrors}
           setFormError={setFormError}
         >
-          <TriggerDAGAdvancedOptions control={control} isPartitioned={isPartitioned} />
+          <TriggerDAGAdvancedOptions control={control} />
         </ConfigForm>
       </VStack>
       <Box as="footer" display="flex" justifyContent="flex-end" mt={4}>
         <HStack w="full">
           <Spacer />
           <Button
+            colorPalette="brand"
             data-testid="trigger-dag-submit"
             disabled={
-              disabled ||
               Boolean(errors.conf) ||
               Boolean(errors.date) ||
               formError ||

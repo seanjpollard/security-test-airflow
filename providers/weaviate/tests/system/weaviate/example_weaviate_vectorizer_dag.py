@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pendulum
-from weaviate.classes.config import Configure
+from weaviate.collections.classes.config import Configure
 
 try:
     from airflow.sdk import dag, setup, task, teardown
@@ -61,7 +61,7 @@ def example_weaviate_vectorizer_dag():
         # collection definition object. Weaviate's autoschema feature will infer properties when importing.
         weaviate_hook.create_collection(
             COLLECTION_NAME,
-            vector_config=Configure.Vectors.text2vec_openai(vectorize_collection_name=True),
+            vectorizer_config=Configure.Vectorizer.text2vec_openai(),
         )
 
     @setup

@@ -39,7 +39,6 @@ from airflow.providers.google.cloud.sensors.dataflow import (
     DataflowJobMetricsSensor,
     DataflowJobStatusSensor,
 )
-from airflow.providers.standard.operators.python import PythonOperator
 
 try:
     from airflow.sdk import TriggerRule
@@ -67,17 +66,6 @@ default_args = {
 }
 log = logging.getLogger(__name__)
 
-
-def _assert_sensors_pushed_xcom(ti):
-    """Check that each sensor pushed its callback result to XCom while running in poke mode."""
-    for task_id in (
-        "wait_for_python_job_async_metric",
-        "wait_for_python_job_async_message",
-        "wait_for_python_job_async_autoscaling_event",
-    ):
-        assert ti.xcom_pull(task_ids=task_id) is not None, f"{task_id} did not push a value to XCom"
-
-
 with DAG(
     DAG_ID,
     default_args=default_args,
@@ -96,8 +84,6 @@ with DAG(
         py_options=[],
         pipeline_options={
             "output": GCS_OUTPUT,
-            "machine_type": "e2-standard-2",
-            "worker_zone": "europe-west3-a",
         },
         py_requirements=["apache-beam[gcp]==2.67.0"],
         py_interpreter="python3",
@@ -114,7 +100,8 @@ with DAG(
     # [START howto_sensor_wait_for_job_status]
     wait_for_python_job_async_done = DataflowJobStatusSensor(
         task_id="wait_for_python_job_async_done",
-        job_id="{{task_instance.xcom_pull('start_python_job_async')['dataflow_job_id']}}",
+        # verbose form: "{{ task_instance.xcom_pull('start_python_job_async')['dataflow_job_id'] }}"
+        job_id=start_python_job_async.output["dataflow_job_id"],
         expected_statuses={DataflowJobStatus.JOB_STATE_DONE},
         location=LOCATION,
     )
@@ -138,7 +125,8 @@ with DAG(
 
     wait_for_python_job_async_metric = DataflowJobMetricsSensor(
         task_id="wait_for_python_job_async_metric",
-        job_id="{{task_instance.xcom_pull('start_python_job_async')['dataflow_job_id']}}",
+        # verbose form: "{{ task_instance.xcom_pull('start_python_job_async')['dataflow_job_id'] }}"
+        job_id=start_python_job_async.output["dataflow_job_id"],
         location=LOCATION,
         callback=check_metric_scalar_gte(metric_name="Service-cpu_num_seconds", value=100),
         fail_on_terminal_state=False,
@@ -155,7 +143,8 @@ with DAG(
 
     wait_for_python_job_async_message = DataflowJobMessagesSensor(
         task_id="wait_for_python_job_async_message",
-        job_id="{{task_instance.xcom_pull('start_python_job_async')['dataflow_job_id']}}",
+        # verbose form: "{{ task_instance.xcom_pull('start_python_job_async')['dataflow_job_id'] }}"
+        job_id=start_python_job_async.output["dataflow_job_id"],
         location=LOCATION,
         callback=check_message,
         fail_on_terminal_state=False,
@@ -172,16 +161,13 @@ with DAG(
 
     wait_for_python_job_async_autoscaling_event = DataflowJobAutoScalingEventsSensor(
         task_id="wait_for_python_job_async_autoscaling_event",
-        job_id="{{task_instance.xcom_pull('start_python_job_async')['dataflow_job_id']}}",
+        # verbose form: "{{ task_instance.xcom_pull('start_python_job_async')['dataflow_job_id'] }}"
+        job_id=start_python_job_async.output["dataflow_job_id"],
         location=LOCATION,
         callback=check_autoscaling_event,
         fail_on_terminal_state=False,
     )
     # [END howto_sensor_wait_for_job_autoscaling_event]
-
-    assert_sensors_pushed_xcom = PythonOperator(
-        task_id="assert_sensors_pushed_xcom", python_callable=_assert_sensors_pushed_xcom
-    )
 
     delete_bucket = GCSDeleteBucketOperator(
         task_id="delete_bucket", bucket_name=BUCKET_NAME, trigger_rule=TriggerRule.ALL_DONE
@@ -198,7 +184,6 @@ with DAG(
             wait_for_python_job_async_message,
             wait_for_python_job_async_autoscaling_event,
         ]
-        >> assert_sensors_pushed_xcom
         # TEST TEARDOWN
         >> delete_bucket
     )

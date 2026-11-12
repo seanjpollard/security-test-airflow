@@ -16,23 +16,19 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Box, Link } from "@chakra-ui/react";
+import { Box, Heading, Link } from "@chakra-ui/react";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 
 import { useProviderServiceGetProviders } from "openapi/queries";
 import type { ProviderResponse } from "openapi/requests/types.gen";
-
 import { DataTable } from "src/components/DataTable";
-import type { DataTableFeatures } from "src/components/DataTable/features";
 import { useTableURLState } from "src/components/DataTable/useTableUrlState";
 import { ErrorAlert } from "src/components/ErrorAlert";
-
 import { urlRegex } from "src/constants/urlRegex";
-import { useDocumentTitle } from "src/utils";
 
-const createColumns = (translate: TFunction): Array<ColumnDef<DataTableFeatures, ProviderResponse>> => [
+const createColumns = (translate: TFunction): Array<ColumnDef<ProviderResponse>> => [
   {
     accessorKey: "package_name",
     cell: ({ row: { original } }) => (
@@ -81,9 +77,6 @@ const createColumns = (translate: TFunction): Array<ColumnDef<DataTableFeatures,
 
 export const Providers = () => {
   const { t: translate } = useTranslation(["admin", "common"]);
-
-  useDocumentTitle(translate("common:admin.Providers"));
-
   const { setTableURLState, tableURLState } = useTableURLState();
 
   const columns = createColumns(translate);
@@ -96,14 +89,16 @@ export const Providers = () => {
   });
 
   return (
-    <Box px={2}>
+    <Box p={2}>
+      <Heading>{translate("common:admin.Providers")}</Heading>
       <DataTable
         columns={columns}
         data={data?.providers ?? []}
         errorMessage={<ErrorAlert error={error} />}
         initialState={tableURLState}
-        modelName="admin:providers.provider"
+        modelName="common:admin.Providers"
         onStateChange={setTableURLState}
+        showRowCountHeading={false}
         total={data?.total_entries}
       />
     </Box>

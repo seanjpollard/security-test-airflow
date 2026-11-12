@@ -67,10 +67,9 @@ class BaseExtractor(ABC, LoggingMixin):
 
     _allowed_query_params: list[str] = []
 
-    def __init__(self, operator, source_code_enabled: bool = True):
+    def __init__(self, operator):
         super().__init__()
         self.operator = operator
-        self.source_code_enabled = source_code_enabled
 
     @classmethod
     @abstractmethod

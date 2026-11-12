@@ -57,10 +57,7 @@ class KubernetesInstallKueueOperator(BaseOperator):
         super().__init__(*args, **kwargs)
         self.kubernetes_conn_id = kubernetes_conn_id
         self.kueue_version = kueue_version
-
-    @property
-    def _kueue_yaml_url(self) -> str:
-        return (
+        self._kueue_yaml_url = (
             f"https://github.com/kubernetes-sigs/kueue/releases/download/{self.kueue_version}/manifests.yaml"
         )
 

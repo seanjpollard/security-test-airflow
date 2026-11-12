@@ -17,24 +17,24 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from unittest import mock
 
+import attrs
 import pytest
 
-from airflow_shared.dagnode.node import GenericDAGNode, TaskGroupMixin
+from airflow_shared.dagnode.node import GenericDAGNode
 
 
 class Task:
     """Task type for tests."""
 
 
-@dataclass
+@attrs.define
 class TaskGroup:
     """Task group type for tests."""
 
+    node_id: str = attrs.field(init=False, default="test_group_id")
     prefix_group_id: bool
-    node_id: str = field(init=False, default="test_group_id")
 
 
 class Dag:
@@ -81,37 +81,3 @@ class TestDAGNode:
         assert node.label == "test_group_id.test_node_id"
         node.task_group = TaskGroup(prefix_group_id)
         assert node.label == expected_label
-
-
-class TestTaskGroupMixin:
-    @pytest.mark.parametrize(
-        ("projected", "expected"),
-        [
-            pytest.param([(), (0,), (1,)], [0, 1, 2], id="chain"),
-            pytest.param([(1,), (2,), (0,)], [0, 0, 0], id="ring"),
-            pytest.param([(), (2,), (1,), (1,)], [0, 1, 1, 2], id="cycle-between-acyclic-children"),
-            pytest.param([(1,), (0,), (3,), (2,)], [0, 0, 1, 1], id="two-cycles"),
-        ],
-    )
-    def test_find_projection_components(self, projected, expected):
-        assert TaskGroupMixin._find_projection_components(projected) == expected
-
-    @pytest.mark.parametrize(
-        ("nodes", "projected", "expected"),
-        [
-            pytest.param(
-                ["after", "bridge", "group", "x0"],
-                [(2,), (2,), (1,), ()],
-                ["bridge", "group", "x0", "after"],
-                id="cycle-before-its-downstream",
-            ),
-            pytest.param(
-                ["end", "group1", "group2", "start"],
-                [(1, 2), (2, 3), (1, 3), ()],
-                ["start", "group1", "group2", "end"],
-                id="cycle-after-its-upstream",
-            ),
-        ],
-    )
-    def test_sort_cyclic_projection(self, nodes, projected, expected):
-        assert TaskGroupMixin()._sort_cyclic_projection(nodes, projected) == expected

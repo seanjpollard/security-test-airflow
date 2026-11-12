@@ -16,100 +16,53 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import type { RefObject, KeyboardEvent, ReactNode } from "react";
+import { Box, HStack } from "@chakra-ui/react";
+import type { RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
-
-import { Box } from "@chakra-ui/react";
-import { useTranslation } from "react-i18next";
 import { MdClose } from "react-icons/md";
-
-import { IconButton } from "src/system-components";
 
 import { getDefaultFilterIcon } from "./defaultIcons";
 import type { FilterState } from "./types";
 import { isEmptyFilterValue } from "./utils";
 
-/** Spread straight onto the editor's element, so everything here has to be DOM-safe. */
 export type FilterPillInputProps = {
   onBlur: () => void;
   onFocus: () => void;
-  onKeyDown: (event: KeyboardEvent) => void;
+  onKeyDown: (event: React.KeyboardEvent) => void;
   ref: RefObject<HTMLInputElement | null>;
 };
 
-export type FilterPillControls = {
-  /**
-   * Leave edit mode now. For editors that dismiss themselves — anything with a popover or a
-   * portalled menu — closing returns focus inside the pill, so no blur fires and the pill would
-   * otherwise stay open forever. Drops the filter when it still has no value.
-   *
-   * Passed separately from ``FilterPillInputProps`` because that object gets spread onto a DOM
-   * element, which React would warn about for a handler it does not know.
-   */
-  onRequestClose: () => void;
-};
-
 type FilterPillProps = {
-  readonly displayValue: ReactNode | string;
+  readonly displayValue: React.ReactNode | string;
   readonly filter: FilterState;
   readonly hasValue: boolean;
-  // Replaces entering edit mode when the chip body is clicked, for pills that have
-  // nothing to edit (boolean).
-  readonly onClick?: () => void;
   readonly onRemove: () => void;
-  readonly renderInput: (props: FilterPillInputProps, controls: FilterPillControls) => ReactNode;
+  readonly renderInput: (props: FilterPillInputProps) => React.ReactNode;
 };
 
-export const FilterPill = ({
-  displayValue,
-  filter,
-  hasValue,
-  onClick,
-  onRemove,
-  renderInput,
-}: FilterPillProps) => {
-  const { t: translate } = useTranslation(["common"]);
+export const FilterPill = ({ displayValue, filter, hasValue, onRemove, renderInput }: FilterPillProps) => {
   const isEmpty = isEmptyFilterValue(filter.value);
   const [isEditing, setIsEditing] = useState(isEmpty);
   const inputRef = useRef<HTMLInputElement>(null);
-  const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  // Read inside the blur timeout, which would otherwise close over a stale value.
-  const valueRef = useRef(filter.value);
+  const blurTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
-  valueRef.current = filter.value;
+  const handlePillClick = () => setIsEditing(true);
 
-  const handlePillClick = () => (onClick === undefined ? setIsEditing(true) : onClick());
-
-  // Leaving the editor without choosing anything drops the filter rather than parking a
-  // valueless pill on the bar, which reads as active but filters nothing.
-  const stopEditing = () => {
-    if (isEmptyFilterValue(valueRef.current)) {
-      onRemove();
-    } else {
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "Enter" || event.key === "Escape") {
       setIsEditing(false);
     }
   };
 
-  const handleKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Enter" || event.key === "Escape") {
-      stopEditing();
-    }
-  };
-
   const handleBlur = () => {
-    blurTimeoutRef.current = setTimeout(stopEditing, 150);
+    blurTimeoutRef.current = setTimeout(() => setIsEditing(false), 150);
   };
 
   const handleFocus = () => {
-    if (blurTimeoutRef.current !== undefined) {
+    if (blurTimeoutRef.current) {
       clearTimeout(blurTimeoutRef.current);
       blurTimeoutRef.current = undefined;
     }
-  };
-
-  const handleRequestClose = () => {
-    handleFocus(); // Cancels any blur already in flight so the close only happens once.
-    stopEditing();
   };
 
   useEffect(() => {
@@ -130,7 +83,7 @@ export const FilterPill = ({
 
   useEffect(
     () => () => {
-      if (blurTimeoutRef.current !== undefined) {
+      if (blurTimeoutRef.current) {
         clearTimeout(blurTimeoutRef.current);
       }
     },
@@ -138,65 +91,61 @@ export const FilterPill = ({
   );
 
   if (isEditing) {
-    return renderInput(
-      {
-        onBlur: handleBlur,
-        onFocus: handleFocus,
-        onKeyDown: handleKeyDown,
-        ref: inputRef,
-      },
-      { onRequestClose: handleRequestClose },
-    );
+    return renderInput({
+      onBlur: handleBlur,
+      onFocus: handleFocus,
+      onKeyDown: handleKeyDown,
+      ref: inputRef,
+    });
   }
 
-  // The remove control is a button, so the pill body is a sibling button rather than the wrapper:
-  // nesting one button inside another is invalid HTML and React warns about it.
   return (
     <Box
       _hover={{ bg: "colorPalette.subtle" }}
-      alignItems="center"
-      bg={hasValue ? "brand.emphasized" : "gray.muted"}
+      as="button"
+      bg={hasValue ? "blue.muted" : "gray.muted"}
       borderRadius="full"
       color="colorPalette.fg"
-      colorPalette={hasValue ? "brand" : "gray"}
+      colorPalette={hasValue ? "blue" : "gray"}
+      cursor="pointer"
       display="flex"
       fontSize="sm"
       fontWeight="medium"
-      gap={2}
-      h="9"
-      pr={1}
+      h="10"
+      onClick={handlePillClick}
+      px={4}
     >
-      <Box
-        alignItems="center"
-        as="button"
-        cursor="pointer"
-        data-testid={`${filter.config.key}-pill`}
-        display="flex"
-        flex="1"
-        gap={2}
-        h="100%"
-        onClick={handlePillClick}
-        pl={3}
-      >
+      <HStack align="center" gap={1}>
         {filter.config.icon ?? getDefaultFilterIcon(filter.config.type)}
-        <Box alignItems="center" display="flex" flex="1" textWrap="nowrap">
-          {filter.config.label}
-          {displayValue === undefined || displayValue === "" ? undefined : <strong>: {displayValue}</strong>}
+        <Box alignItems="center" display="flex" flex="1" gap={2} px={2}>
+          {filter.config.label}: {displayValue}
         </Box>
-      </Box>
-      <IconButton
-        aria-label={`Remove ${filter.config.label} filter`}
-        borderRadius="full"
-        data-testid={`${filter.config.key}-pill-remove`}
-        label={translate("common:filters.removeFilter")}
-        onClick={(event) => {
-          event.stopPropagation();
-          onRemove();
-        }}
-        size="xs"
-      >
-        <MdClose size={16} />
-      </IconButton>
+
+        <Box
+          _hover={{
+            bg: "gray.100",
+            color: "gray.600",
+          }}
+          alignItems="center"
+          aria-label={`Remove ${filter.config.label} filter`}
+          bg="transparent"
+          borderRadius="full"
+          color="gray.400"
+          cursor="pointer"
+          display="flex"
+          h={6}
+          justifyContent="center"
+          mr={1}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRemove();
+          }}
+          transition="all 0.2s"
+          w={6}
+        >
+          <MdClose size={16} />
+        </Box>
+      </HStack>
     </Box>
   );
 };

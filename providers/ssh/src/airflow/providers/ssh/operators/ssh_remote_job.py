@@ -19,7 +19,6 @@
 
 from __future__ import annotations
 
-import time
 import warnings
 from collections.abc import Container, Sequence
 from datetime import timedelta
@@ -56,20 +55,16 @@ class SSHRemoteJobOperator(BaseOperator):
     continues running independently of the SSH connection.
 
     The remote job is wrapped to:
-    - Run detached from the SSH session (via nohup on POSIX, Win32_Process on Windows)
+    - Run detached from the SSH session (via nohup on POSIX, Start-Process on Windows)
     - Redirect stdout/stderr to a log file
     - Write the exit code to a file on completion
 
     :param ssh_conn_id: SSH connection ID from Airflow Connections
     :param command: Command to execute on the remote host (templated)
     :param remote_host: Override the host from the connection (templated)
-    :param environment: Environment variables to set for the command (templated).
-        Values are passed as literal strings; the remote shell does not expand ``$VAR``
-        or ``$(...)`` in them.
+    :param environment: Environment variables to set for the command (templated)
     :param remote_base_dir: Base directory for job artifacts (templated).
-        Defaults to /tmp/airflow-ssh-jobs on POSIX, $env:TEMP\\airflow-ssh-jobs on Windows.
-        On Windows a leading ``$env:NAME`` is expanded on the remote host and the rest of
-        the path is used literally.
+        Defaults to /tmp/airflow-ssh-jobs on POSIX, C:\\Windows\\Temp\\airflow-ssh-jobs on Windows
     :param poll_interval: Seconds between status polls (default: 5)
     :param log_chunk_size: Max bytes to read per poll (default: 65536)
     :param timeout: Hard timeout in seconds for the entire operation
@@ -79,34 +74,9 @@ class SSHRemoteJobOperator(BaseOperator):
     :param skip_on_exit_code: Exit codes that should skip the task instead of failing
     :param conn_timeout: SSH connection timeout in seconds
     :param banner_timeout: Timeout waiting for SSH banner in seconds
-    :param conn_retry_attempts: How many times to attempt the initial SSH connection for
-        submission/cleanup before failing (default 5). Helps when many mapped tasks hit the
-        same host at once and ``sshd`` transiently refuses connections (``MaxStartups``).
-    :param cleanup_retries: How many times to attempt remote directory cleanup before
-        giving up and leaving the directory in place (default 3). Prevents a transient SSH
-        failure during cleanup from orphaning the job directory on the remote host.
-    :param command_timeout: Per-command timeout in seconds for the trigger's status/log polls
-        (default 30.0).
-    :param max_reconnect_attempts: Consecutive connection failures the trigger tolerates (with
-        backoff) before failing the task while monitoring the remote job (default 5).
-
-    .. note::
-        A large ``expand()`` fan-out opens many SSH connections against one host. The remote
-        ``sshd`` throttles concurrent unauthenticated connections via ``MaxStartups`` (default
-        ``10:30:100``); when exceeded it drops connections, surfacing as
-        ``paramiko ... Error reading SSH protocol banner``. For high fan-out, raise ``MaxStartups``
-        on the server. The directory ``/tmp/airflow-ssh-jobs`` (POSIX) is only cleaned when
-        ``cleanup`` is set and the job reaches completion, so also consider a server-side TTL
-        reaper (for example ``systemd-tmpfiles``) for jobs that are killed or time out.
     """
 
-    template_fields: Sequence[str] = (
-        "command",
-        "environment",
-        "remote_host",
-        "remote_base_dir",
-        "ssh_conn_id",
-    )
+    template_fields: Sequence[str] = ("command", "environment", "remote_host", "remote_base_dir")
     template_ext: Sequence[str] = (
         ".sh",
         ".bash",
@@ -134,10 +104,6 @@ class SSHRemoteJobOperator(BaseOperator):
         skip_on_exit_code: int | Container[int] | None = None,
         conn_timeout: int | None = None,
         banner_timeout: float = 30.0,
-        conn_retry_attempts: int = 5,
-        cleanup_retries: int = 3,
-        command_timeout: float = 30.0,
-        max_reconnect_attempts: int = 5,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -145,6 +111,9 @@ class SSHRemoteJobOperator(BaseOperator):
         self.command = command
         self.remote_host = remote_host
         self.environment = environment
+
+        if remote_base_dir is not None:
+            self._validate_base_dir(remote_base_dir)
         self.remote_base_dir = remote_base_dir
 
         self.poll_interval = poll_interval
@@ -154,10 +123,6 @@ class SSHRemoteJobOperator(BaseOperator):
         self.remote_os = remote_os
         self.conn_timeout = conn_timeout
         self.banner_timeout = banner_timeout
-        self.conn_retry_attempts = conn_retry_attempts
-        self.cleanup_retries = max(1, cleanup_retries)
-        self.command_timeout = command_timeout
-        self.max_reconnect_attempts = max_reconnect_attempts
         self.skip_on_exit_code = (
             skip_on_exit_code
             if isinstance(skip_on_exit_code, Container)
@@ -205,69 +170,67 @@ class SSHRemoteJobOperator(BaseOperator):
             remote_host=self.remote_host or "",
             conn_timeout=self.conn_timeout,
             banner_timeout=self.banner_timeout,
-            conn_retry_attempts=self.conn_retry_attempts,
         )
 
-    def _detect_remote_os(self, ssh_client) -> Literal["posix", "windows"]:
+    def _detect_remote_os(self) -> Literal["posix", "windows"]:
         """
-        Detect the remote operating system on an already-open SSH connection.
+        Detect the remote operating system.
 
         Uses a two-stage detection:
         1. Try POSIX detection via `uname` (works on Linux, macOS, BSD, Solaris, AIX, etc.)
         2. Try Windows detection via PowerShell
         3. Raise error if both fail
-
-        :param ssh_client: An open paramiko SSH client to reuse (avoids a second handshake).
         """
         if self.remote_os != "auto":
             return self.remote_os
 
         self.log.info("Auto-detecting remote operating system...")
-        try:
-            exit_status, stdout, _ = self.ssh_hook.exec_ssh_client_command(
-                ssh_client,
-                build_posix_os_detection_command(),
-                get_pty=False,
-                environment=None,
-                timeout=10,
-            )
-            if exit_status == 0 and stdout:
-                output = stdout.decode("utf-8", errors="replace").strip().lower()
-                posix_systems = [
-                    "linux",
-                    "darwin",
-                    "freebsd",
-                    "openbsd",
-                    "netbsd",
-                    "sunos",
-                    "aix",
-                    "hp-ux",
-                ]
-                if any(system in output for system in posix_systems):
-                    self.log.info("Detected POSIX system: %s", output)
-                    return "posix"
-        except Exception as e:
-            self.log.debug("POSIX detection failed: %s", e)
+        with self.ssh_hook.get_conn() as ssh_client:
+            try:
+                exit_status, stdout, _ = self.ssh_hook.exec_ssh_client_command(
+                    ssh_client,
+                    build_posix_os_detection_command(),
+                    get_pty=False,
+                    environment=None,
+                    timeout=10,
+                )
+                if exit_status == 0 and stdout:
+                    output = stdout.decode("utf-8", errors="replace").strip().lower()
+                    posix_systems = [
+                        "linux",
+                        "darwin",
+                        "freebsd",
+                        "openbsd",
+                        "netbsd",
+                        "sunos",
+                        "aix",
+                        "hp-ux",
+                    ]
+                    if any(system in output for system in posix_systems):
+                        self.log.info("Detected POSIX system: %s", output)
+                        return "posix"
+            except Exception as e:
+                self.log.debug("POSIX detection failed: %s", e)
 
-        try:
-            exit_status, stdout, _ = self.ssh_hook.exec_ssh_client_command(
-                ssh_client,
-                build_windows_os_detection_command(),
-                get_pty=False,
-                environment=None,
-                timeout=10,
-            )
-            if exit_status == 0 and stdout:
-                output = stdout.decode("utf-8", errors="replace").strip()
-                if "WINDOWS" in output.upper():
-                    self.log.info("Detected Windows system")
-                    return "windows"
-        except Exception as e:
-            self.log.debug("Windows detection failed: %s", e)
+            try:
+                exit_status, stdout, _ = self.ssh_hook.exec_ssh_client_command(
+                    ssh_client,
+                    build_windows_os_detection_command(),
+                    get_pty=False,
+                    environment=None,
+                    timeout=10,
+                )
+                if exit_status == 0 and stdout:
+                    output = stdout.decode("utf-8", errors="replace").strip()
+                    if "WINDOWS" in output.upper():
+                        self.log.info("Detected Windows system")
+                        return "windows"
+            except Exception as e:
+                self.log.debug("Windows detection failed: %s", e)
 
-        raise AirflowException(
-            "Could not auto-detect remote OS. Please explicitly set remote_os='posix' or 'windows'"
-        )
+            raise AirflowException(
+                "Could not auto-detect remote OS. Please explicitly set remote_os='posix' or 'windows'"
+            )
 
     def execute(self, context: Context) -> None:
         """
@@ -278,8 +241,8 @@ class SSHRemoteJobOperator(BaseOperator):
         if not self.command:
             raise AirflowException("SSH operator error: command not specified.")
 
-        if self.remote_base_dir is not None:
-            self._validate_base_dir(self.remote_base_dir)
+        self._detected_os = self._detect_remote_os()
+        self.log.info("Remote OS: %s", self._detected_os)
 
         ti = context["ti"]
         self._job_id = generate_job_id(
@@ -290,49 +253,27 @@ class SSHRemoteJobOperator(BaseOperator):
         )
         self.log.info("Generated job ID: %s", self._job_id)
 
-        # Reuse a single connection for OS detection (when 'auto') and submission so the
-        # operator opens one SSH handshake per task instead of two. Under a large fan-out
-        # this halves the connection burst that triggers sshd MaxStartups throttling.
-        self.log.info("Connecting to %s", self.ssh_hook.remote_host)
-        try:
-            ssh_conn = self.ssh_hook.get_conn()
-        except Exception:
-            self.log.error(
-                "Failed to connect to %s to submit the remote job. When many SSH connections reach "
-                "the same host at once, the server can start refusing new ones before the handshake "
-                "(for example sshd MaxStartups). This is not limited to mapped tasks: parallel DAG "
-                "runs or high concurrency can cause it too. Try raising MaxStartups/MaxSessions on "
-                "the server, increasing conn_retry_attempts (currently %d), or reducing concurrency "
-                "with a pool (or max_active_tis_per_dag for mapped tasks). See the "
-                "SSHRemoteJobOperator 'High Fan-out' docs.",
-                self.ssh_hook.remote_host,
-                self.conn_retry_attempts,
-            )
-            raise
-        with ssh_conn as ssh_client:
-            self._detected_os = self._detect_remote_os(ssh_client)
-            self.log.info("Remote OS: %s", self._detected_os)
+        self._paths = RemoteJobPaths(
+            job_id=self._job_id,
+            remote_os=self._detected_os,
+            base_dir=self.remote_base_dir,
+        )
 
-            self._paths = RemoteJobPaths(
-                job_id=self._job_id,
-                remote_os=self._detected_os,
-                base_dir=self.remote_base_dir,
+        if self._detected_os == "posix":
+            wrapper_cmd = build_posix_wrapper_command(
+                command=self.command,
+                paths=self._paths,
+                environment=self.environment,
+            )
+        else:
+            wrapper_cmd = build_windows_wrapper_command(
+                command=self.command,
+                paths=self._paths,
+                environment=self.environment,
             )
 
-            if self._detected_os == "posix":
-                wrapper_cmd = build_posix_wrapper_command(
-                    command=self.command,
-                    paths=self._paths,
-                    environment=self.environment,
-                )
-            else:
-                wrapper_cmd = build_windows_wrapper_command(
-                    command=self.command,
-                    paths=self._paths,
-                    environment=self.environment,
-                )
-
-            self.log.info("Submitting remote job to %s", self.ssh_hook.remote_host)
+        self.log.info("Submitting remote job to %s", self.ssh_hook.remote_host)
+        with self.ssh_hook.get_conn() as ssh_client:
             exit_status, stdout, stderr = self.ssh_hook.exec_ssh_client_command(
                 ssh_client,
                 wrapper_cmd,
@@ -379,8 +320,6 @@ class SSHRemoteJobOperator(BaseOperator):
                 poll_interval=self.poll_interval,
                 log_chunk_size=self.log_chunk_size,
                 log_offset=0,
-                command_timeout=self.command_timeout,
-                max_reconnect_attempts=self.max_reconnect_attempts,
             ),
             method_name="execute_complete",
             timeout=timedelta(seconds=self.timeout) if self.timeout else None,
@@ -422,8 +361,6 @@ class SSHRemoteJobOperator(BaseOperator):
                     poll_interval=self.poll_interval,
                     log_chunk_size=self.log_chunk_size,
                     log_offset=event.get("log_offset", 0),
-                    command_timeout=self.command_timeout,
-                    max_reconnect_attempts=self.max_reconnect_attempts,
                 ),
                 method_name="execute_complete",
                 timeout=timedelta(seconds=self.timeout) if self.timeout else None,
@@ -452,46 +389,25 @@ class SSHRemoteJobOperator(BaseOperator):
         self.log.info("Remote job completed successfully")
 
     def _cleanup_remote_job(self, job_dir: str, remote_os: str) -> None:
-        """
-        Clean up the remote job directory, retrying on transient SSH failures.
-
-        Under a large fan-out the cleanup connection can itself be refused by the
-        remote ``sshd`` (``MaxStartups``). Retrying a few times keeps a transient drop
-        from orphaning the job directory; if every attempt fails we log loudly and
-        leave the directory rather than failing the (already finished) task.
-        """
+        """Clean up the remote job directory."""
         self.log.info("Cleaning up remote job directory: %s", job_dir)
-        if remote_os == "posix":
-            cleanup_cmd = build_posix_cleanup_command(job_dir, base_dir=self.remote_base_dir)
-        else:
-            cleanup_cmd = build_windows_cleanup_command(job_dir, base_dir=self.remote_base_dir)
+        try:
+            if remote_os == "posix":
+                cleanup_cmd = build_posix_cleanup_command(job_dir)
+            else:
+                cleanup_cmd = build_windows_cleanup_command(job_dir)
 
-        last_error: Exception | None = None
-        for attempt in range(1, self.cleanup_retries + 1):
-            try:
-                with self.ssh_hook.get_conn() as ssh_client:
-                    self.ssh_hook.exec_ssh_client_command(
-                        ssh_client,
-                        cleanup_cmd,
-                        get_pty=False,
-                        environment=None,
-                        timeout=30,
-                    )
-                self.log.info("Remote cleanup completed")
-                return
-            except Exception as e:
-                last_error = e
-                self.log.warning("Cleanup attempt %d/%d failed: %s", attempt, self.cleanup_retries, e)
-                if attempt < self.cleanup_retries:
-                    time.sleep(min(2**attempt, 10))
-
-        self.log.warning(
-            "Failed to clean up remote job directory after %d attempts; leaving orphaned "
-            "directory %s on the remote host (last error: %s)",
-            self.cleanup_retries,
-            job_dir,
-            last_error,
-        )
+            with self.ssh_hook.get_conn() as ssh_client:
+                self.ssh_hook.exec_ssh_client_command(
+                    ssh_client,
+                    cleanup_cmd,
+                    get_pty=False,
+                    environment=None,
+                    timeout=30,
+                )
+            self.log.info("Remote cleanup completed")
+        except Exception as e:
+            self.log.warning("Failed to clean up remote job directory: %s", e)
 
     def on_kill(self) -> None:
         """

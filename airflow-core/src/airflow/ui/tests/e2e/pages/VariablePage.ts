@@ -18,8 +18,6 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { DATA_ROWS } from "tests/e2e/utils/ui/selectors";
-
 import { BasePage } from "./BasePage";
 
 export class VariablePage extends BasePage {
@@ -37,8 +35,20 @@ export class VariablePage extends BasePage {
     this.addButton = page.getByRole("button", { name: /add/i });
     this.importButton = page.getByRole("button", { name: "Import Variables" });
     this.table = page.getByTestId("table-list");
-    this.tableRows = this.table.locator(DATA_ROWS);
+    this.tableRows = this.table.locator("tbody tr");
     this.selectAllCheckbox = page.locator("thead input[type='checkbox']");
+  }
+
+  public async getVariableKeys(): Promise<Array<string>> {
+    await this.waitForLoad();
+    const count = await this.tableRows.count();
+
+    if (count === 0) {
+      return [];
+    }
+    const keys = await this.tableRows.locator("td:nth-child(2)").allTextContents();
+
+    return keys.map((key) => key.trim()).filter(Boolean);
   }
 
   public async navigate(): Promise<void> {

@@ -16,9 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useMemo } from "react";
-
 import type { Node as ReactFlowNode } from "@xyflow/react";
+import { useMemo } from "react";
 
 import type { CustomNodeProps } from "src/components/Graph/reactflowUtils";
 
@@ -52,7 +51,11 @@ const getTaskDurationSeconds = (
   const start = new Date(minStartDate).getTime();
   const end = new Date(maxEndDate).getTime();
 
-  return Number.isNaN(start) || Number.isNaN(end) ? undefined : (end - start) / 1000;
+  if (Number.isNaN(start) || Number.isNaN(end)) {
+    return undefined;
+  }
+
+  return (end - start) / 1000;
 };
 
 const isNodeFiltered = (node: ReactFlowNode<CustomNodeProps>, filters: GraphFilterValues): boolean => {
@@ -80,32 +83,10 @@ const isNodeFiltered = (node: ReactFlowNode<CustomNodeProps>, filters: GraphFilt
   }
 
   if (filters.selectedStates.length > 0) {
-    // For aggregates (groups / mapped tasks), keep the node if *any* contained
-    // child state is selected — operators using the state filter are usually
-    // asking "find work in this state", not "find aggregates whose dominant
-    // rendering is this state", so collapsed groups must not hide matching
-    // children.
-    const childStates = taskInstance?.child_states;
-    const hasChildStates =
-      childStates !== null &&
-      childStates !== undefined &&
-      Object.values(childStates).some((count) => count > 0);
+    const state = taskInstance?.state ?? "none";
 
-    if (hasChildStates) {
-      const containedStates = Object.entries(childStates)
-        .filter(([, count]) => count > 0)
-        .map(([state]) => state);
-
-      if (!containedStates.some((state) => filters.selectedStates.includes(state))) {
-        return true;
-      }
-    } else {
-      // Leaf task (or no instance yet) — fall back to the single state.
-      const state = taskInstance?.state ?? "none";
-
-      if (!filters.selectedStates.includes(state)) {
-        return true;
-      }
+    if (!filters.selectedStates.includes(state)) {
+      return true;
     }
   }
 

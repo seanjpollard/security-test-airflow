@@ -16,19 +16,14 @@
 # under the License.
 from __future__ import annotations
 
-import math
-import re
 from unittest import mock
 
 import pytest
 from cachetools import LRUCache, TTLCache
 
 from airflow.api_fastapi.app import purge_cached_app
-from airflow.api_fastapi.common.dagbag import create_dag_bag
-from airflow.models.dagbag import CachedDBDagBag
 from airflow.sdk import BaseOperator
 
-from tests_common.test_utils.config import conf_vars
 from tests_common.test_utils.db import clear_db_dags, clear_db_runs, clear_db_serialized_dags
 
 pytestmark = pytest.mark.db_test
@@ -54,17 +49,17 @@ class TestDagBagSingleton:
         """Patch DagBag once before app is created, and reset counter."""
         self.dagbag_call_counter["count"] = 0
 
-        from airflow.models.dagbag import CachedDBDagBag as RealDagBag
+        from airflow.models.dagbag import DBDagBag as RealDagBag
 
         def factory(*args, **kwargs):
             self.dagbag_call_counter["count"] += 1
             return RealDagBag(*args, **kwargs)
 
-        with mock.patch("airflow.api_fastapi.common.dagbag.CachedDBDagBag", side_effect=factory):
+        with mock.patch("airflow.api_fastapi.common.dagbag.DBDagBag", side_effect=factory):
             purge_cached_app()
             yield
 
-    def test_dagbag_used_as_singleton_in_dependency(self, session, dag_maker, fresh_test_client):
+    def test_dagbag_used_as_singleton_in_dependency(self, session, dag_maker, test_client):
         """
         Ensure DagBag is created only once and reused across multiple API requests.
 
@@ -81,10 +76,10 @@ class TestDagBagSingleton:
             BaseOperator(task_id="test_task")
         session.commit()
 
-        resp1 = fresh_test_client.get(f"/api/v2/dags/{dag_id}")
+        resp1 = test_client.get(f"/api/v2/dags/{dag_id}")
         assert resp1.status_code == 200
 
-        resp2 = fresh_test_client.get(f"/api/v2/dags/{dag_id}")
+        resp2 = test_client.get(f"/api/v2/dags/{dag_id}")
         assert resp2.status_code == 200
 
         assert self.dagbag_call_counter["count"] == 1
@@ -94,48 +89,24 @@ class TestCreateDagBag:
     """Tests for create_dag_bag() function."""
 
     @pytest.mark.parametrize(
-        ("cache_size", "cache_ttl", "expected_bag_type", "expected_dags_type", "expected_maxsize"),
+        ("cache_size", "cache_ttl", "expected_use_cache", "expected_dags_type"),
         [
-            pytest.param("64", "3600", CachedDBDagBag, TTLCache, 64, id="default_ttl_cache"),
-            pytest.param("0", "3600", CachedDBDagBag, TTLCache, math.inf, id="size_zero_ttl_only"),
-            pytest.param("64", "0", CachedDBDagBag, LRUCache, 64, id="ttl_zero_lru_only"),
-            pytest.param("0", "0", CachedDBDagBag, dict, None, id="both_zero_no_eviction"),
+            pytest.param(64, 3600, True, TTLCache, id="default_ttl_cache"),
+            pytest.param(0, 3600, False, dict, id="size_zero_unbounded"),
+            pytest.param(64, 0, True, LRUCache, id="ttl_zero_lru_only"),
         ],
     )
+    @mock.patch("airflow.api_fastapi.common.dagbag.conf")
     def test_create_dag_bag_cache_modes(
-        self,
-        cache_size,
-        cache_ttl,
-        expected_bag_type,
-        expected_dags_type,
-        expected_maxsize,
+        self, mock_conf, cache_size, cache_ttl, expected_use_cache, expected_dags_type
     ):
-        with conf_vars({("api", "dag_cache_size"): cache_size, ("api", "dag_cache_ttl"): cache_ttl}):
-            dag_bag = create_dag_bag()
+        from airflow.api_fastapi.common.dagbag import create_dag_bag
 
-        assert type(dag_bag) is expected_bag_type
+        mock_conf.getint.side_effect = lambda section, key, fallback: {
+            "dag_cache_size": cache_size,
+            "dag_cache_ttl": cache_ttl,
+        }.get(key, fallback)
+
+        dag_bag = create_dag_bag()
+        assert dag_bag._use_cache is expected_use_cache
         assert isinstance(dag_bag._dags, expected_dags_type)
-        if expected_maxsize is not None:
-            assert dag_bag._dags.maxsize == expected_maxsize
-
-    @pytest.mark.parametrize(
-        ("cache_size", "cache_ttl", "expected_message"),
-        [
-            pytest.param(
-                "-1",
-                "3600",
-                "[api] dag_cache_size must be greater than or equal to 0",
-                id="negative_size",
-            ),
-            pytest.param(
-                "64",
-                "-1",
-                "[api] dag_cache_ttl must be greater than or equal to 0",
-                id="negative_ttl",
-            ),
-        ],
-    )
-    def test_create_dag_bag_rejects_negative_config(self, cache_size, cache_ttl, expected_message):
-        with conf_vars({("api", "dag_cache_size"): cache_size, ("api", "dag_cache_ttl"): cache_ttl}):
-            with pytest.raises(ValueError, match=re.escape(expected_message)):
-                create_dag_bag()

@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, cast
 
-from sqlalchemy import Table, delete, or_, select
+from sqlalchemy import delete, select
 
 from airflow import models
 from airflow.exceptions import AirflowException, DagNotFound
@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 
 
 @provide_session
-def delete_dag(dag_id: str, keep_records_in_log: bool = True, *, session: Session = NEW_SESSION) -> int:
+def delete_dag(dag_id: str, keep_records_in_log: bool = True, session: Session = NEW_SESSION) -> int:
     """
     Delete a Dag by a dag_id.
 
@@ -68,28 +68,27 @@ def delete_dag(dag_id: str, keep_records_in_log: bool = True, *, session: Sessio
     # To ensure the TaskInstance and DagRun model is deleted before
     # each of the model DagVersion and BackFill respectively.
     models_for_deletion = [TaskInstance, DagRun] + [
-        model
-        for model in get_sqla_model_classes()
-        if model.__name__ not in ["TaskInstance", "DagRun"] and isinstance(model.__table__, Table)
+        model for model in get_sqla_model_classes() if model.__name__ not in ["TaskInstance", "DagRun"]
     ]
 
     count: int = 0
     for model in models_for_deletion:
         if hasattr(model, "dag_id") and (not keep_records_in_log or model.__name__ != "Log"):
-            result: Result = session.execute(delete(model).where(model.dag_id == dag_id))
+            result: Result = session.execute(
+                delete(model).where(model.dag_id == dag_id).execution_options(synchronize_session="fetch")
+            )
             cursor_result = cast("CursorResult", result)
             count += cursor_result.rowcount
 
     # Delete entries in Import Errors table for a deleted Dag
     # This handles the case when the dag_id is changed in the file
     session.execute(
-        delete(ParseImportError).where(
-            or_(
-                ParseImportError.source_reference == dag.relative_fileloc,
-                ParseImportError.filename == dag.relative_fileloc,
-            ),
+        delete(ParseImportError)
+        .where(
+            ParseImportError.filename == dag.relative_fileloc,
             ParseImportError.bundle_name == dag.bundle_name,
         )
+        .execution_options(synchronize_session="fetch")
     )
 
     return count

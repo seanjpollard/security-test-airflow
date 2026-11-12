@@ -16,77 +16,65 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Icon } from "@chakra-ui/react";
+import { Box, Icon } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
 import { FiChevronRight } from "react-icons/fi";
 import { LuPlug } from "react-icons/lu";
 
-import { Menu } from "src/system-components";
-
+import { Menu } from "src/components/ui";
 import type { NavItemResponse } from "src/utils/types";
 
 import { NavButton } from "./NavButton";
-import { NavMenu } from "./NavMenu";
 import { PluginMenuItem } from "./PluginMenuItem";
 
 export const PluginMenus = ({ navItems }: { readonly navItems: Array<NavItemResponse> }) => {
-  const { t: translate } = useTranslation();
+  const { t: translate } = useTranslation("common");
 
   if (navItems.length === 0) {
     return undefined;
   }
 
-  const promotedItems = navItems.filter((item) => item.nav_top_level === true);
-  const remainingItems = navItems.filter((item) => item.nav_top_level !== true);
+  const categories: Record<string, Array<NavItemResponse>> = {};
+  const buttons: Array<NavItemResponse> = [];
 
-  // Build category structure for remaining items that go into the submenu
-  const remainingCategories: Record<string, Array<NavItemResponse>> = {};
-  const remainingButtons: Array<NavItemResponse> = [];
-
-  remainingItems.forEach((navItem) => {
+  navItems.forEach((navItem) => {
     if (navItem.category !== null && navItem.category !== undefined) {
-      remainingCategories[navItem.category] = [...(remainingCategories[navItem.category] ?? []), navItem];
+      categories[navItem.category] = [...(categories[navItem.category] ?? []), navItem];
     } else {
-      remainingButtons.push(navItem);
+      buttons.push(navItem);
     }
   });
 
-  // Remaining items go into a submenu only when there are 2 or more of them.
-  // A single remaining item is promoted to the toolbar to avoid a one-item submenu.
-  const showRemainingInMenu = remainingItems.length >= 2;
+  if (!buttons.length && !Object.keys(categories).length && navItems.length === 0) {
+    return undefined;
+  }
 
-  // Only internal routes (backed by url_route) can match the current pathname; external views never do.
-  const remainingPaths = remainingItems
-    .filter((navItem) => navItem.url_route !== undefined && navItem.url_route !== null)
-    .map((navItem) => `plugin/${navItem.url_route}`);
-
-  return (
-    <>
-      {promotedItems.map((navItem) => (
-        <PluginMenuItem key={navItem.name} {...navItem} topLevel={true} />
-      ))}
-      {showRemainingInMenu ? (
-        <NavMenu trigger={<NavButton icon={LuPlug} title={translate("nav.plugins")} to={remainingPaths} />}>
-          {remainingButtons.map((navItem) => (
-            <PluginMenuItem key={navItem.name} {...navItem} />
-          ))}
-          {Object.entries(remainingCategories).map(([key, menuButtons]) => (
-            <Menu.Root key={key} positioning={{ placement: "right" }}>
-              <Menu.TriggerItem display="flex" justifyContent="space-between">
-                {key}
-                <Icon as={FiChevronRight} boxSize={4} color="fg.muted" />
-              </Menu.TriggerItem>
-              <Menu.Content>
-                {menuButtons.map((navItem) => (
-                  <PluginMenuItem {...navItem} key={navItem.name} />
-                ))}
-              </Menu.Content>
-            </Menu.Root>
-          ))}
-        </NavMenu>
-      ) : (
-        remainingItems.map((navItem) => <PluginMenuItem key={navItem.name} {...navItem} topLevel={true} />)
-      )}
-    </>
+  // Show plugins in menu if there are more than or equal to 2
+  return navItems.length >= 2 ? (
+    <Menu.Root positioning={{ placement: "right" }}>
+      <Menu.Trigger>
+        <NavButton as={Box} icon={LuPlug} title={translate("nav.plugins")} />
+      </Menu.Trigger>
+      <Menu.Content>
+        {buttons.map((navItem) => (
+          <PluginMenuItem key={navItem.name} {...navItem} />
+        ))}
+        {Object.entries(categories).map(([key, menuButtons]) => (
+          <Menu.Root key={key} positioning={{ placement: "right" }}>
+            <Menu.TriggerItem display="flex" justifyContent="space-between">
+              {key}
+              <Icon as={FiChevronRight} boxSize={4} color="fg.muted" />
+            </Menu.TriggerItem>
+            <Menu.Content>
+              {menuButtons.map((navItem) => (
+                <PluginMenuItem {...navItem} key={navItem.name} />
+              ))}
+            </Menu.Content>
+          </Menu.Root>
+        ))}
+      </Menu.Content>
+    </Menu.Root>
+  ) : (
+    navItems.map((navItem) => <PluginMenuItem {...navItem} key={navItem.name} topLevel={true} />)
   );
 };

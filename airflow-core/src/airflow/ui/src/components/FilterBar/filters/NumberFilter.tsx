@@ -18,7 +18,7 @@
  */
 import { useState, useEffect } from "react";
 
-import { NumberInputField, NumberInputRoot } from "src/system-components";
+import { NumberInputField, NumberInputRoot } from "src/components/ui/NumberInput";
 
 import { FilterPill } from "../FilterPill";
 import type { FilterPluginProps } from "../types";

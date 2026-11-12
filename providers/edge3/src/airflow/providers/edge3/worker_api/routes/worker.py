@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import Body, Depends, HTTPException, Path, status
-from packaging.version import InvalidVersion, Version
+from packaging.version import Version
 from sqlalchemy import select
 
 from airflow import __version__ as airflow_version
@@ -38,7 +38,6 @@ from airflow.providers.edge3.worker_api.datamodels import (
     WorkerSetStateReturn,
     WorkerStateBody,
 )
-from airflow.utils.helpers import prune_dict
 
 worker_router = AirflowRouter(
     tags=["Worker"],
@@ -53,20 +52,9 @@ worker_router = AirflowRouter(
 )
 
 
-def _version(version_str: str | int | float | datetime) -> tuple[int, int, int]:
+def _version(version_str: str) -> tuple[int, int, int]:
     """Convert a version string into a tuple of integers for comparison."""
-    if not isinstance(version_str, str):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"Invalid version {version_str!r}: expected a string, got {type(version_str).__name__}",
-        )
-    try:
-        version = Version(version_str)
-    except InvalidVersion as e:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"Invalid version string '{version_str}': {e}",
-        ) from e
+    version = Version(version_str)
     return version.major, version.minor, version.micro
 
 
@@ -74,16 +62,14 @@ def _assert_version(sysinfo: dict[str, str | int | float | datetime]) -> bool:
     """Check if the Edge Worker version matches the central API site."""
     versions_match = True
     if "airflow_version" in sysinfo:
-        airflow_on_worker = sysinfo["airflow_version"]
+        airflow_on_worker: str = sysinfo["airflow_version"]  # type: ignore
         if airflow_on_worker != airflow_version:
             versions_match = False
             minimum_acceptable_core_version_for_workers = conf.get(
                 "edge", "minimum_acceptable_core_version_for_workers", fallback=None
             )
-            if (
-                not minimum_acceptable_core_version_for_workers
-                or _version(airflow_on_worker)
-                < Version(minimum_acceptable_core_version_for_workers).release[:3]
+            if not minimum_acceptable_core_version_for_workers or _version(airflow_on_worker) < _version(
+                minimum_acceptable_core_version_for_workers
             ):
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST,
@@ -96,16 +82,14 @@ def _assert_version(sysinfo: dict[str, str | int | float | datetime]) -> bool:
         )
 
     if "edge_provider_version" in sysinfo:
-        provider_on_worker = sysinfo["edge_provider_version"]
+        provider_on_worker: str = sysinfo["edge_provider_version"]  # type: ignore
         if provider_on_worker != edge_provider_version:
             versions_match = False
             minimum_acceptable_edge_version_for_workers = conf.get(
                 "edge", "minimum_acceptable_edge_version_for_workers", fallback=None
             )
-            if (
-                not minimum_acceptable_edge_version_for_workers
-                or _version(provider_on_worker)
-                < Version(minimum_acceptable_edge_version_for_workers).release[:3]
+            if not minimum_acceptable_edge_version_for_workers or _version(provider_on_worker) < _version(
+                minimum_acceptable_edge_version_for_workers
             ):
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST,
@@ -260,12 +244,7 @@ def set_state(
     worker.sysinfo = body.sysinfo
     worker.last_update = timezone.utcnow()
     session.commit()
-    Stats.incr(
-        "edge_worker.heartbeat_count",
-        1,
-        1,
-        tags=prune_dict({"worker_name": worker_name, "team_name": worker.team_name}),
-    )
+    Stats.incr("edge_worker.heartbeat_count", 1, 1, tags={"worker_name": worker_name})
     concurrency: int = body.sysinfo.get("concurrency", -1)  # type: ignore
     free_concurrency: int = body.sysinfo.get("free_concurrency", -1)  # type: ignore
     set_metrics(
@@ -276,7 +255,6 @@ def set_state(
         free_concurrency=free_concurrency,
         queues=worker.queues,
         sysinfo=body.sysinfo,
-        team_name=worker.team_name,
     )
     versions_match = _assert_version(body.sysinfo)  # Exception only after worker state is in the DB
     return WorkerSetStateReturn(

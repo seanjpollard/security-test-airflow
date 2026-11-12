@@ -21,8 +21,7 @@ import { useTranslation } from "react-i18next";
 import { useLocation, useParams } from "react-router-dom";
 
 import { usePluginServiceGetPlugins } from "openapi/queries";
-
-import { ProgressBar } from "src/system-components";
+import { ProgressBar } from "src/components/ui";
 
 import { ErrorPage } from "./Error";
 import { Iframe } from "./Iframe";
@@ -72,11 +71,7 @@ export const ExternalView = () => {
           which is part of the deployment of Airflow and trusted as per our security policy.
           https://airflow.apache.org/docs/apache-airflow/stable/security/security_model.html
           They are not user provided plugins. */}
-        <Iframe
-          externalView={externalView}
-          key={page}
-          sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"
-        />
+        <Iframe externalView={externalView} sandbox="allow-scripts allow-same-origin allow-forms" />
       </Box>
     );
   }

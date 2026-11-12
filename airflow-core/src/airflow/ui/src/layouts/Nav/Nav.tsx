@@ -18,7 +18,7 @@
  */
 import { Box, Flex, Text, VStack, useDisclosure } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
-import { FiDatabase, FiGrid, FiClock } from "react-icons/fi";
+import { FiDatabase, FiHome, FiClock } from "react-icons/fi";
 import { Link } from "react-router-dom";
 
 import {
@@ -27,19 +27,16 @@ import {
   usePluginServiceGetPlugins,
 } from "openapi/queries";
 import type { ExternalViewResponse } from "openapi/requests/types.gen";
-
-import { Tooltip } from "src/system-components";
-
+import { DagIcon } from "src/assets/DagIcon";
 import { Logo } from "src/components/Logo";
-
 import { useTimezone } from "src/context/timezone";
 import { useConfig } from "src/queries/useConfig";
 import { getTimezoneOffsetString, getTimezoneTooltipLabel } from "src/utils/datetimeUtils";
 import type { NavItemResponse } from "src/utils/types";
 
+import { Tooltip } from "../../components/ui";
 import { AdminButton } from "./AdminButton";
 import { BrowseButton } from "./BrowseButton";
-import { DagsButton } from "./DagsButton";
 import { DocsButton } from "./DocsButton";
 import { NavButton } from "./NavButton";
 import { PluginMenus } from "./PluginMenus";
@@ -99,7 +96,7 @@ export const Nav = () => {
   const { data } = useVersionServiceGetVersion();
   const { data: authLinks } = useAuthLinksServiceGetAuthMenus();
   const { data: pluginData } = usePluginServiceGetPlugins();
-  const { t: translate } = useTranslation();
+  const { t: translate } = useTranslation("common");
   const { onClose: onCloseTimezone, onOpen: onOpenTimezone, open: isOpenTimezone } = useDisclosure();
   const { selectedTimezone } = useTimezone();
   const offset = getTimezoneOffsetString(selectedTimezone);
@@ -174,19 +171,20 @@ export const Nav = () => {
             />
           </Link>
         </Box>
+        <NavButton data-testid="nav-home-link" icon={FiHome} title={translate("nav.home")} to="/" />
         <NavButton
-          data-testid="nav-dashboard-link"
-          icon={FiGrid}
-          title={translate("nav.dashboard")}
-          to="/home"
+          data-testid="nav-dags-link"
+          disabled={!authLinks?.authorized_menu_items.includes("Dags")}
+          icon={DagIcon}
+          title={translate("nav.dags")}
+          to="dags"
         />
-        <DagsButton authorizedMenuItems={authLinks?.authorized_menu_items ?? []} />
         <NavButton
           data-testid="nav-assets-link"
           disabled={!authLinks?.authorized_menu_items.includes("Assets")}
           icon={FiDatabase}
           title={translate("nav.assets")}
-          to="/assets"
+          to="assets"
         />
         <BrowseButton
           authorizedMenuItems={authLinks?.authorized_menu_items ?? []}
@@ -211,11 +209,10 @@ export const Nav = () => {
         <UserSettingsButton externalViews={userItems} />
         {hasCustomLogo ? (
           <Text asChild color="fg.muted" fontSize="2xs" lineHeight="1" pb={2} textAlign="center">
-            {/* eslint-disable i18next/no-literal-string -- Trademark must not be translated */}
+            {/* eslint-disable-next-line i18next/no-literal-string -- Trademark must not be translated */}
             <a href="https://airflow.apache.org/" rel="noopener noreferrer" target="_blank">
               Apache Airflow®
             </a>
-            {/* eslint-enable i18next/no-literal-string */}
           </Text>
         ) : undefined}
       </Flex>

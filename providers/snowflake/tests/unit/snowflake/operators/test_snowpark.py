@@ -23,10 +23,10 @@ from unittest import mock
 
 import pytest
 
-pytest.importorskip("snowflake.snowpark")
+pytest.importorskip("snowflake-snowpark-python")
 
-from airflow.providers.common.compat.sdk import timezone
 from airflow.providers.snowflake.operators.snowpark import SnowparkOperator
+from airflow.utils import timezone
 
 if TYPE_CHECKING:
     from snowflake.snowpark import Session
@@ -69,10 +69,9 @@ class TestSnowparkOperator:
             ]
 
         dr = dag_maker.create_dagrun()
-        for task in dag.tasks:
-            ti = dag_maker.run_ti(task.task_id, dr)
+        for ti in dr.get_task_instances():
+            ti.run()
             assert ti.xcom_pull() == number
-
         assert mock_snowflake_hook.call_count == 2
         assert mock_snowflake_hook.return_value.get_snowpark_session.call_count == 2
 
@@ -110,8 +109,8 @@ class TestSnowparkOperator:
             ]
 
         dr = dag_maker.create_dagrun()
-        for task in dag.tasks:
-            ti = dag_maker.run_ti(task.task_id, dr)
+        for ti in dr.get_task_instances():
+            ti.run()
             assert ti.xcom_pull() == number
         assert mock_snowflake_hook.call_count == 3
         assert mock_snowflake_hook.return_value.get_snowpark_session.call_count == 3
@@ -136,8 +135,8 @@ class TestSnowparkOperator:
             )
 
         dr = dag_maker.create_dagrun()
-        for task in dag.tasks:
-            ti = dag_maker.run_ti(task.task_id, dr)
+        for ti in dr.get_task_instances():
+            ti.run()
             assert ti.xcom_pull() is None
         mock_snowflake_hook.assert_called_once()
         mock_snowflake_hook.return_value.get_snowpark_session.assert_called_once()
@@ -171,8 +170,8 @@ class TestSnowparkOperator:
             )
 
         dr = dag_maker.create_dagrun()
-        task = dag.tasks[0]
-        ti = dag_maker.run_ti(task.task_id, dr)
+        ti = dr.get_task_instances()[0]
+        ti.run()
         query_tag = ti.xcom_pull()
         assert query_tag == {
             "dag_id": TEST_DAG_ID,
@@ -180,36 +179,3 @@ class TestSnowparkOperator:
             "task_id": TASK_ID,
             "operator": "SnowparkOperator",
         }
-
-    @mock.patch("airflow.providers.snowflake.operators.snowpark.SnowflakeHook")
-    def test_snowpark_operator_closes_session_on_exception(
-        self,
-        mock_snowflake_hook,
-        dag_maker,
-    ):
-        mock_session = mock_snowflake_hook.return_value.get_snowpark_session.return_value
-
-        with dag_maker(dag_id=TEST_DAG_ID) as dag:
-
-            def func(session: Session):
-                raise ValueError("boom")
-
-            SnowparkOperator(
-                task_id=TASK_ID,
-                snowflake_conn_id=CONN_ID,
-                python_callable=func,
-                warehouse="test_warehouse",
-                database="test_database",
-                schema="test_schema",
-                role="test_role",
-                authenticator="externalbrowser",
-                dag=dag,
-            )
-
-        dr = dag_maker.create_dagrun()
-        task = dag.tasks[0]
-
-        with pytest.raises(ValueError, match="boom"):
-            dag_maker.run_ti(task.task_id, dr)
-
-        mock_session.close.assert_called_once()

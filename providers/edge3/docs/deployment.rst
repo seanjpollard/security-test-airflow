@@ -108,17 +108,14 @@ run on the central Airflow instance:
 To kick off a worker, you need to setup Airflow and kick off the worker
 subcommand.
 
-If your Airflow deployment uses the experimental Multi-Team mode, assign the worker
-to its team with the ``--team-name`` option so it only picks up jobs for that team.
-The flag is a UI/REST API-level hint — the Execution API does not currently enforce
-team-based access boundaries. See :ref:`edge_executor:multi_team` for setup details
-and :doc:`apache-airflow:security/workload` (section "No team-level isolation in
-Execution API") for the security boundary.
+If your Airflow deployment uses Multi-Team mode, assign the worker to its team with
+the ``--team-name`` option so it only picks up jobs for that team. See
+:ref:`edge_executor:multi_team` for setup details and security considerations.
 
 .. code-block:: bash
 
     airflow edge worker
-    2026-07-09T12:28:32.954316Z [info     ] Starting worker with API endpoint http://localhost:8080/edge_worker/v1/rpcapi
+    2025-09-27T12:28:32.954316Z [info     ] Starting worker with API endpoint http://localhost:8080/edge_worker/v1/rpcapi
       ____________       _____________
      ____    |__( )_________  __/__  /________      __
     ____  /| |_  /__  ___/_  /_ __  /_  __ \_ | /| / /
@@ -130,7 +127,7 @@ Execution API") for the security boundary.
     /___/\_,_/\_, /\__/   |__/|__/\___/_/ /_/\_\\__/_/
             /___/
 
-    2026-07-09T12:28:33.171525Z [debug    ] No new job to process
+    2025-09-27T12:28:33.171525Z [info     ] No new job to process
 
 
 To start a worker assigned to a specific team:
@@ -248,10 +245,7 @@ on all workers in the cluster or to check the status of all workers in the clust
 These set of commands need database access, and can only be called on the central Airflow
 instance. The commands are:
 
-- ``airflow edge list-workers``: List all workers in the cluster. Accepts an optional
-  ``--worker-name-pattern`` glob (e.g. ``'prod-*'``) to filter workers by name,
-  ``-s``/``--state`` to filter by worker state, and ``-q``/``--queues`` (comma
-  delimited) to list only workers serving any of the given queues.
+- ``airflow edge list-workers``: List all workers in the cluster
 - ``airflow edge remote-edge-worker-request-maintenance``: Request a remote edge worker to enter maintenance mode
 - ``airflow edge remote-edge-worker-update-maintenance-comment``: Updates the maintenance comment for a remote edge worker
 - ``airflow edge remote-edge-worker-exit-maintenance``: Request a remote edge worker to exit maintenance mode

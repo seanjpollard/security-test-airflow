@@ -16,42 +16,24 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from "react";
-
 import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import {
-  UseDagServiceGetDagDetailsKeyFn,
-  UseDagServiceGetDagKeyFn,
-  useBackfillServiceCreateBackfill,
-  useBackfillServiceListBackfillsUiKey,
-} from "openapi/queries";
-import type { BackfillResponse, CreateBackfillData } from "openapi/requests/types.gen";
-
-import { toaster } from "src/system-components";
-
-import { dagListQueryKeys } from "src/queries/gridViewQueryKeys";
+import { useBackfillServiceCreateBackfill, useBackfillServiceListBackfillsUiKey } from "openapi/queries";
+import type { CreateBackfillData } from "openapi/requests/types.gen";
+import { toaster } from "src/components/ui";
 
 export const useCreateBackfill = ({ onSuccessConfirm }: { onSuccessConfirm: () => void }) => {
   const [dateValidationError, setDateValidationError] = useState<unknown>(undefined);
+  const [error, setError] = useState<unknown>(undefined);
   const queryClient = useQueryClient();
   const { t: translate } = useTranslation("components");
 
-  const onSuccess = async (backfill: BackfillResponse, variables: CreateBackfillData) => {
-    const { dag_id: dagId } = backfill;
-    const drainKeys = variables.requestBody.drain_dag
-      ? [
-          UseDagServiceGetDagKeyFn({ dagId }, [{ dagId }]),
-          UseDagServiceGetDagDetailsKeyFn({ dagId }, [{ dagId }]),
-        ]
-      : [];
-
-    await Promise.all(
-      [[useBackfillServiceListBackfillsUiKey], ...dagListQueryKeys, ...drainKeys].map((queryKey) =>
-        queryClient.invalidateQueries({ queryKey }),
-      ),
-    );
+  const onSuccess = async () => {
+    await queryClient.invalidateQueries({
+      queryKey: [useBackfillServiceListBackfillsUiKey],
+    });
     toaster.create({
       description: translate("backfill.toaster.success.description"),
       title: translate("backfill.toaster.success.title"),
@@ -60,7 +42,11 @@ export const useCreateBackfill = ({ onSuccessConfirm }: { onSuccessConfirm: () =
     onSuccessConfirm();
   };
 
-  const { error, isPending, mutate, reset: resetError } = useBackfillServiceCreateBackfill({ onSuccess });
+  const onError = (_error: unknown) => {
+    setError(_error);
+  };
+
+  const { isPending, mutate } = useBackfillServiceCreateBackfill({ onError, onSuccess });
 
   const createBackfill = (data: CreateBackfillData) => {
     if (data.requestBody.from_date === "" || data.requestBody.to_date === "") {
@@ -94,16 +80,14 @@ export const useCreateBackfill = ({ onSuccessConfirm }: { onSuccessConfirm: () =
       requestBody: {
         dag_id: dagId,
         dag_run_conf: data.requestBody.dag_run_conf,
-        drain_dag: data.requestBody.drain_dag,
         from_date: formattedDataIntervalStart,
         max_active_runs: data.requestBody.max_active_runs,
         reprocess_behavior: data.requestBody.reprocess_behavior,
         run_backwards: data.requestBody.run_backwards,
-        run_on_latest_version: data.requestBody.run_on_latest_version,
         to_date: formattedDataIntervalEnd,
       },
     });
   };
 
-  return { createBackfill, dateValidationError, error, isPending, resetError };
+  return { createBackfill, dateValidationError, error, isPending };
 };

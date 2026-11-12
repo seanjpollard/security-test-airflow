@@ -17,14 +17,11 @@
 # under the License.
 from __future__ import annotations
 
-import datetime
-import runpy
 from copy import deepcopy
 from unittest import mock
 from unittest.mock import PropertyMock, call
 
 import pytest
-import time_machine
 from google.api_core.exceptions import AlreadyExists, FailedPrecondition, PermissionDenied
 from google.cloud.container_v1.types import Cluster, NodePool
 from kubernetes.client import models as k8s
@@ -39,13 +36,12 @@ from airflow.providers.cncf.kubernetes.operators.kueue import (
     KubernetesStartKueueJobOperator,
 )
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
-from airflow.providers.cncf.kubernetes.operators.pod_exec import KubernetesPodExecOperator
 from airflow.providers.cncf.kubernetes.operators.resource import (
     KubernetesCreateResourceOperator,
     KubernetesDeleteResourceOperator,
 )
 from airflow.providers.cncf.kubernetes.utils.pod_manager import OnFinishAction
-from airflow.providers.common.compat.sdk import AirflowException, AirflowOptionalProviderFeatureException
+from airflow.providers.common.compat.sdk import AirflowException
 from airflow.providers.google.cloud.links.base import BASE_LINK
 from airflow.providers.google.cloud.links.kubernetes_engine import (
     KUBERNETES_JOB_LINK,
@@ -53,7 +49,6 @@ from airflow.providers.google.cloud.links.kubernetes_engine import (
     KubernetesEngineJobLink,
     KubernetesEnginePodLink,
 )
-from airflow.providers.google.cloud.operators import kubernetes_engine
 from airflow.providers.google.cloud.operators.kubernetes_engine import (
     GKEClusterAuthDetails,
     GKECreateClusterOperator,
@@ -64,7 +59,6 @@ from airflow.providers.google.cloud.operators.kubernetes_engine import (
     GKEDescribeJobOperator,
     GKEListJobsOperator,
     GKEOperatorMixin,
-    GKEPodExecOperator,
     GKEResumeJobOperator,
     GKEStartJobOperator,
     GKEStartKueueInsideClusterOperator,
@@ -108,11 +102,6 @@ GKE_CLUSTER_CREATE_BODY_DICT = {
 GKE_CLUSTER_CREATE_BODY_OBJECT = Cluster(
     name=GKE_CLUSTER_NAME, node_pools=[NodePool(name="a_node_pool", initial_node_count=1)]
 )
-GKE_AUTOPILOT_CLUSTER_CREATE_BODY_DICT = {
-    "name": GKE_CLUSTER_NAME,
-    "autopilot": {"enabled": True},
-}
-GKE_AUTOPILOT_CLUSTER_CREATE_BODY_OBJECT = Cluster(name=GKE_CLUSTER_NAME, autopilot={"enabled": True})
 GKE_CLUSTER_CREATE_BODY_DICT_DEPRECATED = {"name": GKE_CLUSTER_NAME, "initial_node_count": 1}
 GKE_CLUSTER_CREATE_BODY_OBJECT_DEPRECATED = Cluster(name=GKE_CLUSTER_NAME, initial_node_count=1)
 
@@ -430,15 +419,7 @@ class TestGKECreateClusterOperator:
         )
         assert set(GKECreateClusterOperator.template_fields) == expected_template_fields
 
-    @pytest.mark.parametrize(
-        "body",
-        [
-            GKE_CLUSTER_CREATE_BODY_DICT,
-            GKE_CLUSTER_CREATE_BODY_OBJECT,
-            GKE_AUTOPILOT_CLUSTER_CREATE_BODY_DICT,
-            GKE_AUTOPILOT_CLUSTER_CREATE_BODY_OBJECT,
-        ],
-    )
+    @pytest.mark.parametrize("body", [GKE_CLUSTER_CREATE_BODY_DICT, GKE_CLUSTER_CREATE_BODY_OBJECT])
     def test_body(self, body):
         op = GKECreateClusterOperator(
             task_id=TEST_TASK_ID,
@@ -449,28 +430,6 @@ class TestGKECreateClusterOperator:
             impersonation_chain=TEST_IMPERSONATION_CHAIN,
         )
         assert op.cluster_name == GKE_CLUSTER_NAME
-
-    @pytest.mark.parametrize(
-        "body",
-        [
-            pytest.param(
-                {"name": GKE_CLUSTER_NAME, "autopilot": {"enabled": False}},
-                id="dict",
-            ),
-            pytest.param(
-                Cluster(name=GKE_CLUSTER_NAME, autopilot={"enabled": False}),
-                id="cluster",
-            ),
-        ],
-    )
-    def test_body_with_autopilot_disabled_without_node_pool_raises(self, body):
-        with pytest.raises(AirflowException):
-            GKECreateClusterOperator(
-                project_id=TEST_PROJECT_ID,
-                location=TEST_LOCATION,
-                body=body,
-                task_id=TEST_TASK_ID,
-            )
 
     @pytest.mark.parametrize(
         "body",
@@ -866,179 +825,6 @@ class TestGKEStartKueueInsideClusterOperator:
         )
 
 
-@mock.patch.dict("sys.modules", {"airflow.providers.cncf.kubernetes.operators.pod_exec": None})
-def test_missing_kubernetes_pod_exec_operator_keeps_other_gke_operators_usable():
-    operators = runpy.run_path(kubernetes_engine.__file__)
-    create_cluster = operators["GKECreateClusterOperator"](
-        task_id=TEST_TASK_ID,
-        project_id=TEST_PROJECT_ID,
-        location=TEST_LOCATION,
-        body={"name": GKE_CLUSTER_NAME, "node_pools": [{"name": "pool", "initial_node_count": 1}]},
-    )
-    start_pod = operators["GKEStartPodOperator"](
-        task_id=TEST_TASK_ID,
-        project_id=TEST_PROJECT_ID,
-        location=TEST_LOCATION,
-        cluster_name=GKE_CLUSTER_NAME,
-        image=TEST_IMAGE,
-    )
-
-    assert create_cluster.location == TEST_LOCATION
-    assert start_pod.cluster_name == GKE_CLUSTER_NAME
-    assert start_pod.image == TEST_IMAGE
-
-
-@mock.patch.dict("sys.modules", {"airflow.providers.cncf.kubernetes.operators.pod_exec": None})
-def test_missing_kubernetes_pod_exec_operator_reports_required_provider_version():
-    operators = runpy.run_path(kubernetes_engine.__file__)
-
-    with pytest.raises(
-        AirflowOptionalProviderFeatureException,
-        match=r"GKEPodExecOperator requires apache-airflow-providers-cncf-kubernetes>=10\.22\.0",
-    ) as exc_info:
-        operators["GKEPodExecOperator"](
-            task_id=TEST_TASK_ID,
-            location=TEST_LOCATION,
-            cluster_name=GKE_CLUSTER_NAME,
-            pod_name=K8S_POD_NAME,
-            command=["echo", "hello"],
-        )
-
-    assert isinstance(exc_info.value.__cause__, ImportError)
-
-
-class TestGKEPodExecOperator:
-    def setup_method(self):
-        self.operator = GKEPodExecOperator(
-            task_id=TEST_TASK_ID,
-            project_id=TEST_PROJECT_ID,
-            location=TEST_LOCATION,
-            cluster_name=GKE_CLUSTER_NAME,
-            pod_name=K8S_POD_NAME,
-            namespace=K8S_NAMESPACE,
-            container_name="worker",
-            command=["dbt", "run"],
-            gcp_conn_id=TEST_CONN_ID,
-            impersonation_chain=TEST_IMPERSONATION_CHAIN,
-            do_xcom_push=True,
-            max_xcom_output_size=1024,
-        )
-
-    def test_constructor_forces_gke_auth_and_forwards_exec_options(self):
-        assert self.operator.kubernetes_conn_id is None
-        assert self.operator.in_cluster is False
-        assert self.operator.cluster_context is None
-        assert self.operator.config_file is None
-        assert self.operator.do_xcom_push is True
-        assert self.operator.max_xcom_output_size == 1024
-
-    def test_default_namespace_when_omitted(self):
-        operator = GKEPodExecOperator(
-            task_id=TEST_TASK_ID,
-            location=TEST_LOCATION,
-            cluster_name=GKE_CLUSTER_NAME,
-            pod_name=K8S_POD_NAME,
-            command=["true"],
-        )
-
-        assert operator.namespace == "default"
-
-    @pytest.mark.parametrize(
-        ("kwargs", "expected_message"),
-        [
-            (
-                {"config_file": "/path/to/kubeconfig"},
-                "`config_file` is not allowed for GKEPodExecOperator",
-            ),
-            (
-                {"config_file": None},
-                "`config_file` is not allowed for GKEPodExecOperator",
-            ),
-            (
-                {"kubernetes_conn_id": "kubernetes_default"},
-                "`kubernetes_conn_id` is not allowed for GKEPodExecOperator",
-            ),
-            (
-                {"in_cluster": True},
-                "`in_cluster` is not allowed for GKEPodExecOperator",
-            ),
-            (
-                {"cluster_context": "test-context"},
-                "`cluster_context` is not allowed for GKEPodExecOperator",
-            ),
-            (
-                {"gcp_conn_id": None},
-                "`gcp_conn_id` must not be None",
-            ),
-        ],
-        ids=[
-            "config-file",
-            "config-file-none",
-            "kubernetes-connection",
-            "in-cluster",
-            "cluster-context",
-            "missing-gcp-connection",
-        ],
-    )
-    def test_invalid_auth_parameters(self, kwargs, expected_message):
-        with pytest.raises(ValueError, match=expected_message):
-            GKEPodExecOperator(
-                task_id=TEST_TASK_ID,
-                location=TEST_LOCATION,
-                cluster_name=GKE_CLUSTER_NAME,
-                pod_name=K8S_POD_NAME,
-                command=["true"],
-                **kwargs,
-            )
-
-    def test_template_fields(self):
-        expected_template_fields = set(GKEOperatorMixin.template_fields) | (
-            set(KubernetesPodExecOperator.template_fields)
-            - {"cluster_context", "config_file", "kubernetes_conn_id"}
-        )
-
-        assert set(GKEPodExecOperator.template_fields) == expected_template_fields
-
-    @mock.patch(GKE_OPERATORS_PATH.format("GKEKubernetesHook"), autospec=True)
-    @mock.patch(GKE_OPERATORS_PATH.format("GKEOperatorMixin.cluster_info"), new_callable=PropertyMock)
-    def test_hook_uses_gke_authentication(self, mock_cluster_info, mock_hook):
-        mock_cluster_info.return_value = (GKE_CLUSTER_URL, GKE_SSL_CA_CERT)
-
-        result = self.operator.hook
-
-        assert result == mock_hook.return_value
-        mock_hook.assert_called_once_with(
-            gcp_conn_id=TEST_CONN_ID,
-            impersonation_chain=TEST_IMPERSONATION_CHAIN,
-            cluster_url=GKE_CLUSTER_URL,
-            ssl_ca_cert=GKE_SSL_CA_CERT,
-            enable_tcp_keepalive=False,
-            use_dns_endpoint=False,
-        )
-
-    @mock.patch(GKE_OPERATORS_PATH.format("KubernetesEnginePodLink.persist"), autospec=True)
-    @mock.patch(
-        GKE_OPERATORS_PATH.format("KubernetesPodExecOperator.execute"),
-        autospec=True,
-        return_value="command output",
-    )
-    def test_execute_persists_link_and_returns_output(self, mock_execute, mock_persist_link):
-        context = {}
-
-        result = self.operator.execute(context)
-
-        assert result == "command output"
-        mock_persist_link.assert_called_once_with(
-            context=context,
-            project_id=TEST_PROJECT_ID,
-            location=TEST_LOCATION,
-            cluster_name=GKE_CLUSTER_NAME,
-            namespace=K8S_NAMESPACE,
-            pod_name=K8S_POD_NAME,
-        )
-        mock_execute.assert_called_once_with(self.operator, context)
-
-
 class TestGKEStartPodOperator:
     def setup_method(self):
         self.operator = GKEStartPodOperator(
@@ -1247,7 +1033,10 @@ class TestGKEStartPodOperator:
     ):
         mock_trigger_start_time = mock_utcnow.return_value
 
-        self.operator.pod = make_pod()
+        mock_metadata = mock.MagicMock()
+        mock_metadata.name = K8S_POD_NAME
+        mock_metadata.namespace = K8S_NAMESPACE
+        self.operator.pod = mock.MagicMock(metadata=mock_metadata)
         mock_fetch_cluster_info.return_value = GKE_CLUSTER_URL, GKE_SSL_CA_CERT
         mock_get_logs = mock.MagicMock()
         self.operator.get_logs = mock_get_logs
@@ -1274,69 +1063,10 @@ class TestGKEStartPodOperator:
             logging_interval=None,
             last_log_time=mock_last_log_time,
             use_dns_endpoint=False,
-            trigger_kwargs={},
         )
         mock_defer.assert_called_once_with(
             trigger=mock_trigger.return_value,
             method_name="trigger_reentry",
-            timeout=None,
-        )
-
-    @pytest.mark.parametrize(
-        (
-            "execution_timeout",
-            "elapsed",
-            "poll_interval",
-            "trigger_kwargs",
-            "expected_timeout",
-            "pass_context",
-        ),
-        [
-            pytest.param(None, 30, 2, {"_redefer_count": 1}, None, True, id="no-execution-timeout"),
-            pytest.param(300, 30, 2, None, 270 + 60, True, id="remaining-plus-min-buffer"),
-            pytest.param(300, 30, 45, None, 270 + 90, True, id="buffer-scales-with-poll-interval"),
-            pytest.param(300, 600, 2, None, 60, True, id="deadline-passed-clamps-remaining"),
-            pytest.param(120, 0, 2, {"_redefer_count": 1}, 120 + 60, True, id="keeps-user-trigger-kwargs"),
-            pytest.param(300, 30, 2, None, None, False, id="no-context-skips-deadline"),
-        ],
-    )
-    @mock.patch(GKE_OPERATORS_PATH.format("GKEStartPodOperator.defer"))
-    @mock.patch(GKE_OPERATORS_PATH.format("GKEClusterAuthDetails.fetch_cluster_info"))
-    @mock.patch(GKE_OPERATORS_PATH.format("GKEHook"))
-    @mock.patch(GKE_OPERATORS_PATH.format("GKEStartPodTrigger"))
-    def test_invoke_defer_method_execution_timeout(
-        self,
-        mock_trigger,
-        mock_cluster_hook,
-        mock_fetch_cluster_info,
-        mock_defer,
-        execution_timeout,
-        elapsed,
-        poll_interval,
-        trigger_kwargs,
-        expected_timeout,
-        pass_context,
-    ):
-        ti_start = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
-        self.operator.pod = make_pod()
-        self.operator.poll_interval = poll_interval
-        self.operator.trigger_kwargs = deepcopy(trigger_kwargs)
-        if execution_timeout is not None:
-            self.operator.execution_timeout = datetime.timedelta(seconds=execution_timeout)
-        mock_fetch_cluster_info.return_value = GKE_CLUSTER_URL, GKE_SSL_CA_CERT
-        ti = mock.MagicMock(spec=["start_date"])
-        ti.start_date = ti_start
-
-        with time_machine.travel(ti_start + datetime.timedelta(seconds=elapsed), tick=False):
-            self.operator.invoke_defer_method(context={"ti": ti} if pass_context else None)
-
-        expected_trigger_kwargs = dict(trigger_kwargs or {})
-        if execution_timeout is not None and pass_context:
-            expected_trigger_kwargs["_execution_deadline"] = int(ti_start.timestamp()) + execution_timeout
-        assert mock_trigger.call_args.kwargs["trigger_kwargs"] == expected_trigger_kwargs
-        assert self.operator.trigger_kwargs == trigger_kwargs
-        assert mock_defer.call_args.kwargs["timeout"] == (
-            None if expected_timeout is None else datetime.timedelta(seconds=expected_timeout)
         )
 
 
@@ -1557,8 +1287,17 @@ class TestGKEStartJobOperator:
     @mock.patch(GKE_OPERATORS_PATH.format("GKEHook"))
     @mock.patch(GKE_OPERATORS_PATH.format("GKEJobTrigger"))
     def test_execute_deferrable(self, mock_trigger, mock_cluster_hook, mock_fetch_cluster_info, mock_defer):
-        self.operator.pods = [make_pod()]
-        self.operator.job = make_job()
+        mock_pod_metadata = mock.MagicMock()
+        mock_pod_metadata.name = K8S_POD_NAME
+        mock_pod_metadata.namespace = K8S_NAMESPACE
+        self.operator.pods = [
+            mock.MagicMock(metadata=mock_pod_metadata),
+        ]
+
+        mock_job_metadata = mock.MagicMock()
+        mock_job_metadata.name = K8S_JOB_NAME
+        mock_job_metadata.namespace = K8S_NAMESPACE
+        self.operator.job = mock.MagicMock(metadata=mock_job_metadata)
 
         mock_fetch_cluster_info.return_value = GKE_CLUSTER_URL, GKE_SSL_CA_CERT
         mock_get_logs = mock.MagicMock()
@@ -1608,9 +1347,20 @@ class TestGKEStartJobOperator:
             parallelism=2,
         )
         mock_pod_name_1 = K8S_POD_NAME + "-1"
+        mock_pod_metadata_1 = mock.MagicMock()
+        mock_pod_metadata_1.name = mock_pod_name_1
+        mock_pod_metadata_1.namespace = K8S_NAMESPACE
+
         mock_pod_name_2 = K8S_POD_NAME + "-2"
-        op.pods = [make_pod(name=mock_pod_name_1), make_pod(name=mock_pod_name_2)]
-        op.job = make_job()
+        mock_pod_metadata_2 = mock.MagicMock()
+        mock_pod_metadata_2.name = mock_pod_name_2
+        mock_pod_metadata_2.namespace = K8S_NAMESPACE
+        op.pods = [mock.MagicMock(metadata=mock_pod_metadata_1), mock.MagicMock(metadata=mock_pod_metadata_2)]
+
+        mock_job_metadata = mock.MagicMock()
+        mock_job_metadata.name = K8S_JOB_NAME
+        mock_job_metadata.namespace = K8S_NAMESPACE
+        op.job = mock.MagicMock(metadata=mock_job_metadata)
 
         mock_fetch_cluster_info.return_value = GKE_CLUSTER_URL, GKE_SSL_CA_CERT
         mock_get_logs = mock.MagicMock()

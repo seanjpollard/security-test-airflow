@@ -17,7 +17,6 @@
 # under the License.
 from __future__ import annotations
 
-import re
 from datetime import timedelta
 from typing import Any
 
@@ -37,17 +36,12 @@ from airflow.providers.standard.triggers.temporal import DateTimeTrigger
 from airflow.utils.types import DagRunType
 
 from tests_common.test_utils import db
-from tests_common.test_utils.version_compat import (
-    AIRFLOW_V_3_0_PLUS,
-    AIRFLOW_V_3_2_PLUS,
-    AIRFLOW_V_3_3_PLUS,
-    timezone,
-)
+from tests_common.test_utils.version_compat import AIRFLOW_V_3_0_PLUS, AIRFLOW_V_3_2_PLUS, timezone
 
 if AIRFLOW_V_3_2_PLUS:
     from airflow.dag_processing.dagbag import DagBag
 else:
-    from airflow.models.dagbag import DagBag  # type: ignore[no-redef]
+    from airflow.models.dagbag import DagBag  # type: ignore[attr-defined, no-redef]
 
 pytestmark = pytest.mark.db_test
 
@@ -69,10 +63,7 @@ def clear_db():
 
 class TestTimedeltaSensor:
     def setup_method(self):
-        if AIRFLOW_V_3_3_PLUS:
-            self.dagbag = DagBag(dag_folder=DEV_NULL)
-        else:
-            self.dagbag = DagBag(dag_folder=DEV_NULL, include_examples=False)
+        self.dagbag = DagBag(dag_folder=DEV_NULL, include_examples=False)
         self.dag = DAG(TEST_DAG_ID, schedule=timedelta(days=1), start_date=DEFAULT_DATE)
 
     def test_timedelta_sensor(self, mocker):
@@ -170,10 +161,7 @@ def test_timedelta_sensor_deferrable_run_after_vs_interval(run_after, interval_e
 
 class TestTimeDeltaSensorAsync:
     def setup_method(self):
-        if AIRFLOW_V_3_3_PLUS:
-            self.dagbag = DagBag(dag_folder=DEV_NULL)
-        else:
-            self.dagbag = DagBag(dag_folder=DEV_NULL, include_examples=True)
+        self.dagbag = DagBag(dag_folder=DEV_NULL, include_examples=True)
         self.args = {"owner": "airflow", "start_date": DEFAULT_DATE}
         self.dag = DAG(TEST_DAG_ID, schedule=timedelta(days=1), default_args=self.args)
 
@@ -254,57 +242,3 @@ class TestTimeDeltaSensorAsync:
             op.execute(context)
 
         assert caught.value.trigger.moment == expected_time
-
-    @pytest.mark.parametrize("delta", [timedelta(minutes=1), 1, "{{ 1*2 }}"])
-    def test_time_delta_sensor_templating(self, mocker, delta):
-        defer_mock = mocker.patch(DEFER_PATH)
-        op = TimeDeltaSensor(task_id="time_sensor_check", delta=delta, dag=self.dag, deferrable=True)
-
-        time = pendulum.datetime(year=2024, month=8, day=1, tz="UTC")
-
-        with time_machine.travel(time, tick=False):
-            data_interval_end = time.add(hours=1)
-
-            context = {"data_interval_end": data_interval_end}
-            op.render_template_fields(context)
-            op.execute(context)
-            defer_mock.assert_called_once()
-
-    def test_time_delta_sensor_templating_error(self, mocker):
-        op = TimeDeltaSensor(
-            task_id="time_sensor_check", delta="{{ 'nothing' }}", dag=self.dag, deferrable=True
-        )
-        time = pendulum.datetime(year=2024, month=8, day=1, tz="UTC")
-
-        with time_machine.travel(time, tick=False):
-            data_interval_end = time.add(hours=1)
-            context = {"data_interval_end": data_interval_end}
-            op.render_template_fields(context)
-            with pytest.raises(
-                ValueError, match=re.escape("invalid literal for int() with base 10: 'nothing'")
-            ):
-                op.execute(context)
-
-    @pytest.mark.parametrize(
-        "time_to_wait",
-        [timedelta(minutes=1), 1, "{{ 1*2 }}"],
-    )
-    def test_wait_sensor_templating(self, mocker, time_to_wait):
-        defer_mock = mocker.patch(DEFER_PATH)
-        op = WaitSensor(task_id="wait_sensor_check", time_to_wait=time_to_wait, dag=self.dag, deferrable=True)
-
-        with time_machine.travel(pendulum.datetime(year=2024, month=8, day=1, tz="UTC"), tick=False):
-            context = op.render_template_fields({})
-            op.execute(context)
-            defer_mock.assert_called_once()
-
-    def test_wait_sensor_templating_error(self, mocker):
-        op = WaitSensor(
-            task_id="wait_sensor_check", time_to_wait="{{ 'nothing' }}", dag=self.dag, deferrable=True
-        )
-        with time_machine.travel(pendulum.datetime(year=2024, month=8, day=1, tz="UTC"), tick=False):
-            context = op.render_template_fields({})
-            with pytest.raises(
-                ValueError, match=re.escape("invalid literal for int() with base 10: 'nothing'")
-            ):
-                op.execute(context)

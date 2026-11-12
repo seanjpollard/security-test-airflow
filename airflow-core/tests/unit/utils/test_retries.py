@@ -18,13 +18,16 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
 from sqlalchemy.exc import InternalError, OperationalError
-from sqlalchemy.orm.exc import StaleDataError
 
 from airflow.utils.retries import retry_db_transaction
+
+if TYPE_CHECKING:
+    from sqlalchemy.exc import DBAPIError
 
 
 class TestRetries:
@@ -45,29 +48,15 @@ class TestRetries:
 
         assert mock_obj.call_count == 2
 
-    @pytest.mark.parametrize(
-        ("exception_type", "exception_kwargs"),
-        [
-            pytest.param(
-                InternalError,
-                {"statement": mock.ANY, "params": mock.ANY, "orig": mock.ANY},
-                id="dbapi-internal",
-            ),
-            pytest.param(
-                OperationalError,
-                {"statement": mock.ANY, "params": mock.ANY, "orig": mock.ANY},
-                id="dbapi-operational",
-            ),
-            pytest.param(StaleDataError, {}, id="stale-data"),
-        ],
-    )
-    def test_retry_db_transaction_with_default_retries(self, caplog, exception_type, exception_kwargs):
+    @pytest.mark.db_test
+    @pytest.mark.parametrize("excection_type", [OperationalError, InternalError])
+    def test_retry_db_transaction_with_default_retries(self, caplog, excection_type: type[DBAPIError]):
         """Test that by default 3 retries will be carried out"""
         mock_obj = mock.MagicMock()
         mock_session = mock.MagicMock()
         mock_rollback = mock.MagicMock()
         mock_session.rollback = mock_rollback
-        db_error = exception_type(**exception_kwargs)
+        db_error = excection_type(statement=mock.ANY, params=mock.ANY, orig=mock.ANY)
 
         @retry_db_transaction
         def test_function(session):
@@ -77,7 +66,7 @@ class TestRetries:
 
         caplog.set_level(logging.DEBUG)
         caplog.clear()
-        with pytest.raises(exception_type):
+        with pytest.raises(excection_type):
             test_function(session=mock_session)
 
         for try_no in range(1, 4):

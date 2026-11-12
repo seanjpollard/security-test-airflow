@@ -16,30 +16,29 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from "react";
-
 import { Box, VStack, SimpleGrid, GridItem, Flex, Heading } from "@chakra-ui/react";
+import dayjs from "dayjs";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { PiBooks } from "react-icons/pi";
 
 import { useAssetServiceGetAssetEvents, useDashboardServiceHistoricalMetrics } from "openapi/queries";
-
 import { AssetEvents } from "src/components/Assets/AssetEvents";
 import { ErrorAlert } from "src/components/ErrorAlert";
-
+import TimeRangeSelector from "src/components/TimeRangeSelector";
 import { useAutoRefresh } from "src/utils";
 
 import { DagRunMetrics } from "./DagRunMetrics";
 import { MetricSectionSkeleton } from "./MetricSectionSkeleton";
 import { TaskInstanceMetrics } from "./TaskInstanceMetrics";
 
-type HistoricalMetricsProps = {
-  readonly endDate: string;
-  readonly startDate: string;
-};
+const defaultHour = "24";
 
-export const HistoricalMetrics = ({ endDate, startDate }: HistoricalMetricsProps) => {
+export const HistoricalMetrics = () => {
   const { t: translate } = useTranslation("dashboard");
+  const now = dayjs();
+  const [startDate, setStartDate] = useState(now.subtract(Number(defaultHour), "hour").toISOString());
+  const [endDate, setEndDate] = useState(now.toISOString());
   const [assetSortBy, setAssetSortBy] = useState("-timestamp");
 
   const refetchInterval = useAutoRefresh({ checkPendingRuns: true });
@@ -71,19 +70,26 @@ export const HistoricalMetrics = ({ endDate, startDate }: HistoricalMetricsProps
       </Flex>
       <ErrorAlert error={error} />
       <VStack alignItems="left" gap={2}>
+        <TimeRangeSelector
+          defaultValue={defaultHour}
+          endDate={endDate}
+          setEndDate={setEndDate}
+          setStartDate={setStartDate}
+          startDate={startDate}
+        />
         <SimpleGrid columns={{ base: 1, lg: 10 }} gap={2}>
           <GridItem colSpan={{ base: 1, lg: 7 }}>
             {isLoading ? <MetricSectionSkeleton /> : undefined}
             {!isLoading && data !== undefined && (
               <Box>
                 <DagRunMetrics
-                  countsAreLowerBounds={data.dag_run_counts_are_lower_bounds ?? false}
                   dagRunStates={data.dag_run_states}
                   startDate={startDate}
+                  stateCountLimit={data.state_count_limit}
                 />
                 <TaskInstanceMetrics
-                  countsAreLowerBounds={data.task_instance_counts_are_lower_bounds ?? false}
                   startDate={startDate}
+                  stateCountLimit={data.state_count_limit}
                   taskInstanceStates={data.task_instance_states}
                 />
               </Box>

@@ -20,7 +20,6 @@ import { Link, Table } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
 
 import type { DagVersionResponse } from "openapi/requests/types.gen";
-
 import Time from "src/components/Time";
 
 export const DagVersionDetails = ({ dagVersion }: { readonly dagVersion?: DagVersionResponse | null }) => {

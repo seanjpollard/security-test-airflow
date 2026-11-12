@@ -18,30 +18,23 @@
  */
 import { Button, createListCollection, HStack, VStack, Heading } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
 
 import { useTaskInstanceServiceGetMappedTaskInstanceTries } from "openapi/queries";
 import type { TaskInstanceHistoryResponse, TaskInstanceResponse } from "openapi/requests/types.gen";
-
-import { Select } from "src/system-components";
-
 import { StateBadge } from "src/components/StateBadge";
-
-import { isExactTryView } from "src/hooks/useTaskInstanceView";
 import { isStatePending, useAutoRefresh } from "src/utils";
 
 import TaskInstanceTooltip from "./TaskInstanceTooltip";
+import { Select } from "./ui";
 
 type Props = {
   readonly onSelectTryNumber?: (tryNumber: number) => void;
   readonly selectedTryNumber?: number;
-  readonly taskInstance: TaskInstanceHistoryResponse | TaskInstanceResponse;
+  readonly taskInstance: TaskInstanceResponse;
 };
 
 export const TaskTrySelect = ({ onSelectTryNumber, selectedTryNumber, taskInstance }: Props) => {
   const { t: translate } = useTranslation("components");
-  const [searchParams] = useSearchParams();
-  const inspectHistory = isExactTryView(searchParams);
   const {
     dag_id: dagId,
     dag_run_id: dagRunId,
@@ -56,40 +49,31 @@ export const TaskTrySelect = ({ onSelectTryNumber, selectedTryNumber, taskInstan
       dagId,
       dagRunId,
       mapIndex,
-      regionId: taskInstance.region_id,
-      regionIndex: taskInstance.region_index,
       taskId,
     },
     undefined,
     {
-      enabled: inspectHistory || finalTryNumber > 1,
+      enabled: Boolean(finalTryNumber && finalTryNumber > 1), // Only try to look up task tries if try number > 1
       refetchInterval: (query) =>
-        !inspectHistory &&
-        (query.state.data?.task_instances.some((ti) => isStatePending(ti.state)) === true ||
-          isStatePending(state)) &&
-        refetchInterval,
-      staleTime: 0,
+        // We actually want to use || here
+        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+        query.state.data?.task_instances.some((ti) => isStatePending(ti.state)) || isStatePending(state)
+          ? refetchInterval
+          : false,
     },
   );
 
-  if (!inspectHistory && finalTryNumber <= 1) {
+  if (!finalTryNumber || finalTryNumber <= 1) {
     return undefined;
   }
 
-  const triesByNumber = new Map(
-    (tiHistory?.task_instances ?? []).filter((ti) => ti.try_number > 0).map((ti) => [ti.try_number, ti]),
-  );
-
-  triesByNumber.set(finalTryNumber, taskInstance);
-
-  const sortedTries = [...triesByNumber.values()].sort((tryA, tryB) => tryA.try_number - tryB.try_number);
-  const lastTryNumber = sortedTries.at(-1)?.try_number ?? finalTryNumber;
-
-  if (lastTryNumber <= 1) {
-    return undefined;
-  }
   const logAttemptDropdownLimit = 10;
-  const showDropdown = lastTryNumber > logAttemptDropdownLimit;
+  const showDropdown = finalTryNumber > logAttemptDropdownLimit;
+
+  // For some reason tries aren't sorted by try_number
+  const sortedTries = [...(tiHistory?.task_instances ?? [])].sort(
+    (tryA, tryB) => tryA.try_number - tryB.try_number,
+  );
 
   const tryOptions = createListCollection({
     items: sortedTries.map((ti) => ({
@@ -143,6 +127,7 @@ export const TaskTrySelect = ({ onSelectTryNumber, selectedTryNumber, taskInstan
           {sortedTries.map((ti) => (
             <TaskInstanceTooltip key={ti.try_number} taskInstance={ti}>
               <Button
+                colorPalette="brand"
                 data-testid={`log-attempt-select-button-${ti.try_number}`}
                 key={ti.try_number}
                 onClick={() => {
@@ -150,6 +135,7 @@ export const TaskTrySelect = ({ onSelectTryNumber, selectedTryNumber, taskInstan
                     onSelectTryNumber(ti.try_number);
                   }
                 }}
+                size="sm"
                 variant={selectedTryNumber === ti.try_number ? "surface" : "outline"}
               >
                 {ti.try_number}

@@ -38,7 +38,6 @@ try:
         AirflowRescheduleException as AirflowRescheduleException,
         AirflowTimetableInvalid as AirflowTimetableInvalid,
         NodeNotFound as NodeNotFound,
-        ParamValidationError as ParamValidationError,
         TaskNotFound as TaskNotFound,
     )
 except ModuleNotFoundError:
@@ -79,9 +78,6 @@ except ModuleNotFoundError:
 
     class AirflowOptionalProviderFeatureException(AirflowException):  # type: ignore[no-redef]
         """Raise by providers when imports are missing for optional provider features."""
-
-    class ParamValidationError(AirflowException, ValueError):  # type: ignore[no-redef]
-        """Raise when DAG params fail validation."""
 
 
 class AirflowBadRequest(AirflowException):
@@ -139,23 +135,6 @@ class DagCodeNotFound(AirflowNotFoundException):
 
 class DagRunNotFound(AirflowNotFoundException):
     """Raise when a DAG Run is not available in the system."""
-
-
-class DagVersionNotFound(AirflowNotFoundException):
-    """Raised when a requested DagVersion is not found."""
-
-
-class DagNotPartitionedError(ValueError):
-    """Raise when a partition_key is supplied for a Dag that is not partitioned."""
-
-
-class InvalidPartitionKeyError(ValueError):
-    """
-    Raise when a partition_key value is invalid.
-
-    1. empty or exceeds the maximum allowed length
-    2. cannot be decoded to a partition_date by the timetable
-    """
 
 
 class DagRunAlreadyExists(AirflowBadRequest):

@@ -17,7 +17,7 @@
 # under the License.
 
 """
-Add display name for dag and task instance.
+add display name for dag and task instance.
 
 Revision ID: ee1467d4aa35
 Revises: b4078ac230a1

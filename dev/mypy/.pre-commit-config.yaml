@@ -25,8 +25,6 @@ repos:
   - repo: local
     hooks:
       - id: mypy-airflow-mypy
-        env:
-          PYTHONPYCACHEPREFIX: .build/pycache
         stages: ['pre-push']
         name: Run mypy for airflow-mypy plugins
         language: python
@@ -37,8 +35,6 @@ repos:
           ^tests/.*\.py$
         require_serial: true
       - id: mypy-airflow-mypy-manual
-        env:
-          PYTHONPYCACHEPREFIX: .build/pycache
         stages: ['manual']
         name: Run mypy for airflow-mypy (manual)
         language: python

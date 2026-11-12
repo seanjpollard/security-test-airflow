@@ -16,15 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from "react";
-
 import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useVariableServiceGetVariablesKey, useVariableServicePostVariable } from "openapi/queries";
-
-import { toaster } from "src/system-components";
-
+import { toaster } from "src/components/ui";
 import type { VariableBody } from "src/pages/Variables/ManageVariable/VariableForm";
 
 export const useAddVariable = ({ onSuccessConfirm }: { onSuccessConfirm: () => void }) => {

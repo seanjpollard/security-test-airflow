@@ -26,7 +26,7 @@ Your First Airflow Pull Request — 15-Minute Guide
 Purpose
 -------
 This page walks **new contributors** through opening their first
-Apache Airflow pull request (PR) in about 15 minutes.  We present *one*
+Apache Airflow pull request (PR) in about five minutes.  We present *one*
 local option (Breeze) and *one* fully-hosted option (GitHub Codespaces).
 Everything else lives in the advanced guides.
 
@@ -39,11 +39,7 @@ Prerequisites
 For Breeze (local development):
 
 * `Docker Desktop <https://www.docker.com/products/docker-desktop/>`__
-* `Podman <https://podman.io/>`__ is a license-friendly alternative to Docker Desktop, but it is
-  **not yet fully supported** by Breeze. Breeze will detect Podman and print a warning, and you
-  may run into issues that do not occur with Docker. Docker Desktop is recommended unless you are
-  comfortable troubleshooting Podman-specific problems yourself. Track full support in
-  `#54894 <https://github.com/apache/airflow/issues/54894>`_.
+* `Podman <https://podman.io/>`__, a drop-in, license-friendly replacement for Docker Desktop
 * `Docker Compose <https://docs.docker.com/compose/install/>`__
 * `uv <https://github.com/astral-sh/uv>`__, which is a fast, reliable package manager that you'll use to install other developer tools to make contributing to Airflow easier.
 
@@ -55,39 +51,25 @@ For Breeze (local development):
 .. code-block:: bash
 
     uv tool install prek
+    prek install -f
+    prek install -f --hook-type pre-push
 
 * 4GB RAM, 40GB disk space, and at least 2 CPU cores
 
 .. note::
-   Docker installation varies by OS. See the `full guide <03_contributors_quick_start.rst#local-machine-development>`_
-   for Ubuntu, macOS, and Windows instructions. Podman can be installed the same way, but since it is not
-   yet fully supported by Breeze, use it at your own risk and prefer Docker if you run into problems.
+   Docker **or Podman** installation varies by OS. See the `full guide <03_contributors_quick_start.rst#local-machine-development>`_ for Ubuntu, macOS, and Windows instructions.
 
 Option A – Breeze on Your Laptop
 --------------------------------
-1.  **Clone your fork**
+1.  **Clone your fork and install Breeze**
 
 .. code-block:: bash
 
     git clone https://github.com/<you>/airflow.git
     cd airflow
-    git remote add upstream https://github.com/apache/airflow.git
-
-Before your first push, run ``breeze ci audit`` (after installing Breeze below) to check that your
-remotes and the CI in your fork are set up; see
-`CI in your fork <18_contribution_workflow.rst#ci-in-your-fork>`__.
-
-2.  **Set up Git hooks and install Breeze**
-
-Run these commands from the root of your cloned Airflow repository:
-
-.. code-block:: bash
-
-    prek install -f
-    prek install -f --hook-type pre-push
     ./scripts/tools/setup_breeze
 
-3. Setup your idea workspace to detect project src/ and tests/ folders as source roots.
+2. Setup your idea workspace to detect project src/ and tests/ folders as source roots.
 
 .. code-block:: bash
 
@@ -97,30 +79,22 @@ Run these commands from the root of your cloned Airflow repository:
     # For VS Code
     uv run dev/ide_setup/setup_vscode.py
 
-4. Create a branch for your change
+3. Create a branch for your change
 
 .. code-block:: bash
 
     git checkout -b <your-branch-name>
 
-5.  **Start the development container** (first run builds the image)
+4.  **Start the development container** (first run builds the image)
 
 .. code-block:: bash
 
     breeze start-airflow
 
-The command starts a shell and launches multiple terminals using ``mprocs`` by default
-and launches all Airflow necessary components in those terminals.
-You can also choose to use ``tmux`` via the ``--terminal-multiplexer tmux`` option.
-If you are using tmux, check out this cheat sheet to learn more about its commands: https://tmuxcheatsheet.com/.
-
-Now you can also access the Airflow UI on your local machine at `http://localhost:28080 <http://localhost:28080>`_ with user name ``admin`` and password ``admin``.
-
-To exit breeze, press ``q`` in the ``mprocs`` interface (or in any of the tmux panes) and clean up the resources by running the following command:
-
-.. code-block:: bash
-
-    breeze down
+The command starts a shell and launches multiple terminals using tmux
+and launches all Airflow necessary components in those terminals. To know more about tmux commands,
+check out this cheat sheet: https://tmuxcheatsheet.com/. Now You can also access Airflow UI on your local machine at `http://localhost:28080 <http://localhost:28080>`_ with user name ``admin`` and password ``admin``. To exit breeze, type ``stop_airflow`` in any
+of the tmux panes and hit Enter
 
 **Working with Dags in Breeze:**
 
@@ -134,19 +108,15 @@ To exit breeze, press ``q`` in the ``mprocs`` interface (or in any of the tmux p
 
 This flag enables configuration to load example Dags when starting Airflow, which is useful for exploring Airflow's capabilities and testing.
 
-6. **Set up virtual environment and install dependencies**  - To run prek locally
+5.  **Make a tiny change** – e.g. fix a typo in docs
 
-Install airflow dependencies from this `guide <03_contributors_quick_start.rst#setting-up-virtual-env>`__.
-
-7.  **Make a tiny change** – e.g. fix a typo in docs
-
-8.  **Run local checks**
+6.  **Run local checks**
 
 .. code-block:: bash
 
     prek --all-files
 
-9.  **Run tests**
+7.  **Run tests**
 
 Run tests related to your change **before** pushing:
 
@@ -158,14 +128,14 @@ Run tests related to your change **before** pushing:
 Run ``breeze testing --help`` to see all available test groups.
 For more on testing, see the `Testing Guide <09_testing.rst>`_.
 
-10.  **Commit & push**
+8.  **Commit & push**
 
 .. code-block:: bash
 
     git commit -am "fix typo in README"
     git push -u origin <your-branch-name>
 
-11.  **Open the PR** – GitHub shows a "Compare & pull request" button.
+9.  **Open the PR** – GitHub shows a "Compare & pull request" button.
 
 *Syncing your branch*
 
@@ -233,7 +203,9 @@ Example Dag Review Checklist
 ----------------------------
 
 To help maintain consistency and quality across example Dags,
-please refer to the `example Dag review checklist <28_example_dag_review_checklist.rst>`_.
+please refer to the example Dag review checklist:
+
+:doc:`28_example_dag_review_checklist`
 
 Next Steps
 ----------

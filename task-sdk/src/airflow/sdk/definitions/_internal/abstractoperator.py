@@ -130,8 +130,6 @@ class AbstractOperator(Templater, DAGNode):
     _is_sensor: bool = False
     _is_mapped: bool = False
     _can_skip_downstream: bool = False
-    # Declared in Python, implemented by a Lang-SDK runtime. Set by ``@task.stub``.
-    is_stub: bool = False
 
     @property
     def dag_id(self) -> str:

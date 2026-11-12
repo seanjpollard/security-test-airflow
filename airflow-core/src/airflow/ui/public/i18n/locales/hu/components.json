@@ -1,7 +1,7 @@
 {
   "backfill": {
     "affected_one": "1 futás lesz elindítva.",
-    "affected_other": "{{count, number}} futás lesz elindítva.",
+    "affected_other": "{{count}} futás lesz elindítva.",
     "affectedNone": "Nincs a kiválasztott feltételeknek megfelelő futás.",
     "allRuns": "Összes futás",
     "backwards": "Futtatás visszafelé",
@@ -10,12 +10,9 @@
     "maxRuns": "Maximális aktív futások",
     "missingAndErroredRuns": "Hiányzó és hibás futások",
     "missingRuns": "Hiányzó futások",
-    "overrideExistingParams": "Jelenlegi futások paramétereinek felülírása.",
     "permissionDenied": "Próbafuttatás sikertelen: a felhasználónak nincs jogosultsága backfill létrehozásához.",
     "reprocessBehavior": "Újrafeldolgozás viselkedése",
     "run": "Backfill futtatása",
-    "scheduleNotBackfillable": "A Dag ütemezése nem támogatja a backfill futtatást",
-    "schedulerPriorityHint": "A backfill típusú Dag futások mindig a nem-backfill futásokat követően kerülnek sorra az ütemezési ciklusokban. Ha nem-backfill futások is vannak a sorban, akkor a backfill futások hosszabb ideig is ott maradhatnak.",
     "selectDescription": "Futtasd ezt a Dag-et egy dátumtartományra",
     "selectLabel": "Backfill",
     "title": "Backfill futtatása",
@@ -25,6 +22,7 @@
         "title": "Backfill létrehozva"
       }
     },
+    "unpause": "{{dag_display_name}} folytatása indításkor",
     "validation": {
       "datesRequired": "A kezdő és a befejező dátumot is meg kell adni.",
       "startBeforeEnd": "A kezdő dátumnak kisebbnek vagy egyenlőnek kell lennie a befejező dátumnál."
@@ -41,21 +39,16 @@
   },
   "close": "Bezárás",
   "configForm": {
+    "advancedOptions": "Speciális beállítások",
     "configJson": "Konfiguráció JSON",
     "invalidJson": "Érvénytelen JSON formátum: {{errorMessage}}"
   },
   "dagWarnings": {
     "error_one": "1 hiba",
+    "error_other": "{{count}} hiba",
     "errorAndWarning": "1 hiba és {{warningText}}",
-    "types": {
-      "asset conflict": "Adatkészlet-ütközés",
-      "duplicate dag id": "Ismétlődő Dag ID",
-      "non-existent pool": "Nem létező Pool",
-      "runtime varying value": "Futásidőben változó érték",
-      "task group cycle": "Ciklus a feladatcsoportban"
-    },
     "warning_one": "1 figyelmeztetés",
-    "warning_other": "{{count, number}} figyelmeztetés"
+    "warning_other": "{{count}} figyelmeztetés"
   },
   "dateRangeFilter": {
     "validation": {
@@ -67,19 +60,18 @@
   "durationChart": {
     "duration": "Időtartam (másodperc)",
     "lastDagRun_one": "Utolsó Dag futás",
-    "lastDagRun_other": "Utolsó {{count, number}} Dag futás",
+    "lastDagRun_other": "Utolsó {{count}} Dag futás",
     "lastTaskInstance_one": "Utolsó feladatpéldány",
-    "lastTaskInstance_other": "Utolsó {{count, number}} feladatpéldány",
+    "lastTaskInstance_other": "Utolsó {{count}} feladatpéldány",
     "queuedDuration": "Sorban állási idő",
     "runAfter": "Futás ekkortól",
     "runDuration": "Futás időtartama"
   },
   "fileUpload": {
     "files_one": "1 fájl",
-    "files_other": "{{count, number}} fájl"
+    "files_other": "{{count}} fájl"
   },
   "flexibleForm": {
-    "durationPlaceholder": "Időtartam megadása ISO 8601 formátumban",
     "placeholder": "Érték kiválasztása",
     "placeholderArray": "Adjon meg minden sztringet új sorban",
     "placeholderExamples": "Kezdjen el gépelni az opciók megjelenítéséhez",
@@ -87,7 +79,6 @@
     "validationErrorArrayNotArray": "Az értéknek tömbnek kell lennie.",
     "validationErrorArrayNotNumbers": "A tömb minden elemének számnak kell lennie.",
     "validationErrorArrayNotObject": "A tömb minden elemének objektumnak kell lennie.",
-    "validationErrorDuration": "Érvénytelen ISO 8601 időtartam formátum",
     "validationErrorRequired": "Ez a mező kötelező"
   },
   "graph": {
@@ -99,20 +90,19 @@
     "downloadImageError": "A gráf letöltése sikertelen.",
     "downloadImageErrorTitle": "Sikertelen letöltés",
     "otherDagRuns": "+További Dag futások",
-    "taskCount_one": "{{count, number}} feladat",
-    "taskCount_other": "{{count, number}} feladat",
-    "taskGroup": "Feladatcsoport",
-    "zoomToTask": "Nagyítás a kiválasztott feladatra"
+    "taskCount_one": "{{count}} feladat",
+    "taskCount_other": "{{count}} feladat",
+    "taskGroup": "Feladatcsoport"
   },
-  "limitedList": "+{{count, number}} további",
-  "limitedList.allItems": "Összes {{count, number}} elem:",
-  "limitedList.allTags_one": "Összes címke ({{count, number}})",
-  "limitedList.allTags_other": "Összes címke ({{count, number}})",
-  "limitedList.clickToInteract": "Kattintson egy címkére a Dag-ek szűréséhez",
-  "limitedList.clickToOpenFull": "Kattintson a \"+{{count, number}} további\" gombra a teljes nézethez",
+  "limitedList": "+{{count}} további",
+  "limitedList.allItems": "Összes {{count}} elem:",
+  "limitedList.allTags_one": "Összes címke ({{count}})",
+  "limitedList.allTags_other": "Összes címke ({{count}})",
+  "limitedList.clickToInteract": "Kattintson egy címkére a Dag-ok szűréséhez",
+  "limitedList.clickToOpenFull": "Kattintson a \"+{{count}} további\" gombra a teljes nézethez",
   "limitedList.copyPasteText": "A fenti szöveg másolható és beilleszthető",
-  "limitedList.showingItems_one": "{{count, number}} elem megjelenítve",
-  "limitedList.showingItems_other": "{{count, number}} elem megjelenítve",
+  "limitedList.showingItems_one": "{{count}} elem megjelenítve",
+  "limitedList.showingItems_other": "{{count}} elem megjelenítve",
   "logs": {
     "file": "Fájl",
     "location": "{{name}} fájl {{line}}. sora"
@@ -142,8 +132,8 @@
     "loading": "Dag információk betöltése...",
     "loadingFailed": "A Dag információk betöltése sikertelen. Kérem, próbálja újra.",
     "manualRunDenied": "Kézi futtatás nem engedélyezett ennél a Dag-nél",
-    "runIdHelp": "Opcionális, ha nincs megadva, automatikusan generálásra kerül",
-    "selectDescription": "A kiválasztott Dag egyszeri futtatása.",
+    "runIdHelp": "Opcionális – ha nincs megadva, automatikusan generálódik",
+    "selectDescription": "Indítsd el ennek a Dag-nek egyetlen futását",
     "selectLabel": "Egyszeri futás",
     "title": "Dag indítása",
     "toaster": {
@@ -155,7 +145,8 @@
         "title": "Dag futás elindítva"
       }
     },
-    "triggerAgainWithConfig": "Újraindítás ezzel a konfigurációval"
+    "triggerAgainWithConfig": "Újraindítás ezzel a konfigurációval",
+    "unpause": "{{dagDisplayName}} folytatása indításkor"
   },
   "trimText": {
     "details": "Részletek",

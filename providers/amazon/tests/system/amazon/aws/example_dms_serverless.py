@@ -68,20 +68,8 @@ documentation.
 
 DAG_ID = "example_dms_serverless"
 ROLE_ARN_KEY = "ROLE_ARN"
-# Optional externally fetched variables. When provided, the RDS instance and the serverless
-# replication are placed in the given subnet groups / security group.
-SUBNET_GROUP_KEY = "SUBNET_GROUP"
-SECURITY_GROUP_KEY = "SECURITY_GROUP"
-REPLICATION_SUBNET_GROUP_KEY = "REPLICATION_SUBNET_GROUP"
 
-sys_test_context_task = (
-    SystemTestContextBuilder()
-    .add_variable(ROLE_ARN_KEY)
-    .add_variable(SUBNET_GROUP_KEY, optional=True)
-    .add_variable(SECURITY_GROUP_KEY, optional=True)
-    .add_variable(REPLICATION_SUBNET_GROUP_KEY, default_value="default")
-    .build()
-)
+sys_test_context_task = SystemTestContextBuilder().add_variable(ROLE_ARN_KEY).build()
 
 # Config values for setting up the "Source" database.
 CA_CERT_ID = "rds-ca-rsa2048-g1"
@@ -107,30 +95,6 @@ def _get_rds_instance_endpoint(instance_name: str):
     response = rds_client.describe_db_instances(DBInstanceIdentifier=instance_name)
     rds_instance_endpoint = response["DBInstances"][0]["Endpoint"]
     return rds_instance_endpoint
-
-
-@task
-def build_rds_kwargs(
-    db_name: str, security_group_id: str | None = None, subnet_group: str | None = None
-) -> dict:
-    """
-    Assemble the kwargs for RdsCreateDbInstanceOperator at runtime.
-
-    When a DB subnet group / security group are provided via the test context, the instance is placed in
-    them (e.g. private subnets reachable by the test runner), otherwise it lands in the default VPC.
-    """
-    rds_kwargs = {
-        "DBName": db_name,
-        "AllocatedStorage": 20,
-        "MasterUsername": RDS_USERNAME,
-        "MasterUserPassword": RDS_PASSWORD,
-        "PubliclyAccessible": False,
-    }
-    if security_group_id:
-        rds_kwargs["VpcSecurityGroupIds"] = [security_group_id]
-    if subnet_group:
-        rds_kwargs["DBSubnetGroupName"] = subnet_group
-    return rds_kwargs
 
 
 @task
@@ -235,9 +199,6 @@ with DAG(
     test_context = sys_test_context_task()
     env_id = test_context[ENV_ID_KEY]
     role_arn = test_context[ROLE_ARN_KEY]
-    subnet_group = test_context[SUBNET_GROUP_KEY]
-    security_group = test_context[SECURITY_GROUP_KEY]
-    replication_subnet_group = test_context[REPLICATION_SUBNET_GROUP_KEY]
 
     bucket_name = f"{env_id}-dms-serverless-bucket"
     rds_instance_name = f"{env_id}-instance"
@@ -254,7 +215,13 @@ with DAG(
         db_instance_identifier=rds_instance_name,
         db_instance_class="db.t3.micro",
         engine=RDS_ENGINE,
-        rds_kwargs=build_rds_kwargs(rds_db_name, security_group, subnet_group),
+        rds_kwargs={
+            "DBName": rds_db_name,
+            "AllocatedStorage": 20,
+            "MasterUsername": RDS_USERNAME,
+            "MasterUserPassword": RDS_PASSWORD,
+            "PubliclyAccessible": True,
+        },
     )
 
     # Sample data.
@@ -311,7 +278,7 @@ with DAG(
             "MaxCapacityUnits": 4,
             "MinCapacityUnits": 1,
             "MultiAZ": False,
-            "ReplicationSubnetGroupId": replication_subnet_group,
+            "ReplicationSubnetGroupId": "default",
         },
         replication_type="full-load",
         table_mappings=json.dumps(table_mappings),
@@ -336,7 +303,8 @@ with DAG(
     # [START howto_operator_dms_serverless_start_replication]
     replicate = DmsStartReplicationOperator(
         task_id="replicate",
-        replication_config_arn="{{ task_instance.xcom_pull(task_ids='create_replication_config', key='return_value') }}",
+        # verbose form: "{{ task_instance.xcom_pull(task_ids='create_replication_config', key='return_value') }}"
+        replication_config_arn=create_replication_config.output,
         replication_start_type="start-replication",
         wait_for_completion=True,
         waiter_delay=60,
@@ -347,7 +315,8 @@ with DAG(
     # [START howto_operator_dms_serverless_stop_replication]
     stop_replication = DmsStopReplicationOperator(
         task_id="stop_replication",
-        replication_config_arn="{{ task_instance.xcom_pull(task_ids='create_replication_config', key='return_value') }}",
+        # verbose form: "{{ task_instance.xcom_pull(task_ids='create_replication_config', key='return_value') }}"
+        replication_config_arn=create_replication_config.output,
         wait_for_completion=True,
         waiter_delay=120,
         waiter_max_attempts=200,
@@ -359,7 +328,8 @@ with DAG(
     delete_replication_config = DmsDeleteReplicationConfigOperator(
         task_id="delete_replication_config",
         waiter_max_attempts=200,
-        replication_config_arn="{{ task_instance.xcom_pull(task_ids='create_replication_config', key='return_value') }}",
+        # verbose form: "{{ task_instance.xcom_pull(task_ids='create_replication_config', key='return_value') }}"
+        replication_config_arn=create_replication_config.output,
     )
     # [END howto_operator_dms_serverless_delete_replication_config]
     delete_replication_config.trigger_rule = TriggerRule.ALL_DONE

@@ -45,9 +45,7 @@
                                                 "uri": "s3://bucket4/file.txt",
                                                 "name": "s3://bucket4/file.txt",
                                                 "group": "asset",
-                                                "extra": {
-                                                    "b": 2
-                                                }
+                                                "extra": {"b":  2}
                                             }
                                         ]
                                     }
@@ -109,9 +107,7 @@
                                                 "uri": "s3://bucket4/file.txt",
                                                 "name": "s3://bucket4/file.txt",
                                                 "group": "asset",
-                                                "extra": {
-                                                    "b": 2
-                                                }
+                                                "extra": {"b":  2}
                                             }
                                         ]
                                     }
@@ -173,9 +169,7 @@
                                                 "uri": "s3://bucket4/file.txt",
                                                 "name": "s3://bucket4/file.txt",
                                                 "group": "asset",
-                                                "extra": {
-                                                    "b": 2
-                                                }
+                                                "extra": {"b":  2}
                                             }
                                         ]
                                     }

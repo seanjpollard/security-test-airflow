@@ -33,10 +33,10 @@ class RedisPublishOperator(BaseOperator):
 
     :param channel: redis channel to which the message is published (templated)
     :param message: the message to publish (templated)
-    :param redis_conn_id: redis connection to use (templated)
+    :param redis_conn_id: redis connection to use
     """
 
-    template_fields: Sequence[str] = ("channel", "message", "redis_conn_id")
+    template_fields: Sequence[str] = ("channel", "message")
 
     def __init__(self, *, channel: str, message: str, redis_conn_id: str = "redis_default", **kwargs) -> None:
         super().__init__(**kwargs)

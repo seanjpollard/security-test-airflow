@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 /**
  * @import { FlatConfig } from "@typescript-eslint/utils/ts-eslint";
  */
@@ -592,6 +593,13 @@ export const reactRules = /** @type {const} @satisfies {FlatConfig.Config} */ ({
      * @see [react/self-closing-comp](https://github.com/jsx-eslint/eslint-plugin-react/blob/HEAD/docs/rules/self-closing-comp.md)
      */
     [`${reactNamespace}/self-closing-comp`]: ERROR,
+
+    /**
+     * Enforce property declarations alphabetical sorting.
+     *
+     * @see [react/sort-prop-types](https://github.com/jsx-eslint/eslint-plugin-react/blob/HEAD/docs/rules/sort-prop-types.md)
+     */
+    [`${reactNamespace}/sort-prop-types`]: ERROR,
 
     /**
      * Disallow void DOM elements from receiving children.

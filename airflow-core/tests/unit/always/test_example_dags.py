@@ -48,8 +48,6 @@ OPTIONAL_PROVIDERS_DEPENDENCIES: dict[str, dict[str, str | None]] = {
     # value: a dictionary containing package distributions with an optional version specifier, e.g., >=2.3.4
     # yandexcloud is automatically removed in case botocore is upgraded to latest
     r".*example_yandexcloud.*\.py": {"yandexcloud": None},
-    # Every Dag in it uses pydantic-ai-harness Memory, which only the opt-in code-mode extra installs
-    r".*example_agent_memory\.py": {"pydantic-ai-harness": ">=0.24.0"},
 }
 IGNORE_AIRFLOW_PROVIDER_DEPRECATION_WARNING: tuple[str, ...] = (
     # Certain examples or system tests may trigger AirflowProviderDeprecationWarnings.
@@ -62,14 +60,27 @@ IGNORE_AIRFLOW_PROVIDER_DEPRECATION_WARNING: tuple[str, ...] = (
     "providers/google/tests/system/google/cloud/kubernetes_engine/example_kubernetes_engine_job.py",
     "providers/google/tests/system/google/cloud/kubernetes_engine/example_kubernetes_engine_kueue.py",
     "providers/google/tests/system/google/cloud/kubernetes_engine/example_kubernetes_engine_resource.py",
-    "providers/ibm/mq/tests/system/ibm/mq/example_dag_message_queue_trigger.py",
     # Deprecated Operators/Hooks, which replaced by common.sql Operators/Hooks
 )
 
 IGNORE_EXAMPLE_DAGS: tuple[str, ...] = (
+    # These example dags require suspended providers, eg: google dataflow dependent on the Apache Beam provider,
+    # but it's in the suspended list, we can't import the dag
     # Ray uses pydantic v1 internally, which fails to infer types in Python 3.14.
     # TODO: remove once ray releases a version with Python 3.14 support.
     "providers/google/tests/system/google/cloud/ray/example_ray_job.py",
+    "providers/google/tests/system/google/cloud/dataflow/example_dataflow_go.py",
+    "providers/google/tests/system/google/cloud/dataflow/example_dataflow_java_streaming.py",
+    "providers/google/tests/system/google/cloud/dataflow/example_dataflow_native_java.py",
+    "providers/google/tests/system/google/cloud/dataflow/example_dataflow_native_python.py",
+    "providers/google/tests/system/google/cloud/dataflow/example_dataflow_native_python_async.py",
+    "providers/google/tests/system/google/cloud/dataflow/example_dataflow_pipeline.py",
+    "providers/google/tests/system/google/cloud/dataflow/example_dataflow_pipeline_streaming.py",
+    "providers/google/tests/system/google/cloud/dataflow/example_dataflow_sensors_deferrable.py",
+    "providers/google/tests/system/google/cloud/dataflow/example_dataflow_streaming_python.py",
+    "providers/google/tests/system/google/cloud/dataflow/example_dataflow_template.py",
+    "providers/google/tests/system/google/cloud/dataflow/example_dataflow_yaml.py",
+    "providers/google/tests/system/google/cloud/gcs/example_firestore.py",
 )
 
 LONGER_IMPORT_TIMEOUTS: dict[str, float] = {
@@ -201,6 +212,7 @@ def patch_get_dagbag_import_timeout():
 def test_should_be_importable(example: str, patch_get_dagbag_import_timeout):
     dagbag = DagBag(
         dag_folder=example,
+        include_examples=False,
     )
     if len(dagbag.import_errors) == 1 and "AirflowOptionalProviderFeatureException" in str(
         dagbag.import_errors
@@ -219,6 +231,7 @@ def test_should_not_do_database_queries(example: str, patch_get_dagbag_import_ti
     with assert_queries_count(1, stacklevel_from_module=example.rsplit(os.sep, 1)[-1]):
         DagBag(
             dag_folder=example,
+            include_examples=False,
         )
 
 
@@ -230,6 +243,7 @@ def test_should_not_run_hook_connections(example: str, patch_get_dagbag_import_t
         mock_get_connection.return_value = Connection()
         DagBag(
             dag_folder=example,
+            include_examples=False,
         )
     assert mock_get_connection.call_count == 0, (
         f"BaseHook.get_connection() should not be called during DAG parsing. "

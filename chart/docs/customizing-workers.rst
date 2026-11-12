@@ -19,64 +19,20 @@ Customizing Workers
 ===================
 
 Both ``CeleryExecutor`` and ``KubernetesExecutor`` workers can be highly customized with the :ref:`workers parameters <parameters:workers>`.
-For example, to set resources on workers for CeleryExecutor:
+For example, to set resources on workers:
 
 .. code-block:: yaml
    :caption: values.yaml
 
    workers:
-     celery:
-       resources:
-         requests:
-           cpu: 1
-         limits:
-           cpu: 1
+     resources:
+       requests:
+         cpu: 1
+       limits:
+         cpu: 1
 
-Separate Celery worker sets
----------------------------
-
-Use ``workers.celery.sets`` to configure workers for different queues. Each set
-inherits ``workers.celery`` settings and can override them, including
-``extraVolumes`` and ``extraVolumeMounts``. For example, mount different existing
-PersistentVolumeClaims for two worker sets:
-
-.. code-block:: yaml
-   :caption: values.yaml
-
-   executor: CeleryExecutor
-   workers:
-     celery:
-       sets:
-         - name: analytics
-           queue: analytics
-           extraVolumes:
-             - name: input-data
-               persistentVolumeClaim:
-                 claimName: analytics-input
-           extraVolumeMounts:
-             - name: input-data
-               mountPath: /opt/airflow/input
-               readOnly: true
-         - name: research
-           queue: research
-           extraVolumes:
-             - name: input-data
-               persistentVolumeClaim:
-                 claimName: research-input
-           extraVolumeMounts:
-             - name: input-data
-               mountPath: /opt/airflow/input
-               readOnly: true
-
-Create both PersistentVolumeClaims before deploying the chart, and route tasks
-to the corresponding queue. The default worker set remains enabled to consume
-tasks sent to the ``default`` queue. Each set inherits replica and autoscaling
-settings. If its pods can run on multiple nodes, use a claim that supports
-read-only mounts from multiple nodes, such as ``ReadOnlyMany``, with a compatible
-storage driver.
-Non-empty list overrides such as ``extraVolumes`` and ``extraVolumeMounts`` replace
-the inherited list, so include all additional volumes and mounts needed by each
-set. An empty list retains the inherited value.
+One notable exception for ``KubernetesExecutor`` is that the default anti-affinity applied to ``CeleryExecutor`` workers to spread them across nodes
+is not applied to ``KubernetesExecutor`` workers, as there is no reason to spread out per-task workers.
 
 Custom ``pod_template_file``
 ----------------------------
@@ -87,7 +43,8 @@ worker types for ``KubernetesExecutor`` or if you need to customize something no
 
 .. note::
 
-   Configuration options between Celery and Kubernetes workers can be overwritten by ``workers.celery`` and ``workers.kubernetes`` sections.
+   Some configuration options between Celery and Kubernetes workers can be overwritten by new ``workers.celery`` and ``workers.kubernetes`` sections.
+   Implementation of ``workers.celery`` and ``workers.kubernetes`` is not yet fully completed.
 
 As an example, let's say you want to set ``priorityClassName`` on your workers:
 
@@ -114,12 +71,3 @@ As an example, let's say you want to set ``priorityClassName`` on your workers:
        priorityClassName: high-priority
        containers:
          - name: base
-
-The same can be achieved with default `pod_template_file`_ by overriding the ``priorityClassName`` option for KubernetesExecutor like:
-
-.. code-block:: yaml
-   :caption: values.yaml
-
-   workers:
-     kubernetes:
-       priorityClassName: high-priority

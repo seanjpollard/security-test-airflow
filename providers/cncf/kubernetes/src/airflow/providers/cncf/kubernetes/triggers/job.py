@@ -138,17 +138,15 @@ class KubernetesJobTrigger(BaseTrigger):
                 loop = asyncio.get_running_loop()
                 xcom_result = await loop.run_in_executor(None, self.pod_manager.extract_xcom, pod)
                 xcom_results.append(xcom_result)
-        job: V1Job = await self.hook.wait_until_job_complete(
-            name=self.job_name, namespace=self.job_namespace, poll_interval=self.poll_interval
-        )
+        job: V1Job = await self.hook.wait_until_job_complete(name=self.job_name, namespace=self.job_namespace)
         job_dict = job.to_dict()
         error_message = self.hook.is_job_failed(job=job)
         yield TriggerEvent(
             {
                 "name": job.metadata.name,
                 "namespace": job.metadata.namespace,
-                "pod_names": list(self.pod_names),
-                "pod_namespace": self.pod_namespace,
+                "pod_names": [pod_name for pod_name in self.pod_names] if self.get_logs else None,
+                "pod_namespace": self.pod_namespace if self.get_logs else None,
                 "status": "error" if error_message else "success",
                 "message": f"Job failed with error: {error_message}"
                 if error_message
@@ -176,8 +174,3 @@ class KubernetesJobTrigger(BaseTrigger):
             cluster_context=self.cluster_context,
         )
         return PodManager(kube_client=sync_hook.core_v1_client)
-
-    async def cleanup(self) -> None:
-        """Release the hook's cached API client when the trigger exits."""
-        await super().cleanup()
-        await self.hook.close()

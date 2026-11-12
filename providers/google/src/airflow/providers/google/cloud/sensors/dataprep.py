@@ -36,10 +36,7 @@ class DataprepJobGroupIsFinishedSensor(BaseSensorOperator):
     :param job_group_id: ID of the job group to check
     """
 
-    template_fields: Sequence[str] = (
-        "job_group_id",
-        "dataprep_conn_id",
-    )
+    template_fields: Sequence[str] = ("job_group_id",)
 
     def __init__(
         self,

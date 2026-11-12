@@ -16,10 +16,10 @@
 # under the License.
 from __future__ import annotations
 
-import logging
-import re
+import json
 import subprocess
-from datetime import datetime, timedelta
+import time
+from datetime import datetime
 
 import boto3
 
@@ -59,6 +59,7 @@ ROLE_ARN_KEY = "ROLE_ARN"
 JOB_ROLE_ARN_KEY = "JOB_ROLE_ARN"
 JOB_ROLE_NAME_KEY = "JOB_ROLE_NAME"
 SUBNETS_KEY = "SUBNETS"
+UPDATE_TRUST_POLICY_WAIT_TIME_KEY = "UPDATE_TRUST_POLICY_WAIT_TIME"
 
 sys_test_context_task = (
     SystemTestContextBuilder()
@@ -66,17 +67,8 @@ sys_test_context_task = (
     .add_variable(JOB_ROLE_ARN_KEY)
     .add_variable(JOB_ROLE_NAME_KEY)
     .add_variable(SUBNETS_KEY, split_string=True)
+    .add_variable(UPDATE_TRUST_POLICY_WAIT_TIME_KEY, optional=True, default_value="10")
     .build()
-)
-
-# `emr-containers create-role-associations` / `delete-role-associations` were added in this release.
-MIN_AWS_CLI_VERSION = (2, 24, 0)
-
-# Options for the binary downloads below. Without `--fail` curl exits 0 on an HTTP error and
-# writes the error body to the output, leaving tar/unzip to report the failure instead.
-CURL_OPTS = (
-    "--silent --show-error --fail --location "
-    "--retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 10"
 )
 
 S3_FILE_NAME = "pi.py"
@@ -116,91 +108,12 @@ def delete_launch_template(template_name: str):
 def run_eksctl_commands(cluster_name, ns):
     # Install eksctl and enable access for EMR on EKS
     # See https://docs.aws.amazon.com/emr/latest/EMR-on-EKS-DevelopmentGuide/setting-up-cluster-access.html
-    url = "https://github.com/eksctl-io/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz"
-    tarball = "/tmp/eksctl.tar.gz"
-    # Download and extract as separate steps so a failed fetch is reported by curl rather than by tar.
+    file = "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz"
     commands = f"""
-        curl {CURL_OPTS} --output {tarball} "{url}" &&
-        tar xzf {tarball} -C /tmp &&
-        /tmp/eksctl create iamidentitymapping --cluster {cluster_name} --namespace {ns} --service-name "emr-containers"
+        curl --silent --location "{file}" | tar xz -C /tmp &&
+        /tmp/eksctl create iamidentitymapping --cluster {cluster_name} --namespace {ns} --service-name "emr-containers" &&
+        /tmp/eksctl utils associate-iam-oidc-provider --cluster {cluster_name} --approve
     """
-
-    build = subprocess.run(commands, shell=True, capture_output=True, text=True, check=False)
-
-    if build.returncode != 0:
-        raise RuntimeError(f"Failed to grant EMR on EKS access to the cluster: {build.stderr}")
-
-
-def _install_aws_cli_if_needed():
-    """
-    Ensure an AWS CLI new enough for `emr-containers create-role-associations` is installed.
-
-    The role-association subcommands were added in AWS CLI 2.24.0. The task image may ship an
-    older CLI or none at all, so install a fresh one when what we find is missing or too old.
-    """
-    log = logging.getLogger(__name__)
-    check = subprocess.run("aws --version", shell=True, capture_output=True, text=True, check=False)
-
-    # `aws --version` has written to stderr on some past releases, so check both streams.
-    version_match = re.search(r"aws-cli/(\d+)\.(\d+)\.(\d+)", f"{check.stdout}{check.stderr}")
-    if check.returncode == 0 and version_match:
-        version = tuple(int(part) for part in version_match.groups())
-        if version >= MIN_AWS_CLI_VERSION:
-            log.info("AWS CLI %s satisfies the minimum required version.", version)
-            return
-        log.info("AWS CLI %s is older than %s; upgrading.", version, MIN_AWS_CLI_VERSION)
-    else:
-        log.info("AWS CLI not found; installing.")
-
-    install = subprocess.run(
-        f"""
-            curl {CURL_OPTS} --output awscliv2.zip "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" &&
-            unzip -q -o awscliv2.zip &&
-            ./aws/install --update --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli
-        """,
-        shell=True,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if install.returncode != 0:
-        raise RuntimeError(f"Failed to install the AWS CLI: {install.stderr}")
-
-
-@task
-def install_pod_identity_agent(cluster_name):
-    """Install and wait for the EKS Pod Identity Agent add-on.
-
-    Each run creates Pod Identity associations scoped to its own cluster. The
-    role's trust policy stays static.
-    """
-    log = logging.getLogger(__name__)
-    eks_client = boto3.client("eks")
-    addon_name = "eks-pod-identity-agent"
-
-    eks_client.create_addon(clusterName=cluster_name, addonName=addon_name)
-
-    waiter = eks_client.get_waiter("addon_active")
-    waiter.wait(
-        clusterName=cluster_name,
-        addonName=addon_name,
-        WaiterConfig={"Delay": 10, "MaxAttempts": 60},
-    )
-    log.info("Pod Identity Agent addon is ACTIVE on cluster %s", cluster_name)
-
-
-@task
-def create_pod_identity_role_associations(cluster_name, namespace, role_name):
-    # `emr-containers create-role-associations` is a CLI-only helper — it creates
-    # the three Pod Identity associations (client, driver, executor) that the EMR
-    # job pods use. There is no boto3 equivalent.
-    # See https://docs.aws.amazon.com/emr/latest/EMR-on-EKS-DevelopmentGuide/setting-up-enable-IAM.html
-    _install_aws_cli_if_needed()
-
-    commands = (
-        f"aws emr-containers create-role-associations --cluster-name {cluster_name} "
-        f"--namespace {namespace} --role-name {role_name}"
-    )
 
     build = subprocess.Popen(
         commands,
@@ -215,12 +128,42 @@ def create_pod_identity_role_associations(cluster_name, namespace, role_name):
 
 
 @task(trigger_rule=TriggerRule.ALL_DONE)
-def delete_pod_identity_role_associations(cluster_name, namespace, role_name):
-    _install_aws_cli_if_needed()
+def delete_iam_oidc_identity_provider(cluster_name):
+    oidc_provider_issuer_url = boto3.client("eks").describe_cluster(
+        name=cluster_name,
+    )["cluster"]["identity"]["oidc"]["issuer"]
+    oidc_provider_issuer_endpoint = oidc_provider_issuer_url.replace("https://", "")
 
+    account_id = boto3.client("sts").get_caller_identity()["Account"]
+    boto3.client("iam").delete_open_id_connect_provider(
+        OpenIDConnectProviderArn=f"arn:aws:iam::{account_id}:oidc-provider/{oidc_provider_issuer_endpoint}"
+    )
+
+
+@task
+def update_trust_policy_execution_role(cluster_name, cluster_namespace, role_name, wait_time):
+    # Remove any already existing trusted entities added with "update-role-trust-policy"
+    # Prevent getting an error "Cannot exceed quota for ACLSizePerRole"
+    client = boto3.client("iam")
+    role_trust_policy = client.get_role(RoleName=role_name)["Role"]["AssumeRolePolicyDocument"]
+    # We assume if the action is sts:AssumeRoleWithWebIdentity, the statement had been added with
+    # "update-role-trust-policy". Removing it to not exceed the quota
+    role_trust_policy["Statement"] = [
+        statement
+        for statement in role_trust_policy["Statement"]
+        if statement["Action"] != "sts:AssumeRoleWithWebIdentity"
+    ]
+
+    client.update_assume_role_policy(
+        RoleName=role_name,
+        PolicyDocument=json.dumps(role_trust_policy),
+    )
+
+    # See https://docs.aws.amazon.com/emr/latest/EMR-on-EKS-DevelopmentGuide/setting-up-trust-policy.html
+    # The action "update-role-trust-policy" is not available in boto3, thus we need to do it using AWS CLI
     commands = (
-        f"aws emr-containers delete-role-associations --cluster-name {cluster_name} "
-        f"--namespace {namespace} --role-name {role_name}"
+        f"aws emr-containers update-role-trust-policy --cluster-name {cluster_name} "
+        f"--namespace {cluster_namespace} --role-name {role_name}"
     )
 
     build = subprocess.Popen(
@@ -233,6 +176,9 @@ def delete_pod_identity_role_associations(cluster_name, namespace, role_name):
 
     if build.returncode != 0:
         raise RuntimeError(err)
+
+    # Wait for IAM changes to propagate to avoid authentication failures
+    time.sleep(int(wait_time))
 
 
 @task(trigger_rule=TriggerRule.ALL_DONE)
@@ -254,6 +200,7 @@ with DAG(
     subnets = test_context[SUBNETS_KEY]
     job_role_arn = test_context[JOB_ROLE_ARN_KEY]
     job_role_name = test_context[JOB_ROLE_NAME_KEY]
+    update_trust_policy_wait_time = test_context[UPDATE_TRUST_POLICY_WAIT_TIME_KEY]
 
     s3_bucket_name = f"{env_id}-bucket"
     eks_cluster_name = f"{env_id}-cluster"
@@ -329,15 +276,14 @@ with DAG(
         task_id="start_job",
         virtual_cluster_id=str(create_emr_eks_cluster.output),
         execution_role_arn=job_role_arn,
-        release_label="emr-7.13.0-latest",
+        release_label="emr-7.0.0-latest",
         job_driver=job_driver_arg,
         configuration_overrides=configuration_overrides_arg,
         name="pi.py",
     )
     # [END howto_operator_emr_container]
-    job_starter.wait_for_completion = True
-    job_starter.retries = 2
-    job_starter.retry_delay = timedelta(minutes=2)
+    job_starter.wait_for_completion = False
+    job_starter.job_retry_max_attempts = 5
 
     # [START howto_sensor_emr_container]
     job_waiter = EmrContainerSensor(
@@ -382,15 +328,16 @@ with DAG(
         create_cluster_and_nodegroup,
         await_create_nodegroup,
         run_eksctl_commands(eks_cluster_name, eks_namespace),
-        install_pod_identity_agent(eks_cluster_name),
-        create_pod_identity_role_associations(eks_cluster_name, eks_namespace, job_role_name),
+        update_trust_policy_execution_role(
+            eks_cluster_name, eks_namespace, job_role_name, update_trust_policy_wait_time
+        ),
         # TEST BODY
         create_emr_eks_cluster,
         job_starter,
         job_waiter,
         describe_pod,
         # TEST TEARDOWN
-        delete_pod_identity_role_associations(eks_cluster_name, eks_namespace, job_role_name),
+        delete_iam_oidc_identity_provider(eks_cluster_name),
         delete_virtual_cluster(str(create_emr_eks_cluster.output)),
         delete_eks_cluster,
         await_delete_eks_cluster,

@@ -21,26 +21,31 @@ import { useTranslation } from "react-i18next";
 import { useParams, useSearchParams } from "react-router-dom";
 
 import { useTaskInstanceServiceGetExtraLinks } from "openapi/queries";
-
 import { SearchParamsKeys } from "src/constants/searchParams";
-import { useTaskInstanceCoordinates } from "src/hooks/useTaskInstanceCoordinates";
-import { getLinkTarget, getSafeExternalUrl } from "src/utils/links";
 
 type ExtraLinksProps = {
   readonly refetchInterval: number | false;
+};
+
+const getTarget = (url: string) => {
+  try {
+    return new URL(url, globalThis.location.origin).origin === globalThis.location.origin
+      ? "_self"
+      : "_blank";
+  } catch {
+    return "_blank";
+  }
 };
 
 export const ExtraLinks = ({ refetchInterval }: ExtraLinksProps) => {
   const { t: translate } = useTranslation("dag");
   const { dagId = "", mapIndex = "-1", runId = "", taskId = "" } = useParams();
   const [searchParams] = useSearchParams();
-  const coordinates = useTaskInstanceCoordinates();
   const tryNumberParam = searchParams.get(SearchParamsKeys.TRY_NUMBER);
   const tryNumber = tryNumberParam === null ? undefined : parseInt(tryNumberParam, 10);
 
   const { data } = useTaskInstanceServiceGetExtraLinks(
     {
-      ...coordinates,
       dagId,
       dagRunId: runId,
       mapIndex: parseInt(mapIndex, 10),
@@ -62,17 +67,11 @@ export const ExtraLinks = ({ refetchInterval }: ExtraLinksProps) => {
             return undefined;
           }
 
-          const safeUrl = getSafeExternalUrl(url);
-
-          if (safeUrl === undefined) {
-            return undefined;
-          }
-
-          const target = getLinkTarget(safeUrl);
+          const target = getTarget(url);
 
           return (
-            <Button asChild key={key} variant="surface">
-              <a href={safeUrl} rel="noopener noreferrer" target={target}>
+            <Button asChild colorPalette="brand" key={key} variant="surface">
+              <a href={url} rel="noopener noreferrer" target={target}>
                 {key}
               </a>
             </Button>

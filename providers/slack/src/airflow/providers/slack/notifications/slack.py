@@ -54,7 +54,7 @@ class SlackNotifier(BaseNotifier):
     :param unfurl_media: Option to indicate whether media url should unfurl. Optional
     """
 
-    template_fields: Sequence[str] = ("text", "channel", "username", "attachments", "blocks", "slack_conn_id")
+    template_fields = ("text", "channel", "username", "attachments", "blocks")
 
     def __init__(
         self,

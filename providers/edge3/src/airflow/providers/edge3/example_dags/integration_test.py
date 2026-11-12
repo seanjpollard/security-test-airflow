@@ -135,10 +135,7 @@ with DAG(
     @task_group(prefix_group_id=False)
     def standard_tasks_group():
         classic_bash = BashOperator(
-            task_id="classic_bash",
-            bash_command='echo "Parameter is $MAPPING_COUNT"',
-            env={"MAPPING_COUNT": "{{ params.mapping_count }}"},
-            append_env=True,
+            task_id="classic_bash", bash_command="echo Parameter is {{ params.mapping_count }}"
         )
 
         empty = EmptyOperator(task_id="not_executed")

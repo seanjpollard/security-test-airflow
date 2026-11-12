@@ -16,13 +16,11 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useState } from "react";
-
 import { Field, Stack } from "@chakra-ui/react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import ReactMarkdown from "src/components/ReactMarkdown";
-
 import { paramPlaceholder, useParamStore } from "src/queries/useParamStore";
 
 import type { FlexibleFormElementProps } from ".";
@@ -61,8 +59,8 @@ export const FieldRow = ({
 
   return (
     <Field.Root invalid={!isValid} orientation="horizontal" required={isRequired(param)}>
-      <Stack minWidth={0} style={{ flexBasis: "30%" }}>
-        <Field.Label fontSize="md" wordBreak="break-word">
+      <Stack>
+        <Field.Label fontSize="md" style={{ flexBasis: "30%" }}>
           {param.schema.title ?? name} <Field.RequiredIndicator />
         </Field.Label>
       </Stack>

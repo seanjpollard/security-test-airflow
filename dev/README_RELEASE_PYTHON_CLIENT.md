@@ -525,18 +525,6 @@ This is generally faster and requires less resources/network bandwidth.
 Both commands should produce reproducible `.whl`, `.tar.gz` packages in dist folder and "-source.tar.gz"
 file containing airflow sources in dist folder.
 
-> [!IMPORTANT]
-> Run the build with Python 3.11 — the project's `DEFAULT_PYTHON_MAJOR_MINOR_VERSION`. The
-> client generator applies the `trigger_dag_run_post_body.py` AST patch with `ast.unparse`, which
-> re-emits that file using the running interpreter's grammar, so building under a different Python
-> (e.g. the host's 3.13) produces a non-reproducible client and the `prepare-python-client`
-> step may not even emit the wheel/sdist. `prepare-python-client` refuses to run under any other
-> Python and exits early with this guidance, so pin the interpreter explicitly:
->
-> ```shell
-> UV_PYTHON=3.11 breeze release-management prepare-python-client --distribution-format both --version-suffix ""
-> ```
-
 4) Change to the directory where you have the packages from svn and check if they are identical to the ones
 you just built:
 
@@ -758,8 +746,8 @@ Give the server 20-30 seconds to serialize the example Dags to DB
 
 3. In the meantime install the python client you want to test - in the terminal window in the container.
    It can be installed from `PyPI` via `pip install apache-airflow-client==X.Y.Zrc1` or installed
-   from a file (for example if you just built the client with `breeze release-management prepare-python-client`,
-   there will be `/dist/apache_airflow_client-py*.whl` file in your `/dist` folder (mapped from `dist`
+   from a file (for example if you nust built the client with `breeze release-management prepare-python-client`,
+   there will be `/dist/apache_airflow_client-py*.whl` file in in your `/dist` folder (mapped from `dist`
    folder in your checked out airflow repository and you can install it with:
    `pip install /dist/apache_airflow_client-py*.whl`.
 
@@ -769,31 +757,6 @@ Give the server 20-30 seconds to serialize the example Dags to DB
 ```shell script
 python /opt/airflow/clients/python/test_python_client.py
 ```
-
-### Non-interactive smoke test
-
-If you would rather not drive the interactive `start-airflow` session, the
-[`dev/verify_python_client_rc.sh`](verify_python_client_rc.sh) helper performs the same end-to-end
-check in a single non-interactive `breeze shell` invocation: it boots `airflow standalone`, waits for
-the API server, installs the client, and runs `test_python_client.py` against the live API. `breeze
-shell` already configures `SimpleAuthManager` with `admin`/`admin` and a per-shell JWT secret, so the
-server and the test share the same credentials.
-
-```shell script
-# install the RC from PyPI (published with the rcN suffix)
-breeze shell --load-example-dags --backend sqlite \
-    "CLIENT_VERSION=${VERSION_RC} bash dev/verify_python_client_rc.sh"
-
-# or test the exact SVN wheel (copy it under ./dist first so it is visible at /dist)
-breeze shell --load-example-dags --backend sqlite \
-    "CLIENT_WHEEL=/dist/apache_airflow_client-${VERSION}-py3-none-any.whl bash dev/verify_python_client_rc.sh"
-```
-
-Set `CLIENT_VERSION` or `CLIENT_WHEEL` inside the quoted command: `breeze shell` forwards only a
-fixed list of environment variables into the container, so a `CLIENT_VERSION=...` prefix on the
-host never reaches the script.
-
-The script prints `PYTHON_CLIENT_RC_VERIFY: OK` on success.
 
 
 # Publish the final Apache Airflow client release

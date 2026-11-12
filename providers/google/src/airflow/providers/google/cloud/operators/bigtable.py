@@ -105,7 +105,6 @@ class BigtableCreateInstanceOperator(GoogleCloudBaseOperator, BigtableValidation
         "main_cluster_id",
         "main_cluster_zone",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (BigtableInstanceLink(),)
 
@@ -218,7 +217,6 @@ class BigtableUpdateInstanceOperator(GoogleCloudBaseOperator, BigtableValidation
         "project_id",
         "instance_id",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (BigtableInstanceLink(),)
 
@@ -303,7 +301,6 @@ class BigtableDeleteInstanceOperator(GoogleCloudBaseOperator, BigtableValidation
         "project_id",
         "instance_id",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -368,7 +365,6 @@ class BigtableCreateTableOperator(GoogleCloudBaseOperator, BigtableValidationMix
         "instance_id",
         "table_id",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (BigtableTablesLink(),)
 
@@ -481,7 +477,6 @@ class BigtableDeleteTableOperator(GoogleCloudBaseOperator, BigtableValidationMix
         "instance_id",
         "table_id",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -550,7 +545,6 @@ class BigtableUpdateClusterOperator(GoogleCloudBaseOperator, BigtableValidationM
         "cluster_id",
         "nodes",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (BigtableClusterLink(),)
 

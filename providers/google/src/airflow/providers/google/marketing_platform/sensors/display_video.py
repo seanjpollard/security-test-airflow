@@ -53,7 +53,6 @@ class GoogleDisplayVideo360GetSDFDownloadOperationSensor(BaseSensorOperator):
     template_fields: Sequence[str] = (
         "operation_name",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(

@@ -16,62 +16,33 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import type { ComponentType, ReactNode } from "react";
+import type React from "react";
 
 export type DateRangeValue = {
   endDate?: string;
   startDate?: string;
 };
 
-// Value of a composite filter (one whose config sets ``fromSearchParams``/``toSearchParams``).
-// Its concrete shape is private to that filter's editor and projections; the bar treats it opaquely.
-export type CompositeFilterValue = Record<string, string>;
-
-// A ``boolean`` filter's value is the string ``"true"``; absent means off. Keeping it a
-// string avoids ``isValidFilterValue`` treating ``false`` as a value worth writing to the URL.
-export type FilterValue =
-  | Array<string>
-  | CompositeFilterValue
-  | Date
-  | DateRangeValue
-  | number
-  | string
-  | null
-  | undefined;
+export type FilterValue = Date | DateRangeValue | number | string | null | undefined;
 
 export type FilterConfig = {
   readonly defaultValue?: FilterValue;
-  // Bespoke editor for filters a static ``options`` array cannot express, such as
-  // search-as-you-type over a paginated endpoint. Must be a component rather than a
-  // render callback so the editor can own its own hooks.
-  readonly EditorComponent?: ComponentType<FilterPluginProps>;
   readonly endKey?: string;
-  // Composite filters span several URL params (e.g. one pill writing a state param plus a time
-  // bound). ``fromSearchParams`` reads the pill's value from the URL, undefined meaning no filter;
-  // ``toSearchParams`` projects a value onto the params the filter manages and must enumerate
-  // every one of them (mapped to undefined to clear), so removing the pill wipes them all.
-  // Filters without these hooks read and write ``key`` directly.
-  readonly fromSearchParams?: (params: URLSearchParams) => FilterValue;
   readonly hotkeyDisabled?: boolean;
-  readonly icon?: ReactNode;
-  // Multiselect only: accept free-text values that are not in ``options``.
-  readonly isCreatable?: boolean;
+  readonly icon?: React.ReactNode;
   readonly key: string;
   readonly label: string;
-  // Multiselect only: URL param holding this filter's any/all match mode. Cleared
-  // alongside the filter, which ``useFiltersHandler`` would not otherwise manage.
-  readonly matchModeKey?: string;
   readonly max?: number;
   readonly min?: number;
-  readonly options?: Array<{ label: ReactNode | string; value: string }>;
+  readonly options?: Array<{ label: React.ReactNode | string; value: string }>;
   readonly placeholder?: string;
+  readonly required?: boolean;
   readonly startKey?: string;
-  // Set on filters whose API endpoint exposes both ``*_pattern`` (substring)
+  // Set on text filters whose API endpoint exposes both ``*_pattern`` (substring)
   // and ``*_prefix_pattern`` (prefix) variants. The pill renders a toggle that
-  // controls which one the consuming query uses, via ``useAdvancedSearch``.
+  // controls which one the consuming page uses, via ``useAdvancedSearch``.
   readonly supportsAdvancedSearch?: boolean;
-  readonly toSearchParams?: (value: FilterValue) => Record<string, string | undefined>;
-  readonly type: "boolean" | "date" | "daterange" | "multiselect" | "number" | "select" | "text";
+  readonly type: "date" | "daterange" | "number" | "select" | "text";
 };
 
 export type FilterState = {
@@ -82,15 +53,9 @@ export type FilterState = {
 
 export type FilterBarProps = {
   readonly configs: Array<FilterConfig>;
-  // Shows Reset while a filter kept outside the bar (e.g. the Dag list's folder) is active.
-  readonly hasExternalFilters?: boolean;
   readonly initialValues?: Record<string, FilterValue>;
   readonly maxVisibleFilters?: number;
   readonly onFiltersChange: (filters: Record<string, FilterValue>) => void;
-  // Replaces onFiltersChange({}) on Reset, so filters kept outside the bar clear in the same update.
-  readonly onReset?: () => void;
-  // Hide the Preset Filters control where they aren't useful (e.g. a Dag run's per-run task instances).
-  readonly showPresetFilters?: boolean;
 };
 
 export type FilterPluginProps = {

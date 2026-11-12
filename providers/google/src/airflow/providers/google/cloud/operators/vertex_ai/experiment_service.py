@@ -60,7 +60,6 @@ class CreateExperimentOperator(GoogleCloudBaseOperator):
         "project_id",
         "impersonation_chain",
         "experiment_name",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -130,7 +129,6 @@ class DeleteExperimentOperator(GoogleCloudBaseOperator):
         "project_id",
         "impersonation_chain",
         "experiment_name",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -199,7 +197,6 @@ class CreateExperimentRunOperator(GoogleCloudBaseOperator):
         "impersonation_chain",
         "experiment_name",
         "experiment_run_name",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -269,7 +266,6 @@ class ListExperimentRunsOperator(GoogleCloudBaseOperator):
         "project_id",
         "impersonation_chain",
         "experiment_name",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -332,7 +328,6 @@ class UpdateExperimentRunStateOperator(GoogleCloudBaseOperator):
         "experiment_name",
         "experiment_run_name",
         "new_state",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -400,7 +395,6 @@ class DeleteExperimentRunOperator(GoogleCloudBaseOperator):
         "impersonation_chain",
         "experiment_name",
         "experiment_run_name",
-        "gcp_conn_id",
     )
 
     def __init__(

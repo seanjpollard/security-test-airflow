@@ -22,6 +22,7 @@ from contextlib import nullcontext
 from unittest import mock
 
 import pytest
+from aioresponses import aioresponses
 
 from airflow.models import Connection
 from airflow.providers.discord.hooks.discord_webhook import (
@@ -30,7 +31,14 @@ from airflow.providers.discord.hooks.discord_webhook import (
     DiscordWebhookHook,
 )
 
-from tests_common.test_utils.aiohttp import MockAiohttpClientResponse
+
+@pytest.fixture
+def aioresponse():
+    """
+    Creates mock async API response.
+    """
+    with aioresponses() as async_response:
+        yield async_response
 
 
 class TestDiscordCommonHandler:
@@ -124,7 +132,7 @@ class TestDiscordCommonHandler:
                 id="fail-on-fields",
             ),
             pytest.param(
-                {"title": "This is a title", "author": {"name": "t" * 257}},
+                {"title": "This is a title", "author": {"name": "t" * 2049}},
                 pytest.raises(ValueError, match="Discord embed author name must be 256 or fewer characters"),
                 id="fail-on-author-name",
             ),
@@ -267,7 +275,7 @@ class TestDiscordWebhookAsyncHook:
             assert mocked_function.call_args.kwargs.get("data") == json.dumps(expected_payload_dict)
 
     @pytest.mark.asyncio
-    async def test_execute_with_success(self):
+    async def test_execute_with_success(self, aioresponse):
         conn_id = "default-discord-webhook"
         hook = DiscordWebhookAsyncHook(
             http_conn_id=conn_id,
@@ -276,10 +284,5 @@ class TestDiscordWebhookAsyncHook:
             avatar_url="https://static-cdn.avatars.com/my-avatar-path",
             tts=False,
         )
-        with mock.patch("aiohttp.ClientSession.post", new_callable=mock.AsyncMock) as mocked_post:
-            mocked_post.return_value = MockAiohttpClientResponse(
-                status=200,
-                method="POST",
-                url="https://discordapp.com/api/webhooks/00000/some-discord-token_000",
-            )
-            await hook.execute()
+        aioresponse.post("https://discordapp.com/api/webhooks/00000/some-discord-token_000", status=200)
+        await hook.execute()

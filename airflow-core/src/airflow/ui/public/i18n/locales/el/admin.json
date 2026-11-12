@@ -3,15 +3,13 @@
     "description": "Περιγραφή",
     "key": "Κλειδί",
     "name": "Όνομα",
-    "team": "Ομάδα",
     "value": "Τιμή"
   },
   "config": {
     "columns": {
       "section": "Ενότητα"
     },
-    "config_one": "Ρύθμιση",
-    "config_other": "Ρυθμίσεις"
+    "title": "Ρυθμίσεις Airflow"
   },
   "connections": {
     "add": "Προσθήκη Σύνδεσης",
@@ -25,7 +23,7 @@
     "connection_other": "Συνδέσεις",
     "delete": {
       "deleteConnection_one": "Διαγραφή 1 σύνδεσης",
-      "deleteConnection_other": "Διαγραφή {{count, number}} συνδέσεων",
+      "deleteConnection_other": "Διαγραφή {{count}} συνδέσεων",
       "firstConfirmMessage_one": "Πρόκειται να διαγράψετε την ακόλουθη σύνδεση:",
       "firstConfirmMessage_other": "Πρόκειται να διαγράψετε τις ακόλουθες συνδέσεις:",
       "title": "Διαγραφή Σύνδεσης"
@@ -34,8 +32,8 @@
     "form": {
       "connectionIdRequired": "Το ID Σύνδεσης είναι υποχρεωτικό",
       "connectionIdRequirement": "Το ID Σύνδεσης δεν μπορεί να περιέχει μόνο κενά",
-      "connectionTypeFields": "Πεδία {{connectionType}}",
       "connectionTypeRequired": "Ο Τύπος Σύνδεσης είναι υποχρεωτικός",
+      "extraFields": "Επιπλέον Πεδία",
       "extraFieldsJson": "Επιπλέον Πεδία JSON",
       "helperText": "Λείπει ο Τύπος Σύνδεσης; Βεβαιωθείτε ότι έχετε εγκαταστήσει το ανάλογο πακέτο Airflow Παρόχων.",
       "helperTextForRedactedFields": "Τα πεδία που έχουν αποκρυφθεί ('***') θα παραμείνουν αμετάβλητα αν δεν τροποποιηθούν.",
@@ -51,12 +49,6 @@
     "searchPlaceholder": "Αναζήτηση Συνδέσεων",
     "test": "Δοκιμή Σύνδεσης",
     "testDisabled": "Η λειτουργία δοκιμής σύνδεσης είναι απενεργοποιημένη. Επικοινωνήστε με τον διαχειριστή για να την ενεργοποιήσει.",
-    "testError": {
-      "title": "Αποτυχημένη Δοκιμή Σύνδεσης"
-    },
-    "testSuccess": {
-      "title": "Επιτυχής Δοκιμή Σύνδεσης"
-    },
     "typeMeta": {
       "error": "Αποτυχία ανάκτησης μεταδεδομένων τύπου σύνδεσης",
       "standardFields": {
@@ -82,51 +74,29 @@
   "formActions": {
     "save": "Αποθήκευση"
   },
-  "jobs": {
-    "columns": {
-      "executorClass": "Κλάση Εκτελεστή",
-      "hostname": "Όνομα Υπολογιστή",
-      "id": "ID",
-      "jobType": "Τύπος Διεργασίας",
-      "latestHeartbeat": "Πιο Πρόσφατος Παλμός",
-      "unixname": "Όνομα Unix"
-    },
-    "filters": {
-      "allStates": "Όλες οι Καταστάσεις",
-      "allTypes": "Όλοι οι Τύποι",
-      "dagProcessorJob": "DagProcessorJob",
-      "schedulerJob": "SchedulerJob",
-      "triggererJob": "TriggererJob"
-    },
-    "job_one": "Διεργασία",
-    "job_other": "Διεργασίες"
-  },
   "plugins": {
     "columns": {
       "source": "Πηγή"
     },
     "importError_one": "Σφάλμα Εισαγωγής Πρόσθετου",
     "importError_other": "Σφάλματα Εισαγωγής Πρόσθετων",
-    "plugin_one": "Πρόσθετο",
-    "plugin_other": "Πρόσθετα",
     "searchPlaceholder": "Αναζήτηση κατά αρχείο"
   },
   "pools": {
     "add": "Προσθήκη Pool",
-    "deferredSlotsIncluded": "Συμπεριλαμβάνονται Αναβληθείσες Θέσεις",
+    "deferredSlotsIncluded": "Συμπεριλαμβάνονται Αναβληθέντα Slots",
     "delete": {
       "title": "Διαγραφή Pool",
       "warning": "Αυτό θα αφαιρέσει όλα τα μεταδεδομένα που σχετίζονται με το pool και μπορεί να επηρεάσει εργασίες που το χρησιμοποιούν."
     },
     "edit": "Επεξεργασία Pool",
     "form": {
-      "checkbox": "Επιλέξτε για να συμπεριλάβετε αναβληθείσες εργασίες στον υπολογισμό των διαθέσιμων θέσεων του pool",
+      "checkbox": "Επιλέξτε για να συμπεριλάβετε αναβληθείσες εργασίες στον υπολογισμό των διαθέσιμων slots του pool",
       "description": "Περιγραφή",
       "includeDeferred": "Συμπερίληψη Αναβληθέντων",
       "nameMaxLength": "Το όνομα μπορεί να περιέχει έως 256 χαρακτήρες",
       "nameRequired": "Το όνομα είναι υποχρεωτικό",
-      "slots": "Θέσεις",
-      "slotsHelperText": "Χρησιμοποιήστε -1 για απεριόριστες θέσεις."
+      "slots": "Slots"
     },
     "noPoolsFound": "Δεν βρέθηκαν pools",
     "pool_one": "Pool",
@@ -142,9 +112,7 @@
     "columns": {
       "packageName": "Όνομα Πακέτου",
       "version": "Έκδοση"
-    },
-    "provider_one": "Πάροχος",
-    "provider_other": "Πάροχοι"
+    }
   },
   "variables": {
     "add": "Προσθήκη Μεταβλητής",
@@ -153,7 +121,7 @@
     },
     "delete": {
       "deleteVariable_one": "Διαγραφή 1 μεταβλητής",
-      "deleteVariable_other": "Διαγραφή {{count, number}} μεταβλητών",
+      "deleteVariable_other": "Διαγραφή {{count}} μεταβλητών",
       "firstConfirmMessage_one": "Πρόκειται να διαγράψετε την ακόλουθη μεταβλητή:",
       "firstConfirmMessage_other": "Πρόκειται να διαγράψετε τις ακόλουθες μεταβλητές:",
       "title": "Διαγραφή Μεταβλητής",
@@ -184,7 +152,6 @@
           "title": "Παράλειψη"
         }
       },
-      "parsingFile": "Ανάλυση αρχείου...",
       "title": "Εισαγωγή Μεταβλητών",
       "upload": "Ανέβασμα Αρχείου JSON",
       "uploadPlaceholder": "Ανεβάστε ένα αρχείο JSON που περιέχει μεταβλητές (π.χ., {\"key\": \"value\", ...})"

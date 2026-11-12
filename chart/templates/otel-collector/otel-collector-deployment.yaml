@@ -26,7 +26,6 @@
 {{- $tolerations := or .Values.otelCollector.tolerations .Values.tolerations }}
 {{- $topologySpreadConstraints := or .Values.otelCollector.topologySpreadConstraints .Values.topologySpreadConstraints }}
 {{- $revisionHistoryLimit := include "airflow.revisionHistoryLimit" (list .Values.otelCollector.revisionHistoryLimit .Values.revisionHistoryLimit) }}
-{{- $containerSecurityContext := include "externalContainerSecurityContext" (list .Values.otelCollector .Values) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -74,7 +73,6 @@ spec:
       topologySpreadConstraints: {{- toYaml $topologySpreadConstraints | nindent 8 }}
       terminationGracePeriodSeconds: {{ .Values.otelCollector.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "otelCollector.serviceAccountName" . }}
-      enableServiceLinks: {{ .Values.enableServiceLinks }}
       {{- if .Values.otelCollector.priorityClassName }}
       priorityClassName: {{ .Values.otelCollector.priorityClassName }}
       {{- end }}
@@ -84,9 +82,7 @@ spec:
         - name: otel-collector
           image: {{ template "otel_collector_image" . }}
           imagePullPolicy: {{ .Values.images.otelCollector.pullPolicy }}
-          {{- if $containerSecurityContext }}
-          securityContext: {{ $containerSecurityContext | nindent 12 }}
-          {{- end }}
+          securityContext: {{- toYaml .Values.otelCollector.securityContexts.container | nindent 12 }}
           args: {{- tpl (toYaml .Values.otelCollector.args) . | nindent 12 }}
           ports:
             - name: otlp-grpc

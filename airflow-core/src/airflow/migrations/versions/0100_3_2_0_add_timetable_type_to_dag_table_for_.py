@@ -17,7 +17,7 @@
 # under the License.
 
 """
-Add timetable_type to dag table for filtering.
+add timetable_type to dag table for filtering.
 
 Revision ID: e79fc784f145
 Revises: 0b112f49112d

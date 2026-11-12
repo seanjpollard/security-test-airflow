@@ -16,14 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useDisclosure } from "@chakra-ui/react";
+import { Heading, IconButton, useDisclosure } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
 import { FiEdit } from "react-icons/fi";
 
 import type { VariableResponse } from "openapi/requests/types.gen";
-
-import { IconButton, Modal } from "src/system-components";
-
+import { Dialog, Tooltip } from "src/components/ui";
 import { useEditVariable } from "src/queries/useEditVariable";
 
 import type { VariableBody } from "./VariableForm";
@@ -52,7 +50,7 @@ const EditVariableButton = ({ disabled, variable }: Props) => {
     description: variable.description ?? "",
     key: variable.key,
     team_name: variable.team_name ?? "",
-    value: formatValue(variable.value ?? ""),
+    value: formatValue(variable.value),
   };
   const { editVariable, error, isPending, setError } = useEditVariable(initialVariableValue, {
     onSuccessConfirm: onClose,
@@ -65,19 +63,38 @@ const EditVariableButton = ({ disabled, variable }: Props) => {
 
   return (
     <>
-      <IconButton disabled={disabled} label={translate("variables.edit")} onClick={onOpen}>
-        <FiEdit />
-      </IconButton>
+      <Tooltip content={translate("variables.edit")}>
+        <IconButton
+          aria-label={translate("variables.edit")}
+          colorPalette="brand"
+          disabled={disabled}
+          onClick={onOpen}
+          size="md"
+          variant="ghost"
+        >
+          <FiEdit />
+        </IconButton>
+      </Tooltip>
 
-      <Modal onOpenChange={handleClose} open={open} title={translate("variables.edit")}>
-        <VariableForm
-          error={error}
-          initialVariable={initialVariableValue}
-          isPending={isPending}
-          manageMutate={editVariable}
-          setError={setError}
-        />
-      </Modal>
+      <Dialog.Root onOpenChange={handleClose} open={open} size="xl">
+        <Dialog.Content backdrop>
+          <Dialog.Header>
+            <Heading size="xl">{translate("variables.edit")}</Heading>
+          </Dialog.Header>
+
+          <Dialog.CloseTrigger />
+
+          <Dialog.Body>
+            <VariableForm
+              error={error}
+              initialVariable={initialVariableValue}
+              isPending={isPending}
+              manageMutate={editVariable}
+              setError={setError}
+            />
+          </Dialog.Body>
+        </Dialog.Content>
+      </Dialog.Root>
     </>
   );
 };

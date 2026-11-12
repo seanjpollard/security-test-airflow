@@ -25,13 +25,12 @@ from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote_plus, urlencode
 
 import jaydebeapi
+from sqlalchemy.engine import URL
 
-from airflow.providers.common.compat.sdk import AirflowOptionalProviderFeatureException
+from airflow.providers.common.compat.sdk import AirflowException
 from airflow.providers.common.sql.hooks.sql import DbApiHook
 
 if TYPE_CHECKING:
-    from sqlalchemy.engine import URL
-
     from airflow.providers.common.compat.sdk import Connection
 
 
@@ -152,21 +151,13 @@ class JdbcHook(DbApiHook):
 
     @property
     def sqlalchemy_url(self) -> URL:
-        try:
-            from sqlalchemy.engine import URL
-        except (ImportError, ModuleNotFoundError) as err:
-            raise AirflowOptionalProviderFeatureException(
-                "The 'sqlalchemy' library is required to use this feature. "
-                "Please install it with: pip install 'apache-airflow-providers-jdbc[sqlalchemy]'"
-            ) from err
-
         conn = self.connection
         sqlalchemy_query = conn.extra_dejson.get("sqlalchemy_query", {})
         if not isinstance(sqlalchemy_query, dict):
-            raise TypeError("The parameter 'sqlalchemy_query' must be of type dict!")
+            raise AirflowException("The parameter 'sqlalchemy_query' must be of type dict!")
         sqlalchemy_scheme = conn.extra_dejson.get("sqlalchemy_scheme")
         if sqlalchemy_scheme is None:
-            raise ValueError(
+            raise AirflowException(
                 "The parameter 'sqlalchemy_scheme' must be defined in extra for JDBC connections!"
             )
         return URL.create(
@@ -271,85 +262,3 @@ class JdbcHook(DbApiHook):
                 uri = f"{uri}?{query_string}"
 
         return uri
-
-    def get_openlineage_database_info(self, connection):
-        """
-        Return JDBC database information for OpenLineage.
-
-        Returns ``None`` when the database scheme cannot be inferred from the
-        connection's ``sqlalchemy_scheme`` extra or the JDBC URL in ``host``.
-        """
-        from airflow.providers.openlineage.sqlparser import DatabaseInfo
-
-        scheme = self._get_openlineage_scheme(connection)
-        if not scheme:
-            return None
-
-        return DatabaseInfo(
-            scheme=scheme,
-            authority=self._get_openlineage_authority(connection),
-            database=connection.schema or None,
-        )
-
-    def get_openlineage_database_dialect(self, connection) -> str:
-        """Return SQL dialect inferred from the JDBC connection, or ``generic``."""
-        return self._get_openlineage_scheme(connection) or "generic"
-
-    def get_openlineage_default_schema(self) -> str | None:
-        """Return default schema from the connection."""
-        return self.connection.schema or None
-
-    @staticmethod
-    def _get_openlineage_scheme(connection) -> str | None:
-        """Infer scheme from ``sqlalchemy_scheme`` extra or JDBC URL prefix."""
-        raw: str | None = None
-        sqlalchemy_scheme = connection.extra_dejson.get("sqlalchemy_scheme")
-        if sqlalchemy_scheme:
-            raw = sqlalchemy_scheme.split("+")[0]
-        else:
-            host = connection.host or ""
-            # The ``jdbc:`` prefix is case-insensitive per the JDBC spec.
-            if host.lower().startswith("jdbc:"):
-                jdbc_part = host[5:]
-                for sep in ("://", ":"):
-                    if sep in jdbc_part:
-                        candidate = jdbc_part.split(sep)[0].lower()
-                        if candidate:
-                            raw = candidate
-                        break
-
-        if not raw:
-            return None
-        # Normalize SQLAlchemy's "postgresql" to OL's canonical "postgres" so
-        # JDBC-Postgres shares a namespace with PostgresHook downstream.
-        return "postgres" if raw == "postgresql" else raw
-
-    @staticmethod
-    def _get_openlineage_authority(connection) -> str | None:
-        """Extract ``host:port`` from a JDBC URL in ``host`` or from plain ``host``/``port``."""
-        host = connection.host or ""
-        # The ``jdbc:`` prefix is case-insensitive per the JDBC spec.
-        if host.lower().startswith("jdbc:"):
-            rest = host[5:]
-            # Oracle thin service-name format (``jdbc:oracle:thin:@//host:1521/service``)
-            # uses ``:@//`` instead of ``://``. Handle before the ``://`` branch.
-            if "@//" in rest:
-                after = rest.split("@//", 1)[1]
-            elif "://" in rest:
-                after = rest.split("://", 1)[1]
-            else:
-                # Non-standard JDBC URL we can't reliably parse (e.g. Oracle
-                # SID format ``thin:@host:port:sid``, H2 ``mem:test``).
-                return None
-            # Strip path, query string, and driver-specific option separator
-            # (e.g. SQL Server uses ``;`` for connection properties).
-            for sep in ("/", "?", ";"):
-                after = after.split(sep, 1)[0]
-            # Strip userinfo (some drivers accept ``user:pass@host:port`` in the
-            # URL); we never want credentials leaking into the OL namespace.
-            if "@" in after:
-                after = after.rsplit("@", 1)[-1]
-            return after or None
-        if connection.port and host:
-            return f"{host}:{connection.port}"
-        return host or None

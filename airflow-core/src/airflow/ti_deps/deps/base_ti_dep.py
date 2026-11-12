@@ -71,9 +71,8 @@ class BaseTIDep:
     def _get_dep_statuses(
         self,
         ti: TaskInstance,
-        dep_context: DepContext,
-        *,
         session: Session,
+        dep_context: DepContext,
     ) -> Iterator[TIDepStatus]:
         """
         Abstract method that returns an iterable of TIDepStatus objects.
@@ -93,9 +92,8 @@ class BaseTIDep:
     def get_dep_statuses(
         self,
         ti: TaskInstance,
-        dep_context: DepContext | None = None,
-        *,
         session: Session,
+        dep_context: DepContext | None = None,
     ) -> Iterator[TIDepStatus]:
         """
         Wrap around the private _get_dep_statuses method.
@@ -103,8 +101,8 @@ class BaseTIDep:
         Contains some global checks for all dependencies.
 
         :param ti: the task instance to get the dependency status for
-        :param dep_context: the context for which this dependency should be evaluated for
         :param session: database session
+        :param dep_context: the context for which this dependency should be evaluated for
         """
         cxt = DepContext() if dep_context is None else dep_context
 
@@ -116,10 +114,10 @@ class BaseTIDep:
             yield self._passing_status(reason="Context specified all task dependencies should be ignored.")
             return
 
-        yield from self._get_dep_statuses(ti, cxt, session=session)
+        yield from self._get_dep_statuses(ti, session, cxt)
 
     @provide_session
-    def is_met(self, ti: TaskInstance, dep_context: DepContext | None = None, *, session: Session) -> bool:
+    def is_met(self, ti: TaskInstance, session: Session, dep_context: DepContext | None = None) -> bool:
         """
         Return whether a dependency is met for a given task instance.
 
@@ -133,7 +131,7 @@ class BaseTIDep:
 
         :meta private:
         """
-        return all(status.passed for status in self.get_dep_statuses(ti, dep_context, session=session))
+        return all(status.passed for status in self.get_dep_statuses(ti, session, dep_context))
 
     def _failing_status(self, reason: str = "") -> TIDepStatus:
         return TIDepStatus(self.name, False, reason)

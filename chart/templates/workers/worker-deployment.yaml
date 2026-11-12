@@ -21,41 +21,45 @@
 ## Airflow Worker Deployment
 ############################
 {{- $globals := deepCopy . -}}
+{{- $filteredCelery := include "removeNilFields" .Values.workers.celery | fromYaml -}}
+{{- $mergedWorkers := (include "workersMergeValues" (list .Values.workers $filteredCelery "" (list "kerberosInitContainer" "kerberosSidecar")) | fromYaml) -}}
+{{- $_ := unset $mergedWorkers "celery" -}}
 {{- $workerSets := .Values.workers.celery.sets | default list -}}
 {{- if .Values.workers.celery.enableDefault -}}
   {{- $workerSets = concat (list (dict "name" "default")) $workerSets -}}
 {{- end -}}
 {{- range $workerSet := $workerSets -}}
-  {{- $workers := (include "workersMergeValues" (list $.Values.workers.celery $workerSet) | fromYaml) -}}
-  {{- $_ := set $globals.Values.workers "celery" $workers -}}
+  {{- $workers := (include "workersMergeValues" (list $mergedWorkers $workerSet "" list) | fromYaml) -}}
+  {{- $_ := set $globals.Values "workers" $workers -}}
   {{- with $globals -}}
 {{- if contains "CeleryExecutor" .Values.executor }}
 ---
-{{- $persistence := .Values.workers.celery.persistence.enabled }}
-{{- $keda := .Values.workers.celery.keda.enabled }}
-{{- $hpa := and .Values.workers.celery.hpa.enabled (not .Values.workers.celery.keda.enabled) }}
-{{- $nodeSelector := or .Values.workers.celery.nodeSelector .Values.nodeSelector }}
-{{- $affinity := or .Values.workers.celery.affinity .Values.affinity }}
-{{- $tolerations := or .Values.workers.celery.tolerations .Values.tolerations }}
-{{- $topologySpreadConstraints := or .Values.workers.celery.topologySpreadConstraints .Values.topologySpreadConstraints }}
-{{- $revisionHistoryLimit := include "airflow.revisionHistoryLimit" (list .Values.workers.celery.revisionHistoryLimit .Values.revisionHistoryLimit) }}
-{{- $securityContext := include "airflowPodSecurityContext" (list .Values.workers.celery .Values) }}
-{{- $securityContextsIds := include "airflowPodSecurityContextsIds" (list .Values.workers.celery .) }}
-{{- $containerSecurityContext := include "containerSecurityContext" (list .Values.workers.celery .Values) }}
-{{- $containerSecurityContextPersistence := include "containerSecurityContext" (list .Values.workers.celery.persistence .Values) }}
-{{- $containerSecurityContextWaitForMigrations := include "containerSecurityContext" (list .Values.workers.celery.waitForMigrations .Values) }}
-{{- $containerSecurityContextLogGroomerSidecar := include "containerSecurityContext" (list .Values.workers.celery.logGroomerSidecar .Values) }}
-{{- $containerSecurityContextKerberosSidecar := include "containerSecurityContext" (list .Values.workers.celery.kerberosSidecar .Values) }}
-{{- $containerLifecycleHooks := or .Values.workers.celery.containerLifecycleHooks .Values.containerLifecycleHooks }}
-{{- $containerLifecycleHooksLogGroomerSidecar := or .Values.workers.celery.logGroomerSidecar.containerLifecycleHooks .Values.containerLifecycleHooks }}
-{{- $containerLifecycleHooksKerberosSidecar := or .Values.workers.celery.kerberosSidecar.containerLifecycleHooks .Values.containerLifecycleHooks }}
-{{- $safeToEvict := dict "cluster-autoscaler.kubernetes.io/safe-to-evict" (.Values.workers.celery.safeToEvict | toString) }}
-{{- $podAnnotations := mergeOverwrite (deepCopy .Values.airflowPodAnnotations) $safeToEvict .Values.workers.celery.podAnnotations }}
-{{- $schedulerName := or .Values.workers.celery.schedulerName .Values.schedulerName }}
+{{- $persistence := or .Values.workers.persistence.enabled }}
+{{- $keda := .Values.workers.keda.enabled }}
+{{- $hpa := and .Values.workers.hpa.enabled (not .Values.workers.keda.enabled) }}
+{{- $nodeSelector := or .Values.workers.nodeSelector .Values.nodeSelector }}
+{{- $affinity := or .Values.workers.affinity .Values.affinity }}
+{{- $tolerations := or .Values.workers.tolerations .Values.tolerations }}
+{{- $topologySpreadConstraints := or .Values.workers.topologySpreadConstraints .Values.topologySpreadConstraints }}
+{{- $revisionHistoryLimit := include "airflow.revisionHistoryLimit" (list .Values.workers.revisionHistoryLimit .Values.revisionHistoryLimit) }}
+{{- $securityContext := include "airflowPodSecurityContext" (list .Values.workers .Values) }}
+{{- $containerSecurityContext := include "containerSecurityContext" (list .Values.workers .Values) }}
+{{- $containerSecurityContextPersistence := include "containerSecurityContext" (list .Values.workers.persistence .Values) }}
+{{- $containerSecurityContextWaitForMigrations := include "containerSecurityContext" (list .Values.workers.waitForMigrations .Values) }}
+{{- $containerSecurityContextLogGroomerSidecar := include "containerSecurityContext" (list .Values.workers.logGroomerSidecar .Values) }}
+{{- $containerSecurityContextKerberosSidecar := include "containerSecurityContext" (list .Values.workers.kerberosSidecar .Values) }}
+{{- $containerSecurityContextKerberosInitContainer := include "containerSecurityContext" (list .Values.workers.kerberosInitContainer .Values) }}
+{{- $containerLifecycleHooksKerberosInitContainer := or .Values.workers.kerberosInitContainer.containerLifecycleHooks .Values.containerLifecycleHooks }}
+{{- $containerLifecycleHooks := or .Values.workers.containerLifecycleHooks .Values.containerLifecycleHooks }}
+{{- $containerLifecycleHooksLogGroomerSidecar := or .Values.workers.logGroomerSidecar.containerLifecycleHooks .Values.containerLifecycleHooks }}
+{{- $containerLifecycleHooksKerberosSidecar := or .Values.workers.kerberosSidecar.containerLifecycleHooks .Values.containerLifecycleHooks }}
+{{- $safeToEvict := dict "cluster-autoscaler.kubernetes.io/safe-to-evict" (.Values.workers.safeToEvict | toString) }}
+{{- $podAnnotations := mergeOverwrite (deepCopy .Values.airflowPodAnnotations) $safeToEvict .Values.workers.podAnnotations }}
+{{- $schedulerName := or .Values.workers.schedulerName .Values.schedulerName }}
 apiVersion: apps/v1
 kind: {{ if $persistence }}StatefulSet{{ else }}Deployment{{ end }}
 metadata:
-  name: {{ include "airflow.fullname" . }}-worker{{ if ne .Values.workers.celery.name "default" }}-{{ .Values.workers.celery.name }}{{ end }}
+  name: {{ include "airflow.fullname" . }}-worker{{ if ne .Values.workers.name "default" }}-{{ .Values.workers.name }}{{ end }}
   labels:
     tier: airflow
     component: worker
@@ -65,38 +69,38 @@ metadata:
     {{- with .Values.labels }}
       {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- if .Values.workers.celery.annotations }}
-  annotations: {{- toYaml .Values.workers.celery.annotations | nindent 4 }}
+  {{- if .Values.workers.annotations }}
+  annotations: {{- toYaml .Values.workers.annotations | nindent 4 }}
   {{- end }}
 spec:
   {{- if $persistence }}
-  serviceName: {{ include "airflow.fullname" . }}-worker{{ if ne .Values.workers.celery.name "default" }}-{{ .Values.workers.celery.name }}{{ end }}
+  serviceName: {{ include "airflow.fullname" . }}-worker{{ if ne .Values.workers.name "default" }}-{{ .Values.workers.name }}{{ end }}
   {{- end }}
   {{- if and (not $keda) (not $hpa) }}
-  replicas: {{ .Values.workers.celery.replicas }}
+  replicas: {{ .Values.workers.replicas }}
   {{- end }}
   {{- if ne $revisionHistoryLimit "" }}
   revisionHistoryLimit: {{ $revisionHistoryLimit }}
   {{- end }}
-  {{- if and $persistence .Values.workers.celery.persistence.persistentVolumeClaimRetentionPolicy }}
-  persistentVolumeClaimRetentionPolicy: {{- toYaml .Values.workers.celery.persistence.persistentVolumeClaimRetentionPolicy | nindent 4 }}
+  {{- if and $persistence .Values.workers.persistence.persistentVolumeClaimRetentionPolicy }}
+  persistentVolumeClaimRetentionPolicy: {{- toYaml .Values.workers.persistence.persistentVolumeClaimRetentionPolicy | nindent 4 }}
   {{- end }}
   selector:
     matchLabels:
       tier: airflow
       component: worker
       release: {{ .Release.Name }}
-      {{- if ne .Values.workers.celery.name "default" }}
-      worker-set: {{ .Values.workers.celery.name }}
+      {{- if ne .Values.workers.name "default" }}
+      worker-set: {{ .Values.workers.name }}
       {{- end }}
-  {{- if and $persistence .Values.workers.celery.podManagementPolicy }}
-  podManagementPolicy: {{ .Values.workers.celery.podManagementPolicy }}
+  {{- if and $persistence .Values.workers.podManagementPolicy }}
+  podManagementPolicy: {{ .Values.workers.podManagementPolicy }}
   {{- end }}
-  {{- if and $persistence .Values.workers.celery.updateStrategy }}
-  updateStrategy: {{- toYaml .Values.workers.celery.updateStrategy | nindent 4 }}
+  {{- if and $persistence .Values.workers.updateStrategy }}
+  updateStrategy: {{- toYaml .Values.workers.updateStrategy | nindent 4 }}
   {{- end }}
-  {{- if and (not $persistence) .Values.workers.celery.strategy }}
-  strategy: {{- toYaml .Values.workers.celery.strategy | nindent 4 }}
+  {{- if and (not $persistence) .Values.workers.strategy }}
+  strategy: {{- toYaml .Values.workers.strategy | nindent 4 }}
   {{- end }}
   template:
     metadata:
@@ -104,11 +108,11 @@ spec:
         tier: airflow
         component: worker
         release: {{ .Release.Name }}
-        {{- if ne .Values.workers.celery.name "default" }}
-        worker-set: {{ .Values.workers.celery.name }}
+        {{- if ne .Values.workers.name "default" }}
+        worker-set: {{ .Values.workers.name }}
         {{- end }}
-        {{- if or .Values.labels .Values.workers.celery.labels }}
-          {{- mustMerge .Values.workers.celery.labels .Values.labels | toYaml | nindent 8 }}
+        {{- if or .Values.labels .Values.workers.labels }}
+          {{- mustMerge .Values.workers.labels .Values.labels | toYaml | nindent 8 }}
         {{- end }}
       annotations:
         checksum/metadata-secret: {{ include (print $.Template.BasePath "/secrets/metadata-connection-secret.yaml") . | sha256sum }}
@@ -122,14 +126,11 @@ spec:
           {{- tpl (toYaml $podAnnotations) . | nindent 8 }}
         {{- end }}
     spec:
-      {{- if not $persistence }}
-      subdomain: {{ include "airflow.fullname" . }}-worker{{ if ne .Values.workers.celery.name "default" }}-{{ .Values.workers.celery.name }}{{ end }}
+      {{- if .Values.workers.runtimeClassName }}
+      runtimeClassName: {{ .Values.workers.runtimeClassName }}
       {{- end }}
-      {{- if .Values.workers.celery.runtimeClassName }}
-      runtimeClassName: {{ .Values.workers.celery.runtimeClassName }}
-      {{- end }}
-      {{- if .Values.workers.celery.priorityClassName }}
-      priorityClassName: {{ .Values.workers.celery.priorityClassName }}
+      {{- if .Values.workers.priorityClassName }}
+      priorityClassName: {{ .Values.workers.priorityClassName }}
       {{- end }}
       {{- if $schedulerName }}
       schedulerName: {{ $schedulerName }}
@@ -150,31 +151,26 @@ spec:
         {{- end }}
       tolerations: {{- toYaml $tolerations | nindent 8 }}
       topologySpreadConstraints: {{- toYaml $topologySpreadConstraints | nindent 8 }}
-      {{- if .Values.workers.celery.hostAliases }}
-      hostAliases: {{- toYaml .Values.workers.celery.hostAliases | nindent 8 }}
+      {{- if .Values.workers.hostAliases }}
+      hostAliases: {{- toYaml .Values.workers.hostAliases | nindent 8 }}
       {{- end }}
-      terminationGracePeriodSeconds: {{ .Values.workers.celery.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.workers.terminationGracePeriodSeconds }}
       restartPolicy: Always
-      serviceAccountName: {{ include "worker.celery.serviceAccountName" . }}
-      enableServiceLinks: {{ .Values.enableServiceLinks }}
-      {{- if $securityContext }}
+      serviceAccountName: {{ include "worker.serviceAccountName" . }}
       securityContext: {{ $securityContext | nindent 8 }}
-      {{- end }}
       imagePullSecrets: {{ include "image_pull_secrets" . | nindent 8 }}
       initContainers:
-        {{- if and $persistence .Values.workers.celery.persistence.fixPermissions $securityContextsIds }}
+        {{- if and $persistence .Values.workers.persistence.fixPermissions }}
         - name: volume-permissions
-          resources: {{- toYaml .Values.workers.celery.resources | nindent 12 }}
+          resources: {{- toYaml .Values.workers.resources | nindent 12 }}
           image: {{ template "airflow_image" . }}
           imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
           command:
             - chown
             - -R
-            - "{{ $securityContextsIds }}"
+            - "{{ include "airflowPodSecurityContextsIds" (list . .Values.workers) }}"
             - {{ template "airflow_logs" . }}
-          {{- if $containerSecurityContextPersistence }}
           securityContext: {{ $containerSecurityContextPersistence | nindent 12 }}
-          {{- end }}
           volumeMounts:
             - name: logs
               mountPath: {{ template "airflow_logs" . }}
@@ -182,28 +178,16 @@ spec:
               subPath: {{ .Values.logs.persistence.subPath }}
               {{- end }}
         {{- end }}
-        {{- if .Values.workers.celery.kerberosSidecar.enabled }}
-        - name: worker-kerberos
+        {{- if .Values.workers.kerberosInitContainer.enabled }}
+        - name: kerberos-init
           image: {{ template "airflow_image" . }}
+          securityContext: {{ $containerSecurityContextKerberosInitContainer | nindent 12 }}
+          {{- if $containerLifecycleHooksKerberosInitContainer }}
+          lifecycle: {{- tpl (toYaml $containerLifecycleHooksKerberosInitContainer) . | nindent 12 }}
+          {{- end }}
           imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
-          restartPolicy: Always
-          {{- if $containerSecurityContextKerberosSidecar }}
-          securityContext: {{ $containerSecurityContextKerberosSidecar | nindent 12 }}
-          {{- end }}
-          {{- if $containerLifecycleHooksKerberosSidecar }}
-          lifecycle: {{- tpl (toYaml $containerLifecycleHooksKerberosSidecar) . | nindent 12 }}
-          {{- end }}
-          args: ["kerberos"]
-          resources: {{- toYaml .Values.workers.celery.kerberosSidecar.resources | nindent 12 }}
-          {{- if .Values.workers.celery.kerberosSidecar.startupProbe.enabled }}
-          startupProbe:
-            exec:
-              command: ["klist", "-s"]
-            timeoutSeconds: {{ .Values.workers.celery.kerberosSidecar.startupProbe.timeoutSeconds }}
-            initialDelaySeconds: {{ .Values.workers.celery.kerberosSidecar.startupProbe.initialDelaySeconds }}
-            periodSeconds: {{ .Values.workers.celery.kerberosSidecar.startupProbe.periodSeconds }}
-            failureThreshold: {{ .Values.workers.celery.kerberosSidecar.startupProbe.failureThreshold }}
-          {{- end }}
+          args: ["kerberos", "-o"]
+          resources: {{- toYaml .Values.workers.kerberosInitContainer.resources | nindent 12 }}
           volumeMounts:
             - name: logs
               mountPath: {{ template "airflow_logs" . }}
@@ -223,10 +207,10 @@ spec:
               mountPath: {{ .Values.kerberos.ccacheMountPath | quote }}
               readOnly: false
             {{- if .Values.volumeMounts }}
-              {{- tpl (toYaml .Values.volumeMounts) . | nindent 12 }}
+              {{- toYaml .Values.volumeMounts | nindent 12 }}
             {{- end }}
-            {{- if .Values.workers.celery.extraVolumeMounts }}
-              {{- tpl (toYaml .Values.workers.celery.extraVolumeMounts) . | nindent 12 }}
+            {{- if .Values.workers.extraVolumeMounts }}
+              {{- tpl (toYaml .Values.workers.extraVolumeMounts) . | nindent 12 }}
             {{- end }}
           envFrom: {{- include "custom_airflow_environment_from" . | default "\n  []" | indent 10 }}
           env:
@@ -235,89 +219,85 @@ spec:
             - name: KRB5CCNAME
               value:  {{ include "kerberos_ccache_path" . | quote }}
             {{- include "custom_airflow_environment" . | indent 10 }}
-            {{- include "standard_airflow_environment" . | indent 10 }}
+            {{- include "standard_airflow_environment" (merge (dict "IncludeJwtSecret" false) .) | indent 10 }}
         {{- end }}
-        {{- if .Values.workers.celery.waitForMigrations.enabled }}
+        {{- if .Values.workers.waitForMigrations.enabled }}
         - name: wait-for-airflow-migrations
-          resources: {{- toYaml .Values.workers.celery.resources | nindent 12 }}
+          resources: {{- toYaml .Values.workers.resources | nindent 12 }}
           image: {{ template "airflow_image_for_migrations" . }}
           imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
-          {{- if $containerSecurityContextWaitForMigrations }}
           securityContext: {{ $containerSecurityContextWaitForMigrations | nindent 12 }}
-          {{- end }}
           volumeMounts:
             - name: logs
-              mountPath: {{ template "airflow_logs" . }}
+              mountPath: "/opt/airflow/logs"
               {{- if .Values.logs.persistence.subPath }}
               subPath: {{ .Values.logs.persistence.subPath }}
               {{- end }}
             {{- include "airflow_config_mount" . | nindent 12 }}
             {{- if .Values.volumeMounts }}
-              {{- tpl (toYaml .Values.volumeMounts) . | nindent 12 }}
+              {{- toYaml .Values.volumeMounts | nindent 12 }}
             {{- end }}
-            {{- if .Values.workers.celery.extraVolumeMounts }}
-              {{- tpl (toYaml .Values.workers.celery.extraVolumeMounts) . | nindent 12 }}
+            {{- if .Values.workers.extraVolumeMounts }}
+              {{- tpl (toYaml .Values.workers.extraVolumeMounts) . | nindent 12 }}
             {{- end }}
           args: {{- include "wait-for-migrations-command" . | indent 10 }}
           envFrom: {{- include "custom_airflow_environment_from" . | default "\n  []" | indent 10 }}
           env:
             {{- include "custom_airflow_environment" . | indent 10 }}
-            {{- include "standard_airflow_environment" . | indent 10 }}
-            {{- if .Values.workers.celery.waitForMigrations.env }}
-              {{- tpl (toYaml .Values.workers.celery.waitForMigrations.env) $ | nindent 12 }}
+            {{- include "standard_airflow_environment" (merge (dict "IncludeJwtSecret" false) .) | indent 10 }}
+            {{- if .Values.workers.waitForMigrations.env }}
+              {{- tpl (toYaml .Values.workers.waitForMigrations.env) $ | nindent 12 }}
             {{- end }}
         {{- end }}
         {{- if and .Values.dags.gitSync.enabled (not .Values.dags.persistence.enabled) }}
           {{- include "git_sync_container" (dict "Values" .Values "is_init" "true" "Template" .Template) | nindent 8 }}
         {{- end }}
-        {{- if .Values.workers.celery.extraInitContainers }}
-          {{- tpl (toYaml .Values.workers.celery.extraInitContainers) . | nindent 8 }}
+        {{- if .Values.workers.extraInitContainers }}
+          {{- tpl (toYaml .Values.workers.extraInitContainers) . | nindent 8 }}
         {{- end }}
       containers:
         - name: worker
           image: {{ template "airflow_image" . }}
           imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
-          {{- if $containerSecurityContext }}
           securityContext: {{ $containerSecurityContext | nindent 12 }}
-          {{- end }}
           {{- if $containerLifecycleHooks }}
           lifecycle: {{- tpl (toYaml $containerLifecycleHooks) . | nindent 12 }}
           {{- end }}
-          {{- if .Values.workers.celery.command }}
-          command: {{ tpl (toYaml .Values.workers.celery.command) . | nindent 12 }}
+          {{- if .Values.workers.command }}
+          command: {{ tpl (toYaml .Values.workers.command) . | nindent 12 }}
           {{- end }}
-          {{- if .Values.workers.celery.args }}
-          args: {{ tpl (toYaml .Values.workers.celery.args) . | nindent 12 }}
+          {{- if .Values.workers.args }}
+          args: {{ tpl (toYaml .Values.workers.args) . | nindent 12 }}
           {{- end }}
-          resources: {{- toYaml .Values.workers.celery.resources | nindent 12 }}
-          {{- if .Values.workers.celery.livenessProbe.enabled }}
+          resources: {{- toYaml .Values.workers.resources | nindent 12 }}
+          {{- if .Values.workers.livenessProbe.enabled }}
           livenessProbe:
-            initialDelaySeconds: {{ .Values.workers.celery.livenessProbe.initialDelaySeconds }}
-            timeoutSeconds: {{ .Values.workers.celery.livenessProbe.timeoutSeconds }}
-            failureThreshold: {{ .Values.workers.celery.livenessProbe.failureThreshold }}
-            periodSeconds: {{ .Values.workers.celery.livenessProbe.periodSeconds }}
+            initialDelaySeconds: {{ .Values.workers.livenessProbe.initialDelaySeconds }}
+            timeoutSeconds: {{ .Values.workers.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.workers.livenessProbe.failureThreshold }}
+            periodSeconds: {{ .Values.workers.livenessProbe.periodSeconds }}
             exec:
               command:
-                {{- if .Values.workers.celery.livenessProbe.command }}
-                  {{- toYaml .Values.workers.celery.livenessProbe.command | nindent 16 }}
+                {{- if .Values.workers.livenessProbe.command }}
+                  {{- toYaml .Values.workers.livenessProbe.command | nindent 16 }}
                 {{- else }}
                 - sh
                 - -c
-                - CONNECTION_CHECK_MAX_COUNT=0 exec /entrypoint python -m celery --app {{ include "celery_executor_namespace" . }} inspect ping -d celery@$(python -c 'import socket; print(socket.gethostname())')
+                - CONNECTION_CHECK_MAX_COUNT=0 exec /entrypoint python -m celery --app {{ include "celery_executor_namespace" . }} inspect ping -d celery@$(hostname)
                 {{- end }}
           {{- end }}
           ports:
-            {{- if .Values.workers.celery.extraPorts }}
-              {{- toYaml .Values.workers.celery.extraPorts | nindent 12 }}
+            {{- if .Values.workers.extraPorts }}
+              {{- toYaml .Values.workers.extraPorts | nindent 12 }}
             {{- end }}
             - name: worker-logs
               containerPort: {{ .Values.ports.workerLogs }}
           volumeMounts:
             {{- if .Values.volumeMounts }}
-              {{- tpl (toYaml .Values.volumeMounts) . | nindent 12 }}
+              {{- toYaml .Values.volumeMounts | nindent 12 }}
             {{- end }}
-            {{- if .Values.workers.celery.extraVolumeMounts }}
-              {{- tpl (toYaml .Values.workers.celery.extraVolumeMounts) . | nindent 12 }}
+            {{- if .Values.workers.extraVolumeMounts }}
+              {{- tpl (toYaml .Values.workers.extraVolumeMounts) . | nindent 12 }}
             {{- end }}
             - name: logs
               mountPath: {{ template "airflow_logs" . }}
@@ -336,7 +316,7 @@ spec:
               readOnly: true
             - name: kerberos-ccache
               mountPath: {{ .Values.kerberos.ccacheMountPath | quote }}
-              readOnly: {{ .Values.workers.celery.readonlyKerberosCache }}
+              readOnly: true
             {{- end }}
             {{- if or .Values.dags.persistence.enabled .Values.dags.gitSync.enabled }}
               {{- include "airflow_dags_mount" . | nindent 12 }}
@@ -347,12 +327,9 @@ spec:
             - name: DUMB_INIT_SETSID
               value: "0"
             {{- include "custom_airflow_environment" . | indent 10 }}
-            {{- include "standard_airflow_environment" . | indent 10 }}
-            {{- if $keda }}
-            {{- include "keda_airflow_environment" (merge (dict "UsePgbouncer" .Values.workers.celery.keda.usePgbouncer) .) | indent 10 }}
-            {{- end }}
-            {{- include "container_extra_envs" (list . .Values.workers.celery.env) | indent 10 }}
-            {{- if .Values.workers.celery.kerberosSidecar.enabled }}
+            {{- include "standard_airflow_environment" (merge (dict "IncludeJwtSecret" false) .) | indent 10 }}
+            {{- include "container_extra_envs" (list . .Values.workers.env) | indent 10 }}
+            {{- if .Values.workers.kerberosSidecar.enabled }}
             - name: KRB5_CONFIG
               value:  {{ .Values.kerberos.configPath | quote }}
             - name: KRB5CCNAME
@@ -361,49 +338,47 @@ spec:
         {{- if and .Values.dags.gitSync.enabled (not .Values.dags.persistence.enabled) }}
           {{- include "git_sync_container" . | nindent 8 }}
         {{- end }}
-        {{- if .Values.workers.celery.logGroomerSidecar.enabled }}
+        {{- if .Values.workers.logGroomerSidecar.enabled }}
         - name: worker-log-groomer
           image: {{ template "airflow_image" . }}
           imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
-          {{- if $containerSecurityContextLogGroomerSidecar }}
           securityContext: {{ $containerSecurityContextLogGroomerSidecar | nindent 12 }}
-          {{- end }}
           {{- if $containerLifecycleHooksLogGroomerSidecar }}
           lifecycle: {{- tpl (toYaml $containerLifecycleHooksLogGroomerSidecar) . | nindent 12 }}
           {{- end }}
-          {{- if .Values.workers.celery.logGroomerSidecar.command }}
-          command: {{ tpl (toYaml .Values.workers.celery.logGroomerSidecar.command) . | nindent 12 }}
+          {{- if .Values.workers.logGroomerSidecar.command }}
+          command: {{ tpl (toYaml .Values.workers.logGroomerSidecar.command) . | nindent 12 }}
           {{- end }}
-          {{- if .Values.workers.celery.logGroomerSidecar.args }}
-          args: {{ tpl (toYaml .Values.workers.celery.logGroomerSidecar.args) . | nindent 12 }}
+          {{- if .Values.workers.logGroomerSidecar.args }}
+          args: {{ tpl (toYaml .Values.workers.logGroomerSidecar.args) . | nindent 12 }}
           {{- end }}
           env:
-          {{- if ne .Values.workers.celery.logGroomerSidecar.retentionDays nil }}
+          {{- if ne .Values.workers.logGroomerSidecar.retentionDays nil }}
             - name: AIRFLOW__LOG_RETENTION_DAYS
-              value: "{{ .Values.workers.celery.logGroomerSidecar.retentionDays }}"
+              value: "{{ .Values.workers.logGroomerSidecar.retentionDays }}"
           {{- end }}
-          {{- if ne .Values.workers.celery.logGroomerSidecar.retentionMinutes nil }}
+          {{- if ne .Values.workers.logGroomerSidecar.retentionMinutes nil }}
             - name: AIRFLOW__LOG_RETENTION_MINUTES
-              value: "{{ .Values.workers.celery.logGroomerSidecar.retentionMinutes }}"
+              value: "{{ .Values.workers.logGroomerSidecar.retentionMinutes }}"
           {{- end }}
-          {{- if .Values.workers.celery.logGroomerSidecar.frequencyMinutes }}
+          {{- if .Values.workers.logGroomerSidecar.frequencyMinutes }}
             - name: AIRFLOW__LOG_CLEANUP_FREQUENCY_MINUTES
-              value: "{{ .Values.workers.celery.logGroomerSidecar.frequencyMinutes }}"
+              value: "{{ .Values.workers.logGroomerSidecar.frequencyMinutes }}"
           {{- end }}
-          {{- if .Values.workers.celery.logGroomerSidecar.maxSizeBytes }}
+          {{- if .Values.workers.logGroomerSidecar.maxSizeBytes }}
             - name: AIRFLOW__LOG_MAX_SIZE_BYTES
-              value: "{{ .Values.workers.celery.logGroomerSidecar.maxSizeBytes | int64 }}"
+              value: "{{ .Values.workers.logGroomerSidecar.maxSizeBytes | int64 }}"
           {{- end }}
-          {{- if .Values.workers.celery.logGroomerSidecar.maxSizePercent }}
+          {{- if .Values.workers.logGroomerSidecar.maxSizePercent }}
             - name: AIRFLOW__LOG_MAX_SIZE_PERCENT
-              value: "{{ .Values.workers.celery.logGroomerSidecar.maxSizePercent }}"
+              value: "{{ .Values.workers.logGroomerSidecar.maxSizePercent }}"
           {{- end }}
             - name: AIRFLOW_HOME
               value: "{{ .Values.airflowHome }}"
-          {{- if .Values.workers.celery.logGroomerSidecar.env }}
-              {{- tpl (toYaml .Values.workers.celery.logGroomerSidecar.env) $ | nindent 12 }}
+          {{- if .Values.workers.logGroomerSidecar.env }}
+              {{- tpl (toYaml .Values.workers.logGroomerSidecar.env) $ | nindent 12 }}
           {{- end }}
-          resources: {{- toYaml .Values.workers.celery.logGroomerSidecar.resources | nindent 12 }}
+          resources: {{- toYaml .Values.workers.logGroomerSidecar.resources | nindent 12 }}
           volumeMounts:
             - name: logs
               mountPath: {{ template "airflow_logs" . }}
@@ -411,21 +386,64 @@ spec:
               subPath: {{ .Values.logs.persistence.subPath }}
               {{- end }}
             {{- if .Values.volumeMounts }}
-              {{- tpl (toYaml .Values.volumeMounts) . | nindent 12 }}
+              {{- toYaml .Values.volumeMounts | nindent 12 }}
             {{- end }}
-            {{- if .Values.workers.celery.extraVolumeMounts }}
-              {{- tpl (toYaml .Values.workers.celery.extraVolumeMounts) . | nindent 12 }}
+            {{- if .Values.workers.extraVolumeMounts }}
+              {{- tpl (toYaml .Values.workers.extraVolumeMounts) . | nindent 12 }}
             {{- end }}
         {{- end }}
-        {{- if .Values.workers.celery.extraContainers }}
-          {{- tpl (toYaml .Values.workers.celery.extraContainers) . | nindent 8 }}
+        {{- if .Values.workers.kerberosSidecar.enabled }}
+        - name: worker-kerberos
+          image: {{ template "airflow_image" . }}
+          imagePullPolicy: {{ .Values.images.airflow.pullPolicy }}
+          securityContext: {{ $containerSecurityContextKerberosSidecar | nindent 12 }}
+          {{- if $containerLifecycleHooksKerberosSidecar }}
+          lifecycle: {{- tpl (toYaml $containerLifecycleHooksKerberosSidecar) . | nindent 12 }}
+          {{- end }}
+          args: ["kerberos"]
+          resources: {{- toYaml .Values.workers.kerberosSidecar.resources | nindent 12 }}
+          volumeMounts:
+            - name: logs
+              mountPath: {{ template "airflow_logs" . }}
+              {{- if .Values.logs.persistence.subPath }}
+              subPath: {{ .Values.logs.persistence.subPath }}
+              {{- end }}
+            {{- include "airflow_config_mount" . | nindent 12 }}
+            - name: config
+              mountPath: {{ .Values.kerberos.configPath | quote }}
+              subPath: krb5.conf
+              readOnly: true
+            - name: kerberos-keytab
+              subPath: "kerberos.keytab"
+              mountPath: {{ .Values.kerberos.keytabPath | quote }}
+              readOnly: true
+            - name: kerberos-ccache
+              mountPath: {{ .Values.kerberos.ccacheMountPath | quote }}
+              readOnly: false
+            {{- if .Values.volumeMounts }}
+              {{- toYaml .Values.volumeMounts | nindent 12 }}
+            {{- end }}
+            {{- if .Values.workers.extraVolumeMounts }}
+              {{- tpl (toYaml .Values.workers.extraVolumeMounts) . | nindent 12 }}
+            {{- end }}
+          envFrom: {{- include "custom_airflow_environment_from" . | default "\n  []" | indent 10 }}
+          env:
+            - name: KRB5_CONFIG
+              value:  {{ .Values.kerberos.configPath | quote }}
+            - name: KRB5CCNAME
+              value:  {{ include "kerberos_ccache_path" . | quote }}
+            {{- include "custom_airflow_environment" . | indent 10 }}
+            {{- include "standard_airflow_environment" (merge (dict "IncludeJwtSecret" false) .) | indent 10 }}
+        {{- end }}
+        {{- if .Values.workers.extraContainers }}
+          {{- tpl (toYaml .Values.workers.extraContainers) . | nindent 8 }}
         {{- end }}
       volumes:
         {{- if .Values.volumes }}
-          {{- tpl (toYaml .Values.volumes) . | nindent 8 }}
+          {{- toYaml .Values.volumes | nindent 8 }}
         {{- end }}
-        {{- if .Values.workers.celery.extraVolumes }}
-          {{- tpl (toYaml .Values.workers.celery.extraVolumes) . | nindent 8 }}
+        {{- if .Values.workers.extraVolumes }}
+          {{- tpl (toYaml .Values.workers.extraVolumes) . | nindent 8 }}
         {{- end }}
         - name: config
           configMap:
@@ -456,26 +474,26 @@ spec:
         - name: logs
           emptyDir: {{- toYaml (default (dict) .Values.logs.emptyDirConfig) | nindent 12 }}
   {{- end }}
-  {{- if and $persistence (or (not .Values.logs.persistence.enabled) .Values.workers.celery.volumeClaimTemplates) }}
+  {{- if and $persistence (or (not .Values.logs.persistence.enabled) .Values.workers.volumeClaimTemplates) }}
   volumeClaimTemplates:
     {{- if not .Values.logs.persistence.enabled }}
     - apiVersion: v1
       kind: PersistentVolumeClaim
       metadata:
         name: logs
-        {{- if .Values.workers.celery.persistence.annotations }}
-        annotations: {{- toYaml .Values.workers.celery.persistence.annotations | nindent 10 }}
+        {{- if .Values.workers.persistence.annotations }}
+        annotations: {{- toYaml .Values.workers.persistence.annotations | nindent 10 }}
         {{- end }}
       spec:
-        {{- if .Values.workers.celery.persistence.storageClassName }}
-        storageClassName: {{ tpl .Values.workers.celery.persistence.storageClassName . | quote }}
+        {{- if .Values.workers.persistence.storageClassName }}
+        storageClassName: {{ tpl .Values.workers.persistence.storageClassName . | quote }}
         {{- end }}
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: {{ .Values.workers.celery.persistence.size }}
+            storage: {{ .Values.workers.persistence.size }}
     {{- end }}
-    {{- with .Values.workers.celery.volumeClaimTemplates }}
+    {{- with .Values.workers.volumeClaimTemplates }}
       {{- toYaml . | nindent 4 }}
     {{- end }}
   {{- end }}

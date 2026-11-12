@@ -20,9 +20,7 @@ import { HStack, Text } from "@chakra-ui/react";
 import type { ApiError } from "openapi-gen/requests/core/ApiError";
 import type { HTTPExceptionResponse, HTTPValidationError } from "openapi-gen/requests/types.gen";
 
-import { Alert } from "src/system-components";
-
-import { getApiErrorDetail } from "src/utils";
+import { Alert } from "./ui";
 
 export type ExpandedApiError = {
   body: HTTPExceptionResponse | HTTPValidationError | undefined;
@@ -39,7 +37,18 @@ export const ErrorAlert = ({ error: err }: Props) => {
     return undefined;
   }
 
-  const detailMessage = getApiErrorDetail(error);
+  const details = error.body?.detail;
+  let detailMessage;
+
+  if (details !== undefined) {
+    if (typeof details === "string") {
+      detailMessage = details;
+    } else if (Array.isArray(details)) {
+      detailMessage = details.map((detail) => `${detail.loc.join(".")} ${detail.msg}`);
+    } else {
+      detailMessage = Object.keys(details).map((key) => `${key}: ${details[key] as string}`);
+    }
+  }
 
   return (
     <Alert data-testid="error-alert" status="error">

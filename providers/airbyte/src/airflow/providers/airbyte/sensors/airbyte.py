@@ -45,10 +45,7 @@ class AirbyteJobSensor(BaseSensorOperator):
     :param api_version: Optional. Airbyte API version. Defaults to "v1".
     """
 
-    template_fields: Sequence[str] = (
-        "airbyte_job_id",
-        "airbyte_conn_id",
-    )
+    template_fields: Sequence[str] = ("airbyte_job_id",)
     ui_color = "#6C51FD"
 
     def __init__(
@@ -129,22 +126,15 @@ class AirbyteJobSensor(BaseSensorOperator):
                 )
 
     def execute_complete(self, context: Context, event: Any = None) -> None:
-        """Invoke this callback when the trigger fires and fail unless the job succeeded."""
-        status = event["status"]
+        """
+        Invoke this callback when the trigger fires; return immediately.
 
-        if status == "success":
-            self.log.info("%s completed successfully.", self.task_id)
-            return None
-
-        if status == "error":
+        Relies on trigger to throw an exception, otherwise it assumes execution was
+        successful.
+        """
+        if event["status"] == "error":
             self.log.debug("An error occurred with context: %s", context)
-            raise RuntimeError(event["message"])
+            raise AirflowException(event["message"])
 
-        if status == "cancelled":
-            # A cancelled job must fail the sensor, matching the poke() behavior.
-            self.log.debug("Job was cancelled, context: %s", context)
-            raise RuntimeError(event["message"])
-
-        # Fail closed: a status this sensor does not model must not reach the success path.
-        self.log.debug("Unexpected status %r, context: %s", status, context)
-        raise RuntimeError(event["message"])
+        self.log.info("%s completed successfully.", self.task_id)
+        return None

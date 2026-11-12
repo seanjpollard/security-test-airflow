@@ -38,14 +38,14 @@ from airflow.utils.state import DagRunState, TaskInstanceState
 from airflow.utils.types import DagRunType
 
 from tests_common.test_utils.db import parse_and_sync_to_db
-from tests_common.test_utils.version_compat import (
-    AIRFLOW_V_3_0_PLUS,
-    AIRFLOW_V_3_2_PLUS,
-)
+from tests_common.test_utils.version_compat import AIRFLOW_V_3_0_PLUS, AIRFLOW_V_3_1_PLUS
 
 if AIRFLOW_V_3_0_PLUS:
     from airflow.providers.common.compat.sdk import DagRunTriggerException
-from airflow.providers.common.compat.sdk import timezone
+if AIRFLOW_V_3_1_PLUS:
+    from airflow.sdk import timezone
+else:
+    from airflow.utils import timezone  # type: ignore[attr-defined,no-redef]
 
 pytestmark = pytest.mark.db_test
 
@@ -101,7 +101,7 @@ class TestDagRunOperator:
             if AIRFLOW_V_3_0_PLUS:
                 from airflow.models.dagbundle import DagBundleModel
 
-                session.execute(delete(DagBundleModel).where(DagBundleModel.name == "test_bundle"))
+                session.execute(delete(DagBundleModel))
             session.commit()
 
     @pytest.mark.skipif(not AIRFLOW_V_3_0_PLUS, reason="Implementation is different for Airflow 2 & 3")
@@ -200,35 +200,6 @@ class TestDagRunOperator:
         assert link == expected_url, f"Expected {expected_url}, but got {link}"
 
     @pytest.mark.skipif(not AIRFLOW_V_3_0_PLUS, reason="Implementation is different for Airflow 2 & 3")
-    def test_trigger_dagrun_pushes_extra_link_xcom_before_exception(self):
-        """
-        Eagerly push the "Triggered DAG" extra-link URL so the UI button is available
-        while the task is still running/deferred, not only after finalize() runs.
-        """
-        from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunLink
-        from airflow.utils import helpers
-
-        build_url_fn = getattr(helpers, "build_airflow_dagrun_url", None)
-        if not build_url_fn:
-            pytest.skip("Skipping because build_airflow_dagrun_url is not available in this Airflow version")
-
-        task = TriggerDagRunOperator(
-            task_id="test_task",
-            trigger_dag_id=TRIGGERED_DAG_ID,
-            trigger_run_id="custom_run_id",
-        )
-
-        ti_mock = mock.MagicMock()
-        with pytest.raises(DagRunTriggerException):
-            task.execute(context={"task_instance": ti_mock})
-
-        expected_url = build_url_fn(dag_id=TRIGGERED_DAG_ID, run_id="custom_run_id")
-        ti_mock.xcom_push.assert_called_once_with(
-            key=TriggerDagRunLink().xcom_key,
-            value=expected_url,
-        )
-
-    @pytest.mark.skipif(not AIRFLOW_V_3_0_PLUS, reason="Implementation is different for Airflow 2 & 3")
     def test_trigger_dagrun_custom_run_id(self):
         task = TriggerDagRunOperator(
             task_id="test_task",
@@ -255,15 +226,6 @@ class TestDagRunOperator:
 
         assert exc_info.value.logical_date == timezone.datetime(2021, 1, 2, 3, 4, 5)
 
-    def test_trigger_dagrun_with_invalid_logical_date_type_fails_at_execute_time(self):
-        task = TriggerDagRunOperator(
-            task_id="test_trigger_dagrun_with_invalid_logical_date_type",
-            trigger_dag_id=TRIGGERED_DAG_ID,
-            logical_date=12345,
-        )
-        with pytest.raises(TypeError, match="Expected str, datetime.datetime, or None"):
-            task.execute(context={})
-
     def test_trigger_dagrun_operator_templated_invalid_conf(self, dag_maker):
         """Test passing a conf that is not JSON Serializable raise error."""
         with dag_maker(
@@ -277,7 +239,7 @@ class TestDagRunOperator:
         dag_maker.sync_dagbag_to_db()
         parse_and_sync_to_db(self.f_name)
         dr = dag_maker.create_dagrun()
-        with pytest.raises(ValueError, match="conf parameter should be JSON Serializable: "):
+        with pytest.raises(ValueError, match="conf parameter should be JSON Serializable"):
             dag_maker.run_ti(task.task_id, dr)
 
     def test_trigger_dagrun_with_no_failed_state(self, dag_maker):
@@ -370,13 +332,10 @@ class TestDagRunOperator:
                 {}, {"dag_id": "dag_id", "run_ids": ["run_id_1"], "poll_interval": 15, "run_id_1": "success"}
             )
 
-    @pytest.mark.skipif(
-        not (AIRFLOW_V_3_0_PLUS and not AIRFLOW_V_3_2_PLUS),
-        reason="On Airflow 3.0/3.1 the worker cannot resolve the DAG paused state",
-    )
-    def test_trigger_dag_run_with_fail_when_dag_is_paused_should_fail_below_3_2(self):
+    @pytest.mark.skipif(not AIRFLOW_V_3_0_PLUS, reason="Implementation is different for Airflow 2 & 3")
+    def test_trigger_dag_run_with_fail_when_dag_is_paused_should_fail(self):
         with pytest.raises(
-            NotImplementedError, match="Setting `fail_when_dag_is_paused` requires Airflow 3.2.0"
+            NotImplementedError, match="Setting `fail_when_dag_is_paused` not yet supported for Airflow 3.x"
         ):
             TriggerDagRunOperator(
                 task_id="test_task",
@@ -384,45 +343,6 @@ class TestDagRunOperator:
                 conf={"foo": "bar"},
                 fail_when_dag_is_paused=True,
             )
-
-    @pytest.mark.skipif(
-        not AIRFLOW_V_3_2_PLUS, reason="Needs the task-SDK GetDag endpoint added in Airflow 3.2.0"
-    )
-    def test_trigger_dagrun_fails_when_target_dag_is_paused(self):
-        from airflow.providers.standard.operators.trigger_dagrun import DagIsPaused
-
-        task = TriggerDagRunOperator(
-            task_id="test_task",
-            trigger_dag_id=TRIGGERED_DAG_ID,
-            fail_when_dag_is_paused=True,
-            openlineage_inject_parent_info=False,
-        )
-        mock_ti = mock.MagicMock()
-        mock_ti.get_dag.return_value.is_paused = True
-
-        with pytest.raises(DagIsPaused, match=f"Dag {TRIGGERED_DAG_ID} is paused"):
-            task.execute(context={"ti": mock_ti})
-
-        mock_ti.get_dag.assert_called_once_with(TRIGGERED_DAG_ID)
-
-    @pytest.mark.skipif(
-        not AIRFLOW_V_3_2_PLUS, reason="Needs the task-SDK GetDag endpoint added in Airflow 3.2.0"
-    )
-    def test_trigger_dagrun_proceeds_when_target_dag_is_not_paused(self):
-        task = TriggerDagRunOperator(
-            task_id="test_task",
-            trigger_dag_id=TRIGGERED_DAG_ID,
-            fail_when_dag_is_paused=True,
-            openlineage_inject_parent_info=False,
-        )
-        mock_ti = mock.MagicMock()
-        mock_ti.get_dag.return_value.is_paused = False
-
-        with pytest.raises(DagRunTriggerException) as exc_info:
-            task.execute(context={"ti": mock_ti})
-
-        assert exc_info.value.trigger_dag_id == TRIGGERED_DAG_ID
-        mock_ti.get_dag.assert_called_once_with(TRIGGERED_DAG_ID)
 
     @pytest.mark.skipif(not AIRFLOW_V_3_0_PLUS, reason="Implementation is different for Airflow 2 & 3")
     def test_trigger_dagrun_with_str_conf(self):
@@ -455,7 +375,7 @@ class TestDagRunOperator:
                 conf="{'foo': 'bar', 'key': 123}",
             )
 
-            with pytest.raises(ValueError, match="conf parameter should be JSON Serializable: "):
+            with pytest.raises(ValueError, match="conf parameter should be JSON Serializable"):
                 task.execute(context={})
 
     @pytest.mark.parametrize("original_conf", (None, {}, {"foo": "bar"}))

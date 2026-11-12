@@ -32,13 +32,10 @@ class AirflowMappedTaskRunFacet(RunFacet):
 
     @classmethod
     def from_task_instance(cls, task_instance):
-        from airflow.providers.openlineage.utils.utils import (
-            get_fully_qualified_class_name,
-            get_task_instance_map_index,
-        )
+        from airflow.providers.openlineage.utils.utils import get_fully_qualified_class_name
 
         return cls(
-            mapIndex=get_task_instance_map_index(task_instance),
+            mapIndex=task_instance.map_index,
             operatorClass=get_fully_qualified_class_name(task_instance.task),
         )
 

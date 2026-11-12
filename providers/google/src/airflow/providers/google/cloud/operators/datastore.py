@@ -78,8 +78,6 @@ class CloudDatastoreExportEntitiesOperator(GoogleCloudBaseOperator):
         "entity_filter",
         "labels",
         "impersonation_chain",
-        "datastore_conn_id",
-        "cloud_storage_conn_id",
     )
     operator_extra_links = (StorageLink(),)
 
@@ -184,7 +182,6 @@ class CloudDatastoreImportEntitiesOperator(GoogleCloudBaseOperator):
         "entity_filter",
         "labels",
         "impersonation_chain",
-        "datastore_conn_id",
     )
     operator_extra_links = (CloudDatastoreImportExportLink(),)
 
@@ -270,7 +267,6 @@ class CloudDatastoreAllocateIdsOperator(GoogleCloudBaseOperator):
     template_fields: Sequence[str] = (
         "partial_keys",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (CloudDatastoreEntitiesLink(),)
 
@@ -336,7 +332,6 @@ class CloudDatastoreBeginTransactionOperator(GoogleCloudBaseOperator):
     template_fields: Sequence[str] = (
         "transaction_options",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -394,7 +389,6 @@ class CloudDatastoreCommitOperator(GoogleCloudBaseOperator):
     template_fields: Sequence[str] = (
         "body",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (CloudDatastoreEntitiesLink(),)
 
@@ -460,7 +454,6 @@ class CloudDatastoreRollbackOperator(GoogleCloudBaseOperator):
     template_fields: Sequence[str] = (
         "transaction",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -517,7 +510,6 @@ class CloudDatastoreRunQueryOperator(GoogleCloudBaseOperator):
     template_fields: Sequence[str] = (
         "body",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -574,7 +566,6 @@ class CloudDatastoreGetOperationOperator(GoogleCloudBaseOperator):
     template_fields: Sequence[str] = (
         "name",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(
@@ -626,7 +617,6 @@ class CloudDatastoreDeleteOperationOperator(GoogleCloudBaseOperator):
     template_fields: Sequence[str] = (
         "name",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(

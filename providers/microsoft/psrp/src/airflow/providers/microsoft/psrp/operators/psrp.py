@@ -55,7 +55,9 @@ class PsrpOperator(BaseOperator):
     :param psrp_conn_id: connection id
     :param command: command to execute on remote host. (templated)
     :param powershell: powershell to execute on remote host. (templated)
-    :param cmdlet: cmdlet to execute on remote host (templated).
+    :param cmdlet:
+        cmdlet to execute on remote host (templated). Also used as the default
+        value for `task_id`.
     :param arguments:
         When using the `cmdlet` or `powershell` option, use `arguments` to
         provide arguments (templated).
@@ -104,12 +106,15 @@ class PsrpOperator(BaseOperator):
         psrp_session_init: Command | None = None,
         **kwargs,
     ) -> None:
-        if not exactly_one(command is not None, powershell is not None, cmdlet is not None):
+        args = {command, powershell, cmdlet}
+        if not exactly_one(*args):
             raise ValueError("Must provide exactly one of 'command', 'powershell', or 'cmdlet'")
-        if arguments is not None and powershell is None and cmdlet is None:
+        if arguments and not (powershell or cmdlet):
             raise ValueError("Arguments only allowed with 'powershell' or 'cmdlet'")
-        if parameters is not None and powershell is None and cmdlet is None:
+        if parameters and not (powershell or cmdlet):
             raise ValueError("Parameters only allowed with 'powershell' or 'cmdlet'")
+        if cmdlet:
+            kwargs.setdefault("task_id", cmdlet)
         super().__init__(**kwargs)
         self.conn_id = psrp_conn_id
         self.command = command
@@ -135,10 +140,10 @@ class PsrpOperator(BaseOperator):
         ):
             if self.psrp_session_init is not None:
                 ps.add_command(self.psrp_session_init)
-            if self.command is not None:
+            if self.command:
                 ps.add_script(f"cmd.exe /c @'\n{self.command}\n'@")
             else:
-                if self.cmdlet is not None:
+                if self.cmdlet:
                     ps.add_cmdlet(self.cmdlet)
                 else:
                     ps.add_script(self.powershell)

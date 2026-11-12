@@ -16,59 +16,17 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Button, Flex, Text } from "@chakra-ui/react";
+import { Button, Flex, Link, Text } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
+import { Link as RouterLink } from "react-router-dom";
 
 import type { DagRunAssetReference, DagRunState } from "openapi/requests/types.gen";
-
-import { Popover, RouterLink } from "src/system-components";
-
-import { formatNumber } from "src/utils";
+import { Popover } from "src/components/ui";
 
 import { StateBadge } from "../StateBadge";
 
 type Props = {
   readonly dagRuns?: Array<DagRunAssetReference>;
-};
-
-const DagRunGroup = ({
-  dagRuns,
-  prefix,
-}: {
-  readonly dagRuns: Array<DagRunAssetReference>;
-  readonly prefix: string;
-}) => {
-  const { i18n, t: translate } = useTranslation();
-
-  return dagRuns.length === 1 ? (
-    <Flex flexWrap="wrap" gap={1}>
-      <Text flexShrink={0}>{`${prefix} ${translate("dagRun_one")}`}: </Text>
-      <StateBadge state={dagRuns[0]?.state as DagRunState} />
-      <RouterLink overflowWrap="anywhere" to={`/dags/${dagRuns[0]?.dag_id}/runs/${dagRuns[0]?.run_id}`}>
-        {dagRuns[0]?.dag_id}
-      </RouterLink>
-    </Flex>
-  ) : (
-    // eslint-disable-next-line jsx-a11y/no-autofocus
-    <Popover.Root autoFocus={false} lazyMount unmountOnExit>
-      <Popover.Trigger asChild>
-        <Button variant="outline">
-          {`${formatNumber(dagRuns.length, i18n.language)} ${prefix} ${translate("dagRun_other", { count: dagRuns.length })}`}
-        </Button>
-      </Popover.Trigger>
-      <Popover.Content css={{ "--popover-bg": "colors.bg.emphasized" }} width="fit-content">
-        <Popover.Arrow />
-        <Popover.Body>
-          {dagRuns.map((dagRun) => (
-            <Flex gap={1} key={`${dagRun.dag_id}-${dagRun.run_id}`} my={2}>
-              <StateBadge state={dagRun.state as DagRunState} />
-              <RouterLink to={`/dags/${dagRun.dag_id}/runs/${dagRun.run_id}`}>{dagRun.dag_id}</RouterLink>
-            </Flex>
-          ))}
-        </Popover.Body>
-      </Popover.Content>
-    </Popover.Root>
-  );
 };
 
 export const TriggeredRuns = ({ dagRuns }: Props) => {
@@ -78,19 +36,37 @@ export const TriggeredRuns = ({ dagRuns }: Props) => {
     return undefined;
   }
 
-  // An asset event is linked to every run that consumed it, but only a run's most recent consumed
-  // event triggered it (backend flag). The rest were merely included, so label them accordingly.
-  const triggeredRuns = dagRuns.filter((dagRun) => dagRun.triggering);
-  const includedRuns = dagRuns.filter((dagRun) => !dagRun.triggering);
-
-  return (
-    <Flex direction="column" gap={1}>
-      {triggeredRuns.length > 0 ? (
-        <DagRunGroup dagRuns={triggeredRuns} prefix={translate("triggered")} />
-      ) : undefined}
-      {includedRuns.length > 0 ? (
-        <DagRunGroup dagRuns={includedRuns} prefix={translate("includedIn")} />
-      ) : undefined}
+  return dagRuns.length === 1 ? (
+    <Flex gap={1}>
+      <Text>{`${translate("triggered")} ${translate("dagRun_one")}`}: </Text>
+      <StateBadge state={dagRuns[0]?.state as DagRunState} />
+      <Link asChild color="fg.info">
+        <RouterLink to={`/dags/${dagRuns[0]?.dag_id}/runs/${dagRuns[0]?.run_id}`}>
+          {dagRuns[0]?.dag_id}
+        </RouterLink>
+      </Link>
     </Flex>
+  ) : (
+    // eslint-disable-next-line jsx-a11y/no-autofocus
+    <Popover.Root autoFocus={false} lazyMount unmountOnExit>
+      <Popover.Trigger asChild>
+        <Button size="sm" variant="outline">
+          {`${dagRuns.length} ${translate("triggered")} ${translate("dagRun_other", { count: dagRuns.length })}`}
+        </Button>
+      </Popover.Trigger>
+      <Popover.Content css={{ "--popover-bg": "colors.bg.emphasized" }} width="fit-content">
+        <Popover.Arrow />
+        <Popover.Body>
+          {dagRuns.map((dagRun) => (
+            <Flex gap={1} key={dagRun.dag_id} my={2}>
+              <StateBadge state={dagRun.state as DagRunState} />
+              <Link asChild color="fg.info">
+                <RouterLink to={`/dags/${dagRun.dag_id}/runs/${dagRun.run_id}`}>{dagRun.dag_id}</RouterLink>
+              </Link>
+            </Flex>
+          ))}
+        </Popover.Body>
+      </Popover.Content>
+    </Popover.Root>
   );
 };

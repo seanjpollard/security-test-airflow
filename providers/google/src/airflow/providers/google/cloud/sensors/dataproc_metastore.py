@@ -60,7 +60,6 @@ class MetastoreHivePartitionSensor(BaseSensorOperator):
         "table",
         "partitions",
         "impersonation_chain",
-        "gcp_conn_id",
     )
 
     def __init__(

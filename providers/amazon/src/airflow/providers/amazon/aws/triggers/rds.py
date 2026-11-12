@@ -16,11 +16,15 @@
 # under the License.
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from airflow.providers.amazon.aws.hooks.rds import RdsHook
 from airflow.providers.amazon.aws.triggers.base import AwsBaseWaiterTrigger
 from airflow.providers.amazon.aws.utils.rds import RdsDbType
+
+if TYPE_CHECKING:
+    from airflow.providers.amazon.aws.hooks.base_aws import AwsGenericHook
+
 
 _waiter_arg = {
     RdsDbType.INSTANCE.value: "DBInstanceIdentifier",
@@ -43,13 +47,7 @@ class RdsDbAvailableTrigger(AwsBaseWaiterTrigger):
     :param region_name: AWS region where the DB is located, if different from the default one.
     :param response: The response from the RdsHook, to be passed back to the operator.
     :param db_type: The type of DB: instance or cluster.
-    :param verify: Whether or not to verify SSL certificates.
-        See: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
-    :param botocore_config: Configuration dictionary (key-values) for botocore client. See:
-        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
-
-    aws_hook_class = RdsHook
 
     def __init__(
         self,
@@ -60,8 +58,6 @@ class RdsDbAvailableTrigger(AwsBaseWaiterTrigger):
         response: dict[str, Any],
         db_type: RdsDbType | str,
         region_name: str | None = None,
-        verify: bool | str | None = None,
-        botocore_config: dict | None = None,
     ) -> None:
         # allow passing enums for users,
         # but we can only rely on strings because (de-)serialization doesn't support enums
@@ -87,9 +83,10 @@ class RdsDbAvailableTrigger(AwsBaseWaiterTrigger):
             waiter_max_attempts=waiter_max_attempts,
             aws_conn_id=aws_conn_id,
             region_name=region_name,
-            verify=verify,
-            botocore_config=botocore_config,
         )
+
+    def hook(self) -> AwsGenericHook:
+        return RdsHook(aws_conn_id=self.aws_conn_id, region_name=self.region_name)
 
 
 class RdsDbDeletedTrigger(AwsBaseWaiterTrigger):
@@ -103,13 +100,7 @@ class RdsDbDeletedTrigger(AwsBaseWaiterTrigger):
     :param region_name: AWS region where the DB is located, if different from the default one.
     :param response: The response from the RdsHook, to be passed back to the operator.
     :param db_type: The type of DB: instance or cluster.
-    :param verify: Whether or not to verify SSL certificates.
-        See: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
-    :param botocore_config: Configuration dictionary (key-values) for botocore client. See:
-        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
-
-    aws_hook_class = RdsHook
 
     def __init__(
         self,
@@ -120,8 +111,6 @@ class RdsDbDeletedTrigger(AwsBaseWaiterTrigger):
         response: dict[str, Any],
         db_type: RdsDbType | str,
         region_name: str | None = None,
-        verify: bool | str | None = None,
-        botocore_config: dict | None = None,
     ) -> None:
         # allow passing enums for users,
         # but we can only rely on strings because (de-)serialization doesn't support enums
@@ -147,9 +136,10 @@ class RdsDbDeletedTrigger(AwsBaseWaiterTrigger):
             waiter_max_attempts=waiter_max_attempts,
             aws_conn_id=aws_conn_id,
             region_name=region_name,
-            verify=verify,
-            botocore_config=botocore_config,
         )
+
+    def hook(self) -> AwsGenericHook:
+        return RdsHook(aws_conn_id=self.aws_conn_id, region_name=self.region_name)
 
 
 class RdsDbStoppedTrigger(AwsBaseWaiterTrigger):
@@ -163,13 +153,7 @@ class RdsDbStoppedTrigger(AwsBaseWaiterTrigger):
     :param region_name: AWS region where the DB is located, if different from the default one.
     :param response: The response from the RdsHook, to be passed back to the operator.
     :param db_type: The type of DB: instance or cluster.
-    :param verify: Whether or not to verify SSL certificates.
-        See: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/core/session.html
-    :param botocore_config: Configuration dictionary (key-values) for botocore client. See:
-        https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html
     """
-
-    aws_hook_class = RdsHook
 
     def __init__(
         self,
@@ -180,8 +164,6 @@ class RdsDbStoppedTrigger(AwsBaseWaiterTrigger):
         response: dict[str, Any],
         db_type: RdsDbType | str,
         region_name: str | None = None,
-        verify: bool | str | None = None,
-        botocore_config: dict | None = None,
     ) -> None:
         # allow passing enums for users,
         # but we can only rely on strings because (de-)serialization doesn't support enums
@@ -207,6 +189,7 @@ class RdsDbStoppedTrigger(AwsBaseWaiterTrigger):
             waiter_max_attempts=waiter_max_attempts,
             aws_conn_id=aws_conn_id,
             region_name=region_name,
-            verify=verify,
-            botocore_config=botocore_config,
         )
+
+    def hook(self) -> AwsGenericHook:
+        return RdsHook(aws_conn_id=self.aws_conn_id, region_name=self.region_name)

@@ -1,6 +1,3 @@
-:tocdepth: 4
-
-..
  .. Licensed to the Apache Software Foundation (ASF) under one
     or more contributor license agreements.  See the NOTICE file
     distributed with this work for additional information
@@ -83,6 +80,7 @@ Environment Variables
 * ``broker_url`` in ``[celery]`` section
 * ``flower_basic_auth`` in ``[celery]`` section
 * ``result_backend`` in ``[celery]`` section
+* ``password`` in ``[atlas]`` section
 * ``smtp_password`` in ``[smtp]`` section
 * ``secret_key`` in ``[api]`` section
 

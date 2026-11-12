@@ -28,4 +28,3 @@ class DAGSourceResponse(BaseModel):
     dag_id: str
     version_number: int | None
     dag_display_name: str = Field(validation_alias=AliasPath("dag_model", "dag_display_name"))
-    language: str | None = None

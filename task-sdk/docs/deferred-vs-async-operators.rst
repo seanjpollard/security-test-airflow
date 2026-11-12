@@ -25,20 +25,11 @@ Deferred vs Async Operators
 Airflow 3.2 introduces Python-native async support for tasks, allowing concurrent I/O within a single worker slot.
 This page explains how async operators differ from deferred operators and when to use each.
 
-.. versionchanged:: 3.3.0
-
-   Airflow 3.3 adds a third pattern for long-running tasks: resumable tasks, which use the
-   task state store to checkpoint progress across retries. For guidance on when to use
-   resumable tasks versus deferrable operators, see
-   :ref:`apache-airflow:concepts-resumable-tasks`. For details on the
-   :class:`~airflow.sdk.ResumableJobMixin` for external job crash recovery, see
-   :doc:`resumable-job-mixin`.
-
 Deferred Operators
 ------------------
 
 A deferred operator is an operator that can pause its execution until an external trigger event occurs,
-without holding a worker slot. For more details see :doc:`apache-airflow:authoring-and-scheduling/deferring`.
+without holding a worker slot. For more details see :doc:`airflow:authoring-and-scheduling/deferring`.
 Examples include the HttpOperator in deferrable mode, sensors or operators integrated with triggers.
 
 Key characteristics:
@@ -65,7 +56,7 @@ When to Use Deferred Operators
 Prefer a deferred operator when:
 
 - There is an existing deferrable operator that covers your use case (e.g., HttpOperator deferrable mode).
-- The task waits for a single external event or a limited number of events.
+- The task waits for a single or limited external events.
 - You want to free worker resources while waiting for triggers.
 - You don't need to loop over the same operator multiple times (e.g. multiplexing).
 
@@ -234,7 +225,7 @@ This allows multiple paginated requests to be performed efficiently within a sin
 
        @task
        async def get_users():
-           hook = await KiotaRequestAdapterHook.aget_hook(conn_id="msgraph_default")
+           hook = KiotaRequestAdapterHook.get_hook(conn_id="msgraph_default")
 
            return await hook.paginated_run(url="users")
 
@@ -265,17 +256,17 @@ it is equally important to understand scenarios where one may **not** be appropr
   If your workflow is better suited for deferring but no operator exists yet,
   consider implementing a custom deferred operator rather than defaulting to async.
 
-Comparison with task mapping
-----------------------------
+Comparison with Dynamic Task Mapping
+------------------------------------
 
-Async operators and task mapping solve different problems and have different trade-offs.
+Async operators and Dynamic Task Mapping solve different problems and have different trade-offs.
 
 .. list-table::
    :header-rows: 1
 
    * - Aspect
      - Async ``@task``
-     - Task mapping (deferrable)
+     - Dynamic Task Mapping (deferrable)
    * - Worker slots
      - 1 worker slot (shared event loop)
      - N worker slots (one per mapped task instance)
@@ -292,5 +283,5 @@ Async operators and task mapping solve different problems and have different tra
      - Minimal
      - Scheduler must manage N task instances
 
-For more details about task mapping, see the
-:ref:`task mapping <sdk-dynamic-task-mapping>` page.
+For more details about Dynamic Task Mapping, see the
+:ref:`dynamic task mapping <sdk-dynamic-task-mapping>` page.

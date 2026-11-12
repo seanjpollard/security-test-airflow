@@ -121,7 +121,7 @@ def create_executable_runner(
                 else:
                     _warn_unknown(metadata)
 
-            return result
+            return result  # noqa: F821  # Ruff is not smart enough to know this is always set in _run().
 
     return cast("_ExecutionCallableRunner[P, R]", _ExecutionCallableRunnerImpl)
 

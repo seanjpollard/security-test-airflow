@@ -76,7 +76,7 @@ apache-airflow-providers-samba package
 `Samba <https://www.samba.org/>`__
 
 
-Release: 4.14.1
+Release: 4.12.5
 
 Provider package
 ----------------
@@ -104,8 +104,8 @@ PIP package                                 Version required
 ``smbprotocol``                             ``>=1.5.0``
 ==========================================  ==================
 
-Optional cross provider package dependencies
---------------------------------------------
+Cross provider package dependencies
+-----------------------------------
 
 Those are dependencies that might be needed in order to use all the features of the package.
 You need to install the specified provider distributions in order to use them.
@@ -114,32 +114,15 @@ You can install such cross-provider dependencies when installing from PyPI. For 
 
 .. code-block:: bash
 
-    pip install apache-airflow-providers-samba[google]
+    pip install apache-airflow-providers-samba[common.compat]
 
 
-====================================================================================================  ==========
-Dependent package                                                                                     Extra
-====================================================================================================  ==========
-`apache-airflow-providers-google <https://airflow.apache.org/docs/apache-airflow-providers-google>`_  ``google``
-====================================================================================================  ==========
-
-Optional dependencies
----------------------
-
-These extras install optional third-party libraries that enable additional features of the provider.
-Install them when installing from PyPI. For example:
-
-.. code-block:: bash
-
-    pip install apache-airflow-providers-samba[google]
-
-
-============  =================================================
-Extra         Dependencies
-============  =================================================
-``google``    ``apache-airflow-providers-google``
-``kerberos``  ``krb5>=0.8.0``, ``smbprotocol[kerberos]>=1.5.0``
-============  =================================================
+==================================================================================================================  =================
+Dependent package                                                                                                   Extra
+==================================================================================================================  =================
+`apache-airflow-providers-common-compat <https://airflow.apache.org/docs/apache-airflow-providers-common-compat>`_  ``common.compat``
+`apache-airflow-providers-google <https://airflow.apache.org/docs/apache-airflow-providers-google>`_                ``google``
+==================================================================================================================  =================
 
 Downloading official packages
 -----------------------------
@@ -147,5 +130,5 @@ Downloading official packages
 You can download officially released packages and verify their checksums and signatures from the
 `Official Apache Download site <https://downloads.apache.org/airflow/providers/>`_
 
-* `The apache-airflow-providers-samba 4.14.1 sdist package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_samba-4.14.1.tar.gz>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_samba-4.14.1.tar.gz.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_samba-4.14.1.tar.gz.sha512>`__)
-* `The apache-airflow-providers-samba 4.14.1 wheel package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_samba-4.14.1-py3-none-any.whl>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_samba-4.14.1-py3-none-any.whl.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_samba-4.14.1-py3-none-any.whl.sha512>`__)
+* `The apache-airflow-providers-samba 4.12.5 sdist package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_samba-4.12.5.tar.gz>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_samba-4.12.5.tar.gz.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_samba-4.12.5.tar.gz.sha512>`__)
+* `The apache-airflow-providers-samba 4.12.5 wheel package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_samba-4.12.5-py3-none-any.whl>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_samba-4.12.5-py3-none-any.whl.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_samba-4.12.5-py3-none-any.whl.sha512>`__)

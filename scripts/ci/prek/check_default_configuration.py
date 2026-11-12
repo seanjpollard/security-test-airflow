@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # /// script
-# requires-python = ">=3.11,<3.12"
+# requires-python = ">=3.10,<3.11"
 # dependencies = [
 #   "rich>=13.6.0",
 # ]
@@ -25,13 +25,13 @@ from __future__ import annotations
 
 from common_prek_utils import (
     initialize_breeze_prek,
-    run_command_via_breeze_run,
+    run_command_via_breeze_shell,
     validate_cmd_result,
 )
 
 initialize_breeze_prek(__name__, __file__)
 
-cmd_result = run_command_via_breeze_run(
+cmd_result = run_command_via_breeze_shell(
     ["/opt/airflow/scripts/in_container/run_check_default_configuration.py"],
     backend="sqlite",
 )

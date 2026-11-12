@@ -27,50 +27,6 @@
 Changelog
 ---------
 
-4.3.7
-.....
-
-Misc
-~~~~
-
-* ``Drop support for Python 3.10 (#74157)``
-
-Doc-only
-~~~~~~~~
-
-* ``Update provider READMEs for the Python 3.11 baseline (#74158)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-   * ``[main] Upgrade important CI environment (#73629)``
-
-4.3.6
-.....
-
-Misc
-~~~~
-
-* ``Remove the dead cloudant_fake module (#72457)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-   * ``Revert "[main] Upgrade important CI environment (#73308)" (#73621)``
-   * ``[main] Upgrade important CI environment (#73308)``
-   * ``Adopt flit 4 as the provider distribution build backend (#71186)``
-   * ``Fix inconsistency between generated provider docs and pyproject.toml (#68991)``
-
-4.3.5
-.....
-
-Misc
-~~~~
-
-* ``Add explicit [tool.flit.sdist] sections to flit-based pyproject.tomls (#65861)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-
-
 4.3.4
 .....
 

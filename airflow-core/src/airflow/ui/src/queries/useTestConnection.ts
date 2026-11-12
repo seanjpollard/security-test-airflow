@@ -17,15 +17,11 @@
  * under the License.
  */
 import type { Dispatch, SetStateAction } from "react";
-
 import { useTranslation } from "react-i18next";
 
 import { useConnectionServiceTestConnection } from "openapi/queries";
 import type { ConnectionTestResponse } from "openapi/requests/types.gen";
-
-import { toaster } from "src/system-components";
-
-import { createErrorToaster } from "src/utils";
+import { toaster } from "src/components/ui";
 
 export const useTestConnection = (setConnected: Dispatch<SetStateAction<boolean | undefined>>) => {
   const { t: translate } = useTranslation("admin");
@@ -47,9 +43,8 @@ export const useTestConnection = (setConnected: Dispatch<SetStateAction<boolean 
     }
   };
 
-  const onError = (error: unknown) => {
+  const onError = () => {
     setConnected(false);
-    createErrorToaster(error, { titleKey: "connections.testError.title" }, translate);
   };
 
   return useConnectionServiceTestConnection({

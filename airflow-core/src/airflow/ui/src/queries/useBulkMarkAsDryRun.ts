@@ -16,9 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useMemo } from "react";
-
 import { useQueries } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 import { TaskInstanceService } from "openapi/requests/services.gen";
 import type {
@@ -64,7 +63,6 @@ export const useBulkMarkAsDryRun = (
           dagRunId: ti.dag_run_id,
           mapIndex: ti.map_index,
           requestBody: {
-            ...(ti.region_id === undefined ? {} : { region_id: ti.region_id, region_index: ti.region_index }),
             include_downstream: options.includeDownstream,
             include_future: options.includeFuture,
             include_past: options.includePast,
@@ -79,7 +77,6 @@ export const useBulkMarkAsDryRun = (
         ti.dag_run_id,
         ti.task_id,
         ti.map_index,
-        ti.id,
         {
           include_downstream: options.includeDownstream,
           include_future: options.includeFuture,
@@ -88,7 +85,7 @@ export const useBulkMarkAsDryRun = (
           new_state: targetState,
         },
       ],
-      refetchOnMount: "always",
+      refetchOnMount: "always" as const,
     })),
   });
 
@@ -100,7 +97,7 @@ export const useBulkMarkAsDryRun = (
 
     for (const result of results) {
       for (const ti of result.data?.task_instances ?? []) {
-        const key = ti.id;
+        const key = `${ti.dag_id}:${ti.dag_run_id}:${ti.task_id}:${ti.map_index}`;
 
         if (!seen.has(key)) {
           seen.add(key);

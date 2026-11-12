@@ -17,15 +17,17 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
-from uuid import UUID
+from typing import (
+    Annotated,
+    Any,
+)
 
 from fastapi import Path
 from pydantic import BaseModel, Field
 
+from airflow.executors.workloads import ExecuteTask  # noqa: TCH001
 from airflow.providers.common.compat.sdk import TaskInstanceKey
 from airflow.providers.edge3.models.edge_worker import EdgeWorkerState  # noqa: TCH001
-from airflow.providers.edge3.models.types import ExecuteTypeBody  # noqa: TCH001
 
 
 class WorkerApiDocs:
@@ -40,9 +42,25 @@ class WorkerApiDocs:
         description="For dynamically mapped tasks the mapping number, -1 if the task is not mapped.",
     )
     state = Path(title="Task State", description="State of the assigned task under execution.")
-    task_instance_id_description = (
-        "Attempt UUID of the job; tells apart task instances that share the other key fields."
-    )
+
+
+class JsonRpcRequestBase(BaseModel):
+    """Base JSON RPC request model to define just the method."""
+
+    method: Annotated[
+        str,
+        Field(description="Fully qualified python module method name that is called via JSON RPC."),
+    ]
+
+
+class JsonRpcRequest(JsonRpcRequestBase):
+    """JSON RPC request model."""
+
+    jsonrpc: Annotated[str, Field(description="JSON RPC Version", examples=["2.0"])]
+    params: Annotated[
+        dict[str, Any] | None,
+        Field(description="Dictionary of parameters passed to the method."),
+    ]
 
 
 class EdgeJobBase(BaseModel):
@@ -73,16 +91,13 @@ class EdgeJobFetched(EdgeJobBase):
     """Job that is to be executed on the edge worker."""
 
     command: Annotated[
-        ExecuteTypeBody,
+        ExecuteTask,
         Field(
             title="Command",
             description="Command line to use to execute the job in Airflow",
         ),
     ]
     concurrency_slots: Annotated[int, Field(description="Number of concurrency slots the job requires.")]
-    task_instance_id: UUID | None = Field(
-        default=None, description="Attempt UUID required when reporting this job's state."
-    )
 
     @property
     def identifier(self) -> str:
@@ -110,14 +125,7 @@ class WorkerQueuesBase(BaseModel):
         str | None,
         Field(
             None,
-            description=(
-                "Team name for the experimental ``[core] multi_team`` feature. "
-                "This is a UI/REST API-level hint; the Execution API does not "
-                "currently enforce team-based access boundaries -- see "
-                "``airflow-core/docs/security/workload.rst`` (section: "
-                "'No team-level isolation in Execution API'). Workers without "
-                "team_name behave as default-team workers."
-            ),
+            description="Team name for multi-team setups. If not provided, worker operates without team isolation.",
         ),
     ] = None
 
@@ -126,9 +134,6 @@ class WorkerQueuesBody(WorkerQueuesBase):
     """Queues that a worker supports to run jobs on."""
 
     free_concurrency: Annotated[int, Field(description="Number of free concurrency slots on the worker.")]
-    supports_task_instance_uuid: bool = Field(
-        default=False, description="Whether the worker reports task-instance UUIDs when updating jobs."
-    )
 
 
 class WorkerStateBody(WorkerQueuesBase):
@@ -181,10 +186,6 @@ class PushLogsBody(BaseModel):
 
     log_chunk_time: Annotated[datetime, Field(description="Time of the log chunk at point of sending.")]
     log_chunk_data: Annotated[str, Field(description="Log chunk data as incremental log text.")]
-    task_instance_id: Annotated[
-        UUID | None,
-        Field(description=WorkerApiDocs.task_instance_id_description),
-    ] = None
 
 
 class WorkerRegistrationReturn(BaseModel):

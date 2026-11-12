@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from functools import cached_property
@@ -57,8 +56,6 @@ class MySQLToGCSOperator(BaseSQLToGCSOperator):
         `False`, TIMESTAMP columns will be exported using the MySQL server's
         default timezone.
     """
-
-    template_fields: Sequence[str] = (*BaseSQLToGCSOperator.template_fields, "mysql_conn_id")
 
     ui_color = "#a0e08c"
 

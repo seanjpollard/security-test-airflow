@@ -16,19 +16,15 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Box, Flex, Heading, HStack, Skeleton, Text } from "@chakra-ui/react";
+import { Box, Heading, Flex, Skeleton, Link } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
 import { BiTargetLock } from "react-icons/bi";
+import { Link as RouterLink } from "react-router-dom";
 
 import { type PoolServiceGetPoolsDefaultResponse, useAuthLinksServiceGetAuthMenus } from "openapi/queries";
 import { usePoolServiceGetPools } from "openapi/queries/queries";
 import type { ApiError } from "openapi/requests";
-
-import { RouterLink, Tooltip } from "src/system-components";
-
 import { PoolBar, UNLIMITED_SLOTS } from "src/components/PoolBar";
-import { StateIcon } from "src/components/StateIcon";
-
 import { useAutoRefresh } from "src/utils";
 import { type Slots, slotKeys } from "src/utils/slots";
 
@@ -46,7 +42,7 @@ export const PoolSummary = () => {
       refetchInterval: (query) => {
         const apiError = query.state.error;
 
-        return apiError?.status !== 403 && refetchInterval;
+        return apiError?.status === 403 ? false : refetchInterval;
       },
     },
   );
@@ -75,16 +71,9 @@ export const PoolSummary = () => {
     running_slots: 0,
     scheduled_slots: 0,
   };
-  let deferredSlotsNotCounted = 0;
 
   pools?.forEach((pool) => {
     slotKeys.forEach((slotKey) => {
-      if (slotKey === "deferred_slots" && !pool.include_deferred) {
-        deferredSlotsNotCounted += pool.deferred_slots;
-
-        return;
-      }
-
       const slotValue = pool[slotKey];
 
       if (slotValue === UNLIMITED_SLOTS) {
@@ -109,28 +98,16 @@ export const PoolSummary = () => {
           </Heading>
         </Flex>
         {hasPoolsAccess ? (
-          <RouterLink fontSize="xs" h={4} to="/pools">
-            {translate("managePools")}
-          </RouterLink>
+          <Link asChild color="fg.info" fontSize="xs" h={4}>
+            <RouterLink to="/pools">{translate("managePools")}</RouterLink>
+          </Link>
         ) : undefined}
       </Flex>
 
       {isLoading ? (
         <Skeleton borderRadius="full" h={8} w="100%" />
       ) : (
-        <>
-          <PoolBar pool={aggregatePool} poolsWithSlotType={poolsWithSlotType} totalSlots={totalSlots} />
-          {deferredSlotsNotCounted > 0 ? (
-            <Tooltip content={translate("deferredSlotsNotCountedTooltip")}>
-              <HStack gap={1} mt={1} w="fit-content">
-                <StateIcon size={12} state="deferred" />
-                <Text color="fg.muted" fontSize="xs" fontWeight="medium">
-                  {translate("deferredSlotsNotCounted", { count: deferredSlotsNotCounted })}
-                </Text>
-              </HStack>
-            </Tooltip>
-          ) : undefined}
-        </>
+        <PoolBar pool={aggregatePool} poolsWithSlotType={poolsWithSlotType} totalSlots={totalSlots} />
       )}
     </Box>
   );

@@ -16,17 +16,15 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { VStack } from "@chakra-ui/react";
 import { useParams } from "react-router-dom";
 
 import { FilterBar } from "src/components/FilterBar";
-
 import { SearchParamsKeys } from "src/constants/searchParams";
-import { useConfig } from "src/queries/useConfig";
 import { useFiltersHandler, type FilterableSearchParamsKeys } from "src/utils";
 
 export const XComFilters = () => {
   const { dagId = "~", mapIndex = "-1", runId = "~", taskId = "~" } = useParams();
-  const multiTeamEnabled = Boolean(useConfig("multi_team"));
 
   const searchParamKeys: Array<FilterableSearchParamsKeys> = [
     SearchParamsKeys.KEY_PATTERN,
@@ -36,10 +34,6 @@ export const XComFilters = () => {
 
   if (dagId === "~") {
     searchParamKeys.push(SearchParamsKeys.DAG_DISPLAY_NAME_PATTERN);
-
-    if (multiTeamEnabled) {
-      searchParamKeys.push(SearchParamsKeys.TEAMS);
-    }
   }
 
   if (runId === "~") {
@@ -57,6 +51,12 @@ export const XComFilters = () => {
   const { filterConfigs, handleFiltersChange, initialValues } = useFiltersHandler(searchParamKeys);
 
   return (
-    <FilterBar configs={filterConfigs} initialValues={initialValues} onFiltersChange={handleFiltersChange} />
+    <VStack align="start" gap={4} paddingY="4px">
+      <FilterBar
+        configs={filterConfigs}
+        initialValues={initialValues}
+        onFiltersChange={handleFiltersChange}
+      />
+    </VStack>
   );
 };

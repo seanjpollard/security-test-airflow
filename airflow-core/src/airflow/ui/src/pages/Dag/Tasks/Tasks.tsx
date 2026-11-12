@@ -16,24 +16,20 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { Box, Link } from "@chakra-ui/react";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useParams, useSearchParams } from "react-router-dom";
+import { Link as RouterLink } from "react-router-dom";
 
 import { useTaskServiceGetTasks } from "openapi/queries";
 import type { TaskResponse } from "openapi/requests/types.gen";
-
-import { RouterLink } from "src/system-components";
-
-import { TaskFilters } from "src/pages/Dag/Tasks/TaskFilters/TaskFilters.tsx";
-
 import { DataTable } from "src/components/DataTable";
-import type { DataTableFeatures } from "src/components/DataTable/features";
 import { ErrorAlert } from "src/components/ErrorAlert";
 import { TruncatedText } from "src/components/TruncatedText";
-
 import { SearchParamsKeys } from "src/constants/searchParams.ts";
+import { TaskFilters } from "src/pages/Dag/Tasks/TaskFilters/TaskFilters.tsx";
 
 type TaskRow = { row: { original: TaskResponse } };
 
@@ -43,13 +39,15 @@ const createColumns = ({
 }: {
   dagId: string;
   translate: TFunction;
-}): Array<ColumnDef<DataTableFeatures, TaskResponse>> => [
+}): Array<ColumnDef<TaskResponse>> => [
   {
     accessorKey: "task_display_name",
     cell: ({ row: { original } }: TaskRow) => (
-      <RouterLink fontWeight="bold" to={`/dags/${dagId}/tasks/${original.task_id}`}>
-        <TruncatedText text={original.task_display_name ?? original.task_id ?? ""} />
-      </RouterLink>
+      <Link asChild color="fg.info" fontWeight="bold">
+        <RouterLink to={`/dags/${dagId}/tasks/${original.task_id}`}>
+          <TruncatedText text={original.task_display_name ?? original.task_id ?? ""} />
+        </RouterLink>
+      </Link>
     ),
     enableSorting: false,
     header: translate("common:taskId"),
@@ -93,6 +91,7 @@ export const Tasks = () => {
   const {
     data,
     error: tasksError,
+    isFetching,
     isLoading,
   } = useTaskServiceGetTasks({
     dagId,
@@ -129,18 +128,20 @@ export const Tasks = () => {
   });
 
   return (
-    <>
+    <Box>
       <ErrorAlert error={tasksError} />
+
+      <TaskFilters tasksData={data} />
 
       <DataTable
         columns={columns}
         data={filteredTasks}
         displayMode="card"
-        filterActions={<TaskFilters tasksData={data} />}
+        isFetching={isFetching}
         isLoading={isLoading}
         modelName="common:task"
-        total={filteredTasks.length}
+        total={data ? data.total_entries : 0}
       />
-    </>
+    </Box>
   );
 };

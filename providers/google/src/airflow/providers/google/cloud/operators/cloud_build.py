@@ -190,6 +190,8 @@ class CloudBuildCreateBuildOperator(GoogleCloudBaseOperator):
     ) -> None:
         super().__init__(**kwargs)
         self.build = build
+        # Not template fields to keep original value
+        self.build_raw = build
         self.project_id = project_id
         self.wait = wait
         self.retry = retry
@@ -203,14 +205,12 @@ class CloudBuildCreateBuildOperator(GoogleCloudBaseOperator):
 
     def prepare_template(self) -> None:
         # if no file is specified, skip
-        if not isinstance(self.build, str):
+        if not isinstance(self.build_raw, str):
             return
-        # Keep the path in a local: the branches below replace self.build with a dict.
-        build_path = self.build
-        with open(build_path) as file:
-            if build_path.endswith((".yaml", ".yml")):
+        with open(self.build_raw) as file:
+            if self.build_raw.endswith((".yaml", ".yml")):
                 self.build = yaml.safe_load(file.read())
-            if build_path.endswith(".json"):
+            if self.build_raw.endswith(".json"):
                 self.build = json.loads(file.read())
 
     @property

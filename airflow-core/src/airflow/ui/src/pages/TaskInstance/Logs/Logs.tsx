@@ -16,27 +16,17 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { Box, Heading } from "@chakra-ui/react";
 import { useState } from "react";
-
-import { Box, Button, Heading } from "@chakra-ui/react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { useTranslation } from "react-i18next";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useLocalStorage } from "usehooks-ts";
 
-import { Alert, Modal } from "src/system-components";
-
-import { TaskTrySelect } from "src/components/TaskTrySelect";
-
-import {
-  LOG_SHOW_LOG_LEVEL_KEY,
-  LOG_SHOW_SOURCE_KEY,
-  LOG_SHOW_TIMESTAMP_KEY,
-  LOG_WRAP_KEY,
-} from "src/constants/localStorage";
+import { useTaskInstanceServiceGetMappedTaskInstance } from "openapi/queries";
+import { Dialog } from "src/components/ui";
+import { LOG_SHOW_SOURCE_KEY, LOG_SHOW_TIMESTAMP_KEY, LOG_WRAP_KEY } from "src/constants/localStorage";
 import { SearchParamsKeys } from "src/constants/searchParams";
-import { SHORTCUTS } from "src/context/keyboardShortcuts";
-import { useShortcut } from "src/hooks/useShortcut";
-import { useTaskInstanceView } from "src/hooks/useTaskInstanceView";
 import { useConfig } from "src/queries/useConfig";
 import { useLogs } from "src/queries/useLogs";
 
@@ -46,19 +36,34 @@ import { TaskLogHeader, type TaskLogHeaderProps } from "./TaskLogHeader";
 import { getDownloadText } from "./utils";
 
 export const Logs = () => {
-  const { dagId = "", taskId = "" } = useParams();
+  const { dagId = "", mapIndex = "-1", runId = "", taskId = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { error, historical, isLoading, taskInstance } = useTaskInstanceView();
   const { t: translate } = useTranslation("dag");
 
   const tryNumberParam = searchParams.get(SearchParamsKeys.TRY_NUMBER);
   const logLevelFilters = searchParams.getAll(SearchParamsKeys.LOG_LEVEL);
   const sourceFilters = searchParams.getAll(SearchParamsKeys.SOURCE);
+  const parsedMapIndex = parseInt(mapIndex, 10);
 
-  const defaultTryNumber = taskInstance?.try_number;
+  const {
+    data: taskInstance,
+    error,
+    isLoading,
+  } = useTaskInstanceServiceGetMappedTaskInstance(
+    {
+      dagId,
+      dagRunId: runId,
+      mapIndex: parsedMapIndex,
+      taskId,
+    },
+    undefined,
+    {
+      enabled: !isNaN(parsedMapIndex),
+    },
+  );
 
   const onSelectTryNumber = (newTryNumber: number) => {
-    if (newTryNumber === defaultTryNumber && !historical) {
+    if (newTryNumber === taskInstance?.try_number) {
       searchParams.delete(SearchParamsKeys.TRY_NUMBER);
     } else {
       searchParams.set(SearchParamsKeys.TRY_NUMBER, newTryNumber.toString());
@@ -66,20 +71,13 @@ export const Logs = () => {
     setSearchParams(searchParams);
   };
 
-  const tryNumber = tryNumberParam === null ? defaultTryNumber : parseInt(tryNumberParam, 10);
-
-  const isPendingTry =
-    !historical &&
-    taskInstance !== undefined &&
-    tryNumber === taskInstance.try_number &&
-    (taskInstance.state === null || taskInstance.state === "up_for_retry");
+  const tryNumber = tryNumberParam === null ? taskInstance?.try_number : parseInt(tryNumberParam, 10);
 
   const defaultWrap = Boolean(useConfig("default_wrap"));
 
   const [wrap, setWrap] = useLocalStorage<boolean>(LOG_WRAP_KEY, defaultWrap);
   const [showTimestamp, setShowTimestamp] = useLocalStorage<boolean>(LOG_SHOW_TIMESTAMP_KEY, true);
   const [showSource, setShowSource] = useLocalStorage<boolean>(LOG_SHOW_SOURCE_KEY, false);
-  const [showLogLevel, setShowLogLevel] = useLocalStorage<boolean>(LOG_SHOW_LOG_LEVEL_KEY, true);
   const [fullscreen, setFullscreen] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
@@ -88,25 +86,19 @@ export const Logs = () => {
     fetchedData,
     isLoading: isLoadingLogs,
     parsedData,
-  } = useLogs(
-    {
-      dagId,
-      historical,
-      logLevelFilters,
-      showLogLevel,
-      showSource,
-      showTimestamp,
-      sourceFilters,
-      taskInstance,
-      tryNumber,
-    },
-    { enabled: Boolean(taskInstance) && !isPendingTry },
-  );
+  } = useLogs({
+    dagId,
+    logLevelFilters,
+    showSource,
+    showTimestamp,
+    sourceFilters,
+    taskInstance,
+    tryNumber,
+  });
 
   const downloadTextLines = getDownloadText({
     fetchedData,
     logLevelFilters,
-    showLogLevel,
     showSource,
     showTimestamp,
     sourceFilters,
@@ -156,7 +148,7 @@ export const Logs = () => {
     const element = document.createElement("a");
 
     element.href = URL.createObjectURL(new Blob([logContent], { type: "text/plain" }));
-    element.download = `logs_${taskInstance?.dag_id}_${taskInstance?.dag_run_id}_${taskInstance?.task_id}_${taskInstance?.map_index}_${tryNumber}.txt`;
+    element.download = `logs_${taskInstance?.dag_id}_${taskInstance?.dag_run_id}_${taskInstance?.task_id}_${taskInstance?.map_index}_${taskInstance?.try_number}.txt`;
     document.body.append(element);
     element.click();
     element.remove();
@@ -164,46 +156,16 @@ export const Logs = () => {
 
   const toggleWrap = () => setWrap(!wrap);
   const toggleTimestamp = () => setShowTimestamp(!showTimestamp);
-  const toggleLogLevel = () => setShowLogLevel(!showLogLevel);
   const toggleSource = () => setShowSource(!showSource);
   const toggleFullscreen = () => setFullscreen(!fullscreen);
   const toggleExpanded = () => setExpanded((act) => !act);
 
-  useShortcut({
-    ...SHORTCUTS.logs.toggleWrap,
-    callback: toggleWrap,
-    options: { enabled: !isPendingTry },
-  });
-  useShortcut({
-    ...SHORTCUTS.logs.toggleFullscreen,
-    callback: toggleFullscreen,
-    options: { enabled: !isPendingTry },
-  });
-  useShortcut({
-    ...SHORTCUTS.logs.toggleExpand,
-    callback: toggleExpanded,
-    options: { enabled: !isPendingTry },
-  });
-  useShortcut({
-    ...SHORTCUTS.logs.toggleTimestamp,
-    callback: toggleTimestamp,
-    options: { enabled: !isPendingTry },
-  });
-  useShortcut({
-    ...SHORTCUTS.logs.toggleLogLevel,
-    callback: toggleLogLevel,
-    options: { enabled: !isPendingTry },
-  });
-  useShortcut({
-    ...SHORTCUTS.logs.toggleSource,
-    callback: toggleSource,
-    options: { enabled: !isPendingTry },
-  });
-  useShortcut({
-    ...SHORTCUTS.logs.downloadLogs,
-    callback: downloadLogs,
-    options: { enabled: !isPendingTry },
-  });
+  useHotkeys("w", toggleWrap);
+  useHotkeys("f", toggleFullscreen);
+  useHotkeys("e", toggleExpanded);
+  useHotkeys("t", toggleTimestamp);
+  useHotkeys("s", toggleSource);
+  useHotkeys("d", downloadLogs);
 
   const onOpenChange = () => {
     setFullscreen(false);
@@ -225,14 +187,12 @@ export const Logs = () => {
       searchQuery,
       totalMatches: searchMatchIndices.length,
     },
-    showLogLevel,
     showSource,
     showTimestamp,
     sourceOptions: parsedData.sources,
     taskInstance,
     toggleExpanded,
     toggleFullscreen,
-    toggleLogLevel,
     toggleSource,
     toggleTimestamp,
     toggleWrap,
@@ -252,37 +212,6 @@ export const Logs = () => {
     wrap,
   };
 
-  if (isPendingTry) {
-    const isRetry = taskInstance.state === "up_for_retry";
-
-    return (
-      <Box p={2}>
-        {taskInstance.try_number > 1 ? (
-          <TaskTrySelect
-            onSelectTryNumber={onSelectTryNumber}
-            selectedTryNumber={tryNumber}
-            taskInstance={taskInstance}
-          />
-        ) : undefined}
-        <Alert
-          status="info"
-          title={translate(isRetry ? "logs.waitingToRetry" : "logs.tryNotStarted", { tryNumber })}
-        >
-          {isRetry ? translate("logs.tryNotStarted") : undefined}
-          {taskInstance.try_number > 1 ? (
-            <Box mt={3}>
-              <Button onClick={() => onSelectTryNumber(taskInstance.try_number - 1)} variant="outline">
-                {translate(isRetry ? "logs.viewFailedTry" : "logs.viewPreviousTry", {
-                  tryNumber: taskInstance.try_number - 1,
-                })}
-              </Button>
-            </Box>
-          ) : undefined}
-        </Alert>
-      </Box>
-    );
-  }
-
   return (
     <Box display="flex" flexDirection="column" h="100%" p={2}>
       <TaskLogHeader {...logHeaderProps} />
@@ -298,26 +227,26 @@ export const Logs = () => {
         )
       ) : undefined}
       <TaskLogContent {...logContentProps} />
-      <Modal
-        bodyProps={{ display: "flex", flexDirection: "column" }}
-        headerProps={{
-          children: (
-            <Box display="flex" flexDirection="column" width="100%">
-              <Heading mb={2} size="xl">
-                {taskId}
-              </Heading>
-              <TaskLogHeader {...logHeaderProps} isFullscreen />
-            </Box>
-          ),
-          width: "100%",
-        }}
-        onOpenChange={onOpenChange}
-        open={fullscreen}
-        scrollBehavior="inside"
-        size="full"
-      >
-        <TaskLogContent {...logContentProps} />
-      </Modal>
+      <Dialog.Root onOpenChange={onOpenChange} open={fullscreen} scrollBehavior="inside" size="full">
+        {fullscreen ? (
+          <Dialog.Content backdrop>
+            <Dialog.Header width="100%">
+              <Box display="flex" flexDirection="column" width="100%">
+                <Heading mb={2} size="xl">
+                  {taskId}
+                </Heading>
+                <TaskLogHeader {...logHeaderProps} isFullscreen />
+              </Box>
+            </Dialog.Header>
+
+            <Dialog.CloseTrigger />
+
+            <Dialog.Body display="flex" flexDirection="column">
+              <TaskLogContent {...logContentProps} />
+            </Dialog.Body>
+          </Dialog.Content>
+        ) : undefined}
+      </Dialog.Root>
     </Box>
   );
 };

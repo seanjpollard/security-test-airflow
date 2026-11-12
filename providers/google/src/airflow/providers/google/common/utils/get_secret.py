@@ -28,5 +28,4 @@ def get_secret(secret_id: str) -> str:
     hook = GoogleCloudSecretManagerHook()
     if hook.secret_exists(secret_id=secret_id):
         return hook.access_secret(secret_id=secret_id).payload.data.decode()
-    msg = f"The secret '{secret_id}' not found"
-    raise NotFound(msg)
+    raise NotFound("The secret '%s' not found", secret_id)

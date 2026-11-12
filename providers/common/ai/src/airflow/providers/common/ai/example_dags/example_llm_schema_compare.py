@@ -18,15 +18,13 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from airflow.providers.common.ai.operators.llm_schema_compare import LLMSchemaCompareOperator
 from airflow.providers.common.compat.sdk import dag, task
 from airflow.providers.common.sql.config import DataSourceConfig
 
 
 # [START howto_operator_llm_schema_compare_basic]
-@dag(tags=["example"])
+@dag
 def example_llm_schema_compare_basic():
     LLMSchemaCompareOperator(
         task_id="detect_schema_drift",
@@ -42,9 +40,9 @@ def example_llm_schema_compare_basic():
 example_llm_schema_compare_basic()
 
 
-# [START howto_operator_llm_schema_compare_basic_context]
-@dag(tags=["example"])
-def example_llm_schema_compare_basic_context():
+# [START howto_operator_llm_schema_compare_full]
+@dag
+def example_llm_schema_compare_full_context():
     LLMSchemaCompareOperator(
         task_id="detect_schema_drift",
         prompt=(
@@ -54,17 +52,17 @@ def example_llm_schema_compare_basic_context():
         llm_conn_id="pydanticai_default",
         db_conn_ids=["postgres_source", "snowflake_target"],
         table_names=["customers", "orders"],
-        context_strategy="basic",
+        context_strategy="full",
     )
 
 
-# [END howto_operator_llm_schema_compare_basic_context]
+# [END howto_operator_llm_schema_compare_full]
 
-example_llm_schema_compare_basic_context()
+example_llm_schema_compare_full_context()
 
 
 # [START howto_operator_llm_schema_compare_datasource]
-@dag(tags=["example"])
+@dag
 def example_llm_schema_compare_with_object_storage():
     s3_source = DataSourceConfig(
         conn_id="aws_default",
@@ -72,17 +70,14 @@ def example_llm_schema_compare_with_object_storage():
         uri="s3://data-lake/customers/",
         format="parquet",
     )
-    # snowflake_default resolves to a DbApiHook, so no uri/format is needed;
-    # a plain database table can be listed alongside object-storage sources.
-    snowflake_source = DataSourceConfig(conn_id="snowflake_default", table_name="customers")
 
     LLMSchemaCompareOperator(
         task_id="compare_s3_vs_db",
-        prompt="Compare S3 Parquet schema against the Postgres and Snowflake tables and flag breaking changes",
+        prompt="Compare S3 Parquet schema against the Postgres table and flag breaking changes",
         llm_conn_id="pydanticai_default",
         db_conn_ids=["postgres_default"],
         table_names=["customers"],
-        data_sources=[s3_source, snowflake_source],
+        data_sources=[s3_source],
     )
 
 
@@ -92,7 +87,7 @@ example_llm_schema_compare_with_object_storage()
 
 
 # [START howto_decorator_llm_schema_compare]
-@dag(tags=["example"])
+@dag
 def example_llm_schema_compare_decorator():
     @task.llm_schema_compare(
         llm_conn_id="pydanticai_default",
@@ -110,27 +105,8 @@ def example_llm_schema_compare_decorator():
 example_llm_schema_compare_decorator()
 
 
-# [START howto_operator_llm_schema_compare_approval]
-@dag(tags=["example"])
-def example_llm_schema_compare_approval():
-    LLMSchemaCompareOperator(
-        task_id="detect_schema_drift_with_approval",
-        prompt="Identify schema mismatches that would break data loading between systems",
-        llm_conn_id="pydanticai_default",
-        db_conn_ids=["postgres_source", "snowflake_target"],
-        table_names=["customers"],
-        require_approval=True,
-        approval_timeout=timedelta(hours=1),
-    )
-
-
-# [END howto_operator_llm_schema_compare_approval]
-
-example_llm_schema_compare_approval()
-
-
 # [START howto_operator_llm_schema_compare_conditional]
-@dag(tags=["example"])
+@dag
 def example_llm_schema_compare_conditional():
     @task.llm_schema_compare(
         llm_conn_id="pydanticai_default",

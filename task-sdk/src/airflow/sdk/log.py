@@ -17,8 +17,6 @@
 # under the License.
 from __future__ import annotations
 
-import sys
-from contextlib import suppress
 from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO, TextIO
@@ -34,11 +32,10 @@ if TYPE_CHECKING:
     from structlog.typing import EventDict, FilteringBoundLogger, Processor
 
     from airflow.sdk._shared.logging.remote import RemoteLogIO
-    from airflow.sdk.execution_time.comms import CommsDecoder, ToSupervisor, ToTask
     from airflow.sdk.types import Logger, RuntimeTaskInstanceProtocol as RuntimeTI
 
 
-from airflow.sdk._shared.secrets_masker import _secrets_masker, redact
+from airflow.sdk._shared.secrets_masker import redact
 
 
 class _ActiveLoggingConfig:
@@ -76,7 +73,7 @@ def logging_processors(
     if mask_secrets:
         extra_processors += (mask_logs,)
 
-    if (remote := load_remote_log_handler()) and (remote_processors := getattr(remote, "processors", None)):
+    if (remote := load_remote_log_handler()) and (remote_processors := getattr(remote, "processors")):
         extra_processors += remote_processors
 
     procs, _, final_writer = structlog_processors(
@@ -121,6 +118,9 @@ def configure_logging(
     if mask_secrets:
         extra_processors += (mask_logs,)
 
+    if (remote := load_remote_log_handler()) and (remote_processors := getattr(remote, "processors")):
+        extra_processors += remote_processors
+
     configure_logging(
         json_output=json_output,
         log_level=log_level,
@@ -132,16 +132,6 @@ def configure_logging(
         extra_processors=extra_processors,
         callsite_parameters=callsite_params,
     )
-
-    # Build the remote handler after dictConfig(), which closes every previously registered handler.
-    if (
-        not sending_to_supervisor
-        and (remote := load_remote_log_handler())
-        and (remote_processors := getattr(remote, "processors", None))
-    ):
-        current_processors = list(structlog.get_config()["processors"])
-        updated_processors = current_processors[:-1] + list(remote_processors) + [current_processors[-1]]
-        structlog.configure(processors=updated_processors)
 
 
 def logger_at_level(name: str, level: int) -> Logger:
@@ -182,21 +172,17 @@ def init_log_file(local_relative_path: str) -> Path:
 
 
 def _load_logging_config() -> None:
-    """
-    Load and cache the remote logging configuration from SDK config.
-
-    SDK mirror of :func:`airflow.logging_config.load_logging_config` — see that
-    function for the ``logging_config_class`` / ``REMOTE_TASK_LOG`` contract.
-    """
-    from airflow.sdk._shared.logging.factory import resolve_remote_task_log
+    """Load and cache the remote logging configuration from SDK config."""
+    from airflow.sdk._shared.logging.remote import discover_remote_log_handler
     from airflow.sdk._shared.module_loading import import_string
     from airflow.sdk.configuration import conf
-    from airflow.sdk.providers_manager_runtime import ProvidersManagerTaskRuntime
 
-    remote_task_log, default_remote_conn_id = resolve_remote_task_log(
-        conf=conf,
-        providers_manager=ProvidersManagerTaskRuntime(),
-        import_string=import_string,
+    fallback = "airflow.config_templates.airflow_local_settings.DEFAULT_LOGGING_CONFIG"
+    logging_class_path = conf.get("logging", "logging_config_class", fallback=fallback)
+
+    # Load remote logging configuration using shared discovery logic
+    remote_task_log, default_remote_conn_id = discover_remote_log_handler(
+        logging_class_path, fallback, import_string
     )
     _ActiveLoggingConfig.set(remote_task_log, default_remote_conn_id)
 
@@ -235,14 +221,10 @@ def relative_path_from_logger(logger) -> Path | None:
     from airflow.sdk.configuration import conf
 
     base_log_folder = conf.get("logging", "base_log_folder")
-    path = Path(fname)
-    if not path.is_relative_to(base_log_folder):
-        # Files outside base_log_folder (or non-file names like '<stderr>') are kept local, not uploaded.
-        return None
-    return path.relative_to(base_log_folder)
+    return Path(fname).relative_to(base_log_folder)
 
 
-def upload_to_remote(logger: FilteringBoundLogger, ti: RuntimeTI | None = None):
+def upload_to_remote(logger: FilteringBoundLogger, ti: RuntimeTI):
     raw_logger = getattr(logger, "_logger")
 
     handler = load_remote_log_handler()
@@ -260,18 +242,6 @@ def upload_to_remote(logger: FilteringBoundLogger, ti: RuntimeTI | None = None):
     handler.upload(log_relative_path, ti)
 
 
-def _supervisor_comms() -> CommsDecoder[ToTask, ToSupervisor] | None:
-    """
-    Return the supervisor comms channel if this is a task execution context, else None.
-
-    Every process that sets ``SUPERVISOR_COMMS`` has already imported ``task_runner``, so it is read
-    from ``sys.modules`` rather than imported: importing it here would load the whole task runtime
-    into every other process (CLI, scheduler, API server) that masks a config value at startup.
-    """
-    task_runner = sys.modules.get("airflow.sdk.execution_time.task_runner")
-    return getattr(task_runner, "SUPERVISOR_COMMS", None)
-
-
 def mask_secret(secret: JsonValue, name: str | None = None) -> None:
     """
     Mask a secret in both task process and supervisor process.
@@ -280,32 +250,19 @@ def mask_secret(secret: JsonValue, name: str | None = None) -> None:
     they're masked in both the task subprocess AND supervisor's log output.
     Works safely in both sync and async contexts.
     """
+    from contextlib import suppress
+
+    from airflow.sdk._shared.secrets_masker import _secrets_masker
+
     _secrets_masker().add_mask(secret, name)
 
-    if comms := _supervisor_comms():
-        with suppress(Exception):
-            # Imported here because comms (and the msgspec/pydantic models it pulls in) is only
-            # loaded in task execution, where task_runner has already imported it.
-            from airflow.sdk.execution_time.comms import MaskSecret
+    with suppress(Exception):
+        # Try to tell supervisor (only if in task execution context)
+        from airflow.sdk.execution_time import task_runner
+        from airflow.sdk.execution_time.comms import MaskSecret
 
+        if comms := getattr(task_runner, "SUPERVISOR_COMMS", None):
             comms.send(MaskSecret(value=secret, name=name))
-
-
-async def amask_secret(secret: JsonValue, name: str | None = None) -> None:
-    """
-    Async version of mask_secret for use in async contexts.
-
-    Uses asend() instead of send() to avoid deadlock when called from within
-    an async task that already has an asend() in flight.
-    """
-    _secrets_masker().add_mask(secret, name)
-
-    if comms := _supervisor_comms():
-        with suppress(Exception):
-            # Imported here for the same reason as in ``mask_secret``.
-            from airflow.sdk.execution_time.comms import MaskSecret
-
-            await comms.asend(MaskSecret(value=secret, name=name))
 
 
 def reset_logging():

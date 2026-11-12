@@ -108,7 +108,11 @@ class SsmRunCommandCompletedSensor(AwsBaseSensor[SsmHook]):
         command_invocations = response.get("CommandInvocations", [])
 
         if not command_invocations:
-            self.log.info("No command invocations found, command_id=%s yet, waiting...", self.command_id)
+            self.log.info(
+                "No command invocations found",
+                "command_id=%s yet, waiting...",
+                self.command_id,
+            )
             return False
 
         for invocation in command_invocations:
@@ -142,9 +146,6 @@ class SsmRunCommandCompletedSensor(AwsBaseSensor[SsmHook]):
                     waiter_delay=int(self.poke_interval),
                     waiter_max_attempts=self.max_retries,
                     aws_conn_id=self.aws_conn_id,
-                    region_name=self.region_name,
-                    verify=self.verify,
-                    botocore_config=self.botocore_config,
                     fail_on_nonzero_exit=self.fail_on_nonzero_exit,
                 ),
                 method_name="execute_complete",

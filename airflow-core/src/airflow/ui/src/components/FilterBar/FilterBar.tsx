@@ -16,23 +16,17 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useEffect, useState, type ReactNode } from "react";
-
 import { Button, HStack } from "@chakra-ui/react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { IoFilter } from "react-icons/io5";
-import { MdClear } from "react-icons/md";
+import { MdAdd, MdClear } from "react-icons/md";
 import { useDebouncedCallback } from "use-debounce";
 
-import { Menu } from "src/system-components";
-
-import { PresetFiltersMenu } from "src/components/PresetFiltersMenu";
+import { Menu } from "src/components/ui";
 
 import { getDefaultFilterIcon } from "./defaultIcons";
-import { BooleanFilter } from "./filters/BooleanFilter";
 import { DateFilter } from "./filters/DateFilter";
 import { DateRangeFilter } from "./filters/DateRangeFilter";
-import { MultiSelectFilter } from "./filters/MultiSelectFilter";
 import { NumberFilter } from "./filters/NumberFilter";
 import { SelectFilter } from "./filters/SelectFilter";
 import { TextSearchFilter } from "./filters/TextSearchFilter";
@@ -41,16 +35,14 @@ import { getDefaultFilterValue, isValidFilterValue } from "./utils";
 
 const defaultInitialValues: Record<string, FilterValue> = {};
 
-const getFilterIcon = (config: FilterConfig): ReactNode => config.icon ?? getDefaultFilterIcon(config.type);
+const getFilterIcon = (config: FilterConfig): React.ReactNode =>
+  config.icon ?? getDefaultFilterIcon(config.type);
 
 export const FilterBar = ({
   configs,
-  hasExternalFilters = false,
   initialValues = defaultInitialValues,
   maxVisibleFilters = 10,
   onFiltersChange,
-  onReset,
-  showPresetFilters = true,
 }: FilterBarProps) => {
   const { t: translate } = useTranslation(["admin", "common"]);
   const [filters, setFilters] = useState<Array<FilterState>>(() =>
@@ -96,26 +88,19 @@ export const FilterBar = ({
       const existingKeys = new Set(prevFilters.map((filter) => filter.config.key));
       const toAdd = pillsToAdd.filter((pill) => !existingKeys.has(pill.config.key));
 
-      const synchronizedFilters = prevFilters
-        .filter((filter) => {
-          const pillHadValue = isValidFilterValue(filter.config.type, filter.value);
-          const urlValue = initialValues[filter.config.key];
+      // Remove pills that had a committed value but whose URL param was cleared externally.
+      const afterRemove = prevFilters.filter((filter) => {
+        const pillHadValue = isValidFilterValue(filter.config.type, filter.value);
+        const urlValue = initialValues[filter.config.key];
 
-          return !pillHadValue || isValidFilterValue(filter.config.type, urlValue);
-        })
-        .map((filter) => {
-          const urlValue = initialValues[filter.config.key];
+        return !pillHadValue || isValidFilterValue(filter.config.type, urlValue);
+      });
 
-          return isValidFilterValue(filter.config.type, urlValue) && filter.value !== urlValue
-            ? { ...filter, value: urlValue }
-            : filter;
-        });
+      if (toAdd.length === 0 && afterRemove.length === prevFilters.length) {
+        return prevFilters;
+      }
 
-      const filtersUnchanged =
-        synchronizedFilters.length === prevFilters.length &&
-        synchronizedFilters.every((filter, index) => filter === prevFilters[index]);
-
-      return toAdd.length === 0 && filtersUnchanged ? prevFilters : [...synchronizedFilters, ...toAdd];
+      return [...afterRemove, ...toAdd];
     });
     // configs is intentionally omitted — it is structurally stable across renders and including
     // it would risk infinite re-render loops. initialValuesKey captures all relevant URL changes.
@@ -167,45 +152,25 @@ export const FilterBar = ({
 
   const resetFilters = () => {
     setFilters([]);
-    if (onReset === undefined) {
-      onFiltersChange({});
-    } else {
-      onReset();
-    }
+    onFiltersChange({});
   };
 
   const availableConfigs = configs.filter(
     (config) => !filters.some((filter) => filter.config.key === config.key),
   );
 
-  const renderFilter = (filterState: FilterState) => {
-    // Pills snapshot their config when created, which for URL-seeded filters can happen
-    // before the i18n namespaces resolve — leaving raw keys as labels. Re-read the live
-    // config each render so labels and option lists stay current.
-    const liveConfig = configs.find((config) => config.key === filterState.config.key);
-    const filter = liveConfig === undefined ? filterState : { ...filterState, config: liveConfig };
-
+  const renderFilter = (filter: FilterState) => {
     const props = {
       filter,
       onChange: (value: FilterValue) => updateFilter(filter.id, value),
       onRemove: () => removeFilter(filter.id),
     };
 
-    const { EditorComponent } = filter.config;
-
-    if (EditorComponent !== undefined) {
-      return <EditorComponent key={filter.id} {...props} />;
-    }
-
     switch (filter.config.type) {
-      case "boolean":
-        return <BooleanFilter key={filter.id} {...props} />;
       case "date":
         return <DateFilter key={filter.id} {...props} />;
       case "daterange":
         return <DateRangeFilter key={filter.id} {...props} />;
-      case "multiselect":
-        return <MultiSelectFilter key={filter.id} {...props} />;
       case "number":
         return <NumberFilter key={filter.id} {...props} />;
       case "select":
@@ -218,7 +183,8 @@ export const FilterBar = ({
   };
 
   return (
-    <HStack display="inline-flex" flex="1" gapX={1} gapY={2} minW={0} w="100%" wrap="wrap">
+    <HStack gap={2} wrap="wrap">
+      {filters.slice(0, maxVisibleFilters).map(renderFilter)}
       {availableConfigs.length > 0 && (
         <Menu.Root>
           <Menu.Trigger asChild>
@@ -229,18 +195,13 @@ export const FilterBar = ({
               data-testid="add-filter-button"
               variant="outline"
             >
-              <IoFilter />
-              {translate("common:filters.addFilter")}
+              <MdAdd />
+              {translate("common:filter")}
             </Button>
           </Menu.Trigger>
           <Menu.Content>
             {availableConfigs.map((config) => (
-              <Menu.Item
-                data-testid={`add-filter-${config.key}`}
-                key={config.key}
-                onClick={() => addFilter(config)}
-                value={config.key}
-              >
+              <Menu.Item key={config.key} onClick={() => addFilter(config)} value={config.key}>
                 <HStack gap={2}>
                   {getFilterIcon(config)}
                   {config.label}
@@ -250,15 +211,12 @@ export const FilterBar = ({
           </Menu.Content>
         </Menu.Root>
       )}
-      {filters.slice(0, maxVisibleFilters).map(renderFilter)}
-
-      {filters.length > 0 || hasExternalFilters ? (
-        <Button bg="bg" borderRadius="full" colorPalette="gray" onClick={resetFilters} variant="outline">
+      {filters.length > 0 && (
+        <Button borderRadius="full" colorPalette="gray" onClick={resetFilters} size="sm" variant="outline">
           <MdClear />
           {translate("common:reset")}
         </Button>
-      ) : undefined}
-      {showPresetFilters ? <PresetFiltersMenu /> : undefined}
+      )}
     </HStack>
   );
 };

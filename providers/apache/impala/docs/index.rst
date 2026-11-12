@@ -84,7 +84,7 @@ apache-airflow-providers-apache-impala package
 `Apache Impala <https://impala.apache.org/>`__.
 
 
-Release: 1.9.4
+Release: 1.9.2
 
 Provider package
 ----------------
@@ -113,23 +113,25 @@ PIP package                                 Version required
 ``apache-airflow``                          ``>=2.11.0``
 ==========================================  ==================
 
-Optional dependencies
----------------------
+Cross provider package dependencies
+-----------------------------------
 
-These extras install optional third-party libraries that enable additional features of the provider.
-Install them when installing from PyPI. For example:
+Those are dependencies that might be needed in order to use all the features of the package.
+You need to install the specified provider distributions in order to use them.
+
+You can install such cross-provider dependencies when installing from PyPI. For example:
 
 .. code-block:: bash
 
-    pip install apache-airflow-providers-apache-impala[kerberos]
+    pip install apache-airflow-providers-apache-impala[common.compat]
 
 
-==============  ==============================
-Extra           Dependencies
-==============  ==============================
-``kerberos``    ``kerberos>=1.3.0``
-``sqlalchemy``  ``sqlalchemy>=1.4.54,!=2.1.0``
-==============  ==============================
+==================================================================================================================  =================
+Dependent package                                                                                                   Extra
+==================================================================================================================  =================
+`apache-airflow-providers-common-compat <https://airflow.apache.org/docs/apache-airflow-providers-common-compat>`_  ``common.compat``
+`apache-airflow-providers-common-sql <https://airflow.apache.org/docs/apache-airflow-providers-common-sql>`_        ``common.sql``
+==================================================================================================================  =================
 
 Downloading official packages
 -----------------------------
@@ -137,5 +139,5 @@ Downloading official packages
 You can download officially released packages and verify their checksums and signatures from the
 `Official Apache Download site <https://downloads.apache.org/airflow/providers/>`_
 
-* `The apache-airflow-providers-apache-impala 1.9.4 sdist package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_impala-1.9.4.tar.gz>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_impala-1.9.4.tar.gz.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_impala-1.9.4.tar.gz.sha512>`__)
-* `The apache-airflow-providers-apache-impala 1.9.4 wheel package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_impala-1.9.4-py3-none-any.whl>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_impala-1.9.4-py3-none-any.whl.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_impala-1.9.4-py3-none-any.whl.sha512>`__)
+* `The apache-airflow-providers-apache-impala 1.9.2 sdist package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_impala-1.9.2.tar.gz>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_impala-1.9.2.tar.gz.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_impala-1.9.2.tar.gz.sha512>`__)
+* `The apache-airflow-providers-apache-impala 1.9.2 wheel package <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_impala-1.9.2-py3-none-any.whl>`_ (`asc <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_impala-1.9.2-py3-none-any.whl.asc>`__, `sha512 <https://downloads.apache.org/airflow/providers/apache_airflow_providers_apache_impala-1.9.2-py3-none-any.whl.sha512>`__)

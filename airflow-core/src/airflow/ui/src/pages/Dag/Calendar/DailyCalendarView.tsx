@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 /*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -37,34 +38,23 @@
 import { Box, Text } from "@chakra-ui/react";
 import dayjs from "dayjs";
 import { useTranslation } from "react-i18next";
-import { useParams } from "react-router-dom";
 
 import type { CalendarTimeRangeResponse } from "openapi/requests/types.gen";
 
 import { CalendarCell } from "./CalendarCell";
 import { generateDailyCalendarData } from "./calendarUtils";
-import type { CalendarScale, CalendarColorMode, DeadlineCounts } from "./types";
+import type { CalendarScale, CalendarColorMode } from "./types";
 
 type Props = {
   readonly data: Array<CalendarTimeRangeResponse>;
-  readonly deadlineMap?: Map<string, DeadlineCounts>;
   readonly scale: CalendarScale;
   readonly selectedYear: number;
-  readonly timezone: string;
   readonly viewMode?: CalendarColorMode;
 };
 
-export const DailyCalendarView = ({
-  data,
-  deadlineMap,
-  scale,
-  selectedYear,
-  timezone,
-  viewMode = "total",
-}: Props) => {
+export const DailyCalendarView = ({ data, scale, selectedYear, viewMode = "total" }: Props) => {
   const { t: translate } = useTranslation("dag");
-  const { dagId = "" } = useParams();
-  const dailyData = generateDailyCalendarData(data, { deadlineMap, selectedYear, timezone });
+  const dailyData = generateDailyCalendarData(data, selectedYear);
 
   const weekdays = [
     translate("calendar.weekdays.sunday"),
@@ -122,7 +112,6 @@ export const DailyCalendarView = ({
                     <CalendarCell
                       backgroundColor="transparent"
                       cellData={undefined}
-                      dagId={dagId}
                       key={day.date}
                       viewMode={viewMode}
                     />
@@ -133,7 +122,6 @@ export const DailyCalendarView = ({
                   <CalendarCell
                     backgroundColor={scale.getColor(day.counts)}
                     cellData={day}
-                    dagId={dagId}
                     key={day.date}
                     viewMode={viewMode}
                   />

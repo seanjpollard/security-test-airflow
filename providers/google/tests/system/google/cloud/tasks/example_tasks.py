@@ -23,10 +23,11 @@ runs and deletes Tasks in the Google Cloud Tasks service in the Google Cloud.
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from google.api_core.retry import Retry
 from google.cloud.tasks_v2.types import Queue
+from google.protobuf import timestamp_pb2
 
 from tests_common.test_utils.version_compat import AIRFLOW_V_3_0_PLUS
 
@@ -56,6 +57,9 @@ except ImportError:
 ENV_ID = os.environ.get("SYSTEM_TESTS_ENV_ID", "default")
 DAG_ID = "cloud_tasks_tasks"
 
+timestamp = timestamp_pb2.Timestamp()
+timestamp.FromDatetime(datetime.now() + timedelta(hours=12))
+
 LOCATION = "us-central1"
 # queue cannot use recent names even if queue was removed
 QUEUE_ID = f"queue-{ENV_ID}-{DAG_ID.replace('_', '-')}"
@@ -64,7 +68,9 @@ TASK = {
     "http_request": {
         "http_method": "POST",
         "url": "http://www.example.com/example",
+        "body": b"",
     },
+    "schedule_time": timestamp,
 }
 
 with DAG(
@@ -105,16 +111,11 @@ with DAG(
     )
     delete_queue.trigger_rule = TriggerRule.ALL_DONE
 
-    @task(task_id="build_task")
-    def build_task_with_schedule_time():
-        # Computed when the task runs: a value computed when the file is parsed changes the Dag on every parse.
-        return {**TASK, "schedule_time": datetime.now(tz=UTC) + timedelta(hours=12)}
-
     # [START create_task]
     create_task = CloudTasksTaskCreateOperator(
         location=LOCATION,
         queue_name=QUEUE_ID + "{{ task_instance.xcom_pull(task_ids='random_string') }}",
-        task=build_task_with_schedule_time(),
+        task=TASK,
         task_name=TASK_NAME + "{{ task_instance.xcom_pull(task_ids='random_string') }}",
         retry=Retry(maximum=10.0),
         timeout=5,

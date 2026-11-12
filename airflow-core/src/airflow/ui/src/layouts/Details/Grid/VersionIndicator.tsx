@@ -20,7 +20,7 @@ import { Box } from "@chakra-ui/react";
 import { useTranslation } from "react-i18next";
 import { FiGitCommit } from "react-icons/fi";
 
-import { Tooltip } from "src/system-components";
+import { Tooltip } from "src/components/ui";
 
 import {
   BUNDLE_VERSION_ICON_SIZE,

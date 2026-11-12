@@ -30,10 +30,7 @@ def get_provider_info():
             {
                 "integration-name": "Cohere",
                 "external-doc-url": "https://docs.cohere.com/docs",
-                "how-to-guide": [
-                    "/docs/apache-airflow-providers-cohere/operators/embedding.rst",
-                    "/docs/apache-airflow-providers-cohere/operators/rerank.rst",
-                ],
+                "how-to-guide": ["/docs/apache-airflow-providers-cohere/operators/embedding.rst"],
                 "tags": ["software"],
             }
         ],
@@ -41,13 +38,7 @@ def get_provider_info():
             {"integration-name": "Cohere", "python-modules": ["airflow.providers.cohere.hooks.cohere"]}
         ],
         "operators": [
-            {
-                "integration-name": "Cohere",
-                "python-modules": [
-                    "airflow.providers.cohere.operators.embedding",
-                    "airflow.providers.cohere.operators.rerank",
-                ],
-            }
+            {"integration-name": "Cohere", "python-modules": ["airflow.providers.cohere.operators.embedding"]}
         ],
         "connection-types": [
             {

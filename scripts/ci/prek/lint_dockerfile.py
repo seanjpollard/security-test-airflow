@@ -30,7 +30,7 @@ cmd = [
     "docker",
     "run",
     "-v",
-    f"{AIRFLOW_ROOT_PATH}:/root:ro",
+    f"{AIRFLOW_ROOT_PATH}:/root",
     "-w",
     "/root",
     "--rm",

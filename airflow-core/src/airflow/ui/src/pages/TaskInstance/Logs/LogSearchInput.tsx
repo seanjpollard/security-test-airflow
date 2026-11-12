@@ -16,16 +16,11 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { CloseButton, HStack, IconButton, Input, InputGroup, Text } from "@chakra-ui/react";
 import { useRef, type KeyboardEvent } from "react";
-
-import { CloseButton, HStack, Input, InputGroup, Text } from "@chakra-ui/react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { useTranslation } from "react-i18next";
 import { FiChevronDown, FiChevronUp, FiSearch } from "react-icons/fi";
-
-import { IconButton } from "src/system-components";
-
-import { SHORTCUTS } from "src/context/keyboardShortcuts";
-import { useShortcut } from "src/hooks/useShortcut";
 
 export type LogSearchInputProps = {
   readonly currentMatchIndex: number;
@@ -47,14 +42,14 @@ export const LogSearchInput = ({
   const { t: translate } = useTranslation("dag");
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  useShortcut({
-    ...SHORTCUTS.logs.focusLogSearch,
-    callback: (event) => {
+  useHotkeys(
+    "/",
+    (event) => {
       event.preventDefault();
       searchInputRef.current?.focus();
     },
-    options: { enableOnFormTags: false },
-  });
+    { enableOnFormTags: false },
+  );
 
   const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
@@ -85,18 +80,20 @@ export const LogSearchInput = ({
                   : translate("logs.search.noMatches")}
               </Text>
               <IconButton
-                aria-label={translate("logs.search.previousMatch")}
+                aria-label="Previous match"
                 disabled={totalMatches === 0}
                 onClick={onSearchPrevious}
                 size="2xs"
+                variant="ghost"
               >
                 <FiChevronUp />
               </IconButton>
               <IconButton
-                aria-label={translate("logs.search.nextMatch")}
+                aria-label="Next match"
                 disabled={totalMatches === 0}
                 onClick={onSearchNext}
                 size="2xs"
+                variant="ghost"
               >
                 <FiChevronDown />
               </IconButton>

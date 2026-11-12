@@ -16,20 +16,20 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 /**
  * Calendar data fixture — creates success + failed Dag runs for calendar tests.
  */
 import dayjs from "dayjs";
 import { testConfig } from "playwright.config";
-
 import { test as base } from "tests/e2e/fixtures";
 import {
   apiCreateDagRun,
   apiSetDagRunState,
   safeCleanupDagRun,
+  uniqueRunId,
   waitForDagReady,
-} from "tests/e2e/utils/api/dag-runs";
-import { uniqueRunId } from "tests/e2e/utils/shared";
+} from "tests/e2e/utils/test-helpers";
 
 export type CalendarRunsData = {
   dagId: string;

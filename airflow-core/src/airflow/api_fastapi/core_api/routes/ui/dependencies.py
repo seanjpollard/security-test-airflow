@@ -27,11 +27,7 @@ from airflow.api_fastapi.common.db.common import SessionDep
 from airflow.api_fastapi.common.router import AirflowRouter
 from airflow.api_fastapi.core_api.datamodels.ui.common import BaseGraphResponse
 from airflow.api_fastapi.core_api.openapi.exceptions import create_openapi_http_exception_doc
-from airflow.api_fastapi.core_api.security import (
-    ReadableAssetsFilterDep,
-    ReadableDagsFilterDep,
-    requires_access_dag,
-)
+from airflow.api_fastapi.core_api.security import ReadableDagsFilterDep, requires_access_dag
 from airflow.api_fastapi.core_api.services.ui.dependencies import (
     extract_single_connected_component,
     get_data_dependencies,
@@ -45,7 +41,6 @@ dependencies_router = AirflowRouter(tags=["Dependencies"])
     "/dependencies",
     responses=create_openapi_http_exception_doc(
         [
-            status.HTTP_400_BAD_REQUEST,
             status.HTTP_404_NOT_FOUND,
         ]
     ),
@@ -54,7 +49,6 @@ dependencies_router = AirflowRouter(tags=["Dependencies"])
 def get_dependencies(
     session: SessionDep,
     readable_dags_filter: ReadableDagsFilterDep,
-    readable_assets_filter: ReadableAssetsFilterDep,
     node_id: str | None = None,
     dependency_type: Literal["scheduling", "data"] = "scheduling",
 ) -> BaseGraphResponse:
@@ -70,26 +64,17 @@ def get_dependencies(
         except ValueError:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid asset node_id: {node_id}")
 
-        data = get_data_dependencies(
-            asset_id,
-            session,
-            readable_dag_ids=readable_dags_filter.value,
-            readable_asset_ids=readable_assets_filter.value or set(),
-        )
+        data = get_data_dependencies(asset_id, session, readable_dags_filter.value)
         if not data["nodes"]:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"Asset with id {asset_id} was not found")
         return BaseGraphResponse(**data)
 
-    data = get_scheduling_dependencies(
-        session,
-        readable_dag_ids=readable_dags_filter.value,
-        readable_asset_ids=readable_assets_filter.value or set(),
-    )
+    data = get_scheduling_dependencies(readable_dags_filter.value)
 
     if node_id is not None:
         try:
             data = extract_single_connected_component(node_id, data["nodes"], data["edges"])
         except ValueError as e:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, str(e))
+            raise HTTPException(404, str(e))
 
     return BaseGraphResponse(**data)

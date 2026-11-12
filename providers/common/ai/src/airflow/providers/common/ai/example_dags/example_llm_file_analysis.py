@@ -24,22 +24,8 @@ from airflow.providers.common.ai.operators.llm_file_analysis import LLMFileAnaly
 from airflow.providers.common.compat.sdk import dag, task
 
 
-# [START howto_operator_llm_file_analysis_structured_output_class]
-# Pydantic output classes must be defined at module scope so they can be
-# imported by name when downstream tasks deserialize the XCom payload.
-class FileAnalysisSummary(BaseModel):
-    """Structured output schema for the file-analysis examples."""
-
-    findings: list[str]
-    highest_severity: str
-    truncated_inputs: bool
-
-
-# [END howto_operator_llm_file_analysis_structured_output_class]
-
-
 # [START howto_operator_llm_file_analysis_basic]
-@dag(tags=["example"])
+@dag
 def example_llm_file_analysis_basic():
     LLMFileAnalysisOperator(
         task_id="analyze_error_logs",
@@ -56,7 +42,7 @@ example_llm_file_analysis_basic()
 
 
 # [START howto_operator_llm_file_analysis_prefix]
-@dag(tags=["example"])
+@dag
 def example_llm_file_analysis_prefix():
     LLMFileAnalysisOperator(
         task_id="summarize_partitioned_logs",
@@ -79,7 +65,7 @@ example_llm_file_analysis_prefix()
 
 
 # [START howto_operator_llm_file_analysis_multimodal]
-@dag(tags=["example"])
+@dag
 def example_llm_file_analysis_multimodal():
     LLMFileAnalysisOperator(
         task_id="validate_dashboards",
@@ -97,8 +83,16 @@ example_llm_file_analysis_multimodal()
 
 
 # [START howto_operator_llm_file_analysis_structured]
-@dag(tags=["example"])
+@dag
 def example_llm_file_analysis_structured():
+
+    class FileAnalysisSummary(BaseModel):
+        """Structured output schema for the file-analysis examples."""
+
+        findings: list[str]
+        highest_severity: str
+        truncated_inputs: bool
+
     LLMFileAnalysisOperator(
         task_id="analyze_parquet_quality",
         prompt=(
@@ -119,30 +113,8 @@ def example_llm_file_analysis_structured():
 example_llm_file_analysis_structured()
 
 
-# [START howto_operator_llm_file_analysis_approval]
-@dag(tags=["example"])
-def example_llm_file_analysis_approval():
-    from datetime import timedelta
-
-    LLMFileAnalysisOperator(
-        task_id="analyze_contract_with_approval",
-        prompt="Summarize the key obligations and flag any unusual termination clauses.",
-        llm_conn_id="pydanticai_default",
-        file_path="s3://legal/contracts/vendor-agreement.pdf",
-        file_conn_id="aws_default",
-        require_approval=True,
-        approval_timeout=timedelta(hours=1),
-        allow_modifications=True,
-    )
-
-
-# [END howto_operator_llm_file_analysis_approval]
-
-example_llm_file_analysis_approval()
-
-
 # [START howto_decorator_llm_file_analysis]
-@dag(tags=["example"])
+@dag
 def example_llm_file_analysis_decorator():
     @task.llm_file_analysis(
         llm_conn_id="pydanticai_default",

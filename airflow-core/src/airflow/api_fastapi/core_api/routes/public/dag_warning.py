@@ -40,7 +40,7 @@ from airflow.api_fastapi.core_api.datamodels.dag_warning import (
     DAGWarningCollectionResponse,
 )
 from airflow.api_fastapi.core_api.security import ReadableDagWarningsFilterDep, requires_access_dag
-from airflow.models.dagwarning import DagWarning, DagWarningTypeValue
+from airflow.models.dagwarning import DagWarning, DagWarningType
 
 dag_warning_router = AirflowRouter(tags=["DagWarning"])
 
@@ -52,8 +52,8 @@ dag_warning_router = AirflowRouter(tags=["DagWarning"])
 def list_dag_warnings(
     dag_id: Annotated[FilterParam[str | None], Depends(filter_param_factory(DagWarning.dag_id, str | None))],
     warning_type: Annotated[
-        FilterParam[DagWarningTypeValue | None],
-        Depends(filter_param_factory(DagWarning.warning_type, DagWarningTypeValue | None)),
+        FilterParam[DagWarningType | None],
+        Depends(filter_param_factory(DagWarning.warning_type, DagWarningType | None)),
     ],
     limit: QueryLimit,
     offset: QueryOffset,

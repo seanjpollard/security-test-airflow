@@ -93,7 +93,6 @@ class FacebookAdsReportToGcsOperator(BaseOperator):
         "object_name",
         "impersonation_chain",
         "parameters",
-        "gcp_conn_id",
     )
 
     def __init__(

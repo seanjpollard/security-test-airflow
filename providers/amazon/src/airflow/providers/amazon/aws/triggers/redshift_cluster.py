@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
 from airflow.providers.amazon.aws.hooks.redshift_cluster import RedshiftHook
@@ -40,20 +39,14 @@ class RedshiftCreateClusterTrigger(AwsBaseWaiterTrigger):
     :param waiter_delay: The amount of time in seconds to wait between attempts.
     :param waiter_max_attempts: The maximum number of attempts to be made.
     :param aws_conn_id: The Airflow connection used for AWS credentials.
-    :param region_name: The AWS region where the cluster is. Used to build the hook.
-    :param verify: Whether or not to verify SSL certificates. Used to build the hook.
-    :param botocore_config: Configuration dictionary for the botocore client. Used to build the hook.
     """
 
     def __init__(
         self,
-        *,
         cluster_identifier: str,
         aws_conn_id: str | None = "aws_default",
-        region_name: str | None = None,
         waiter_delay: int = 15,
         waiter_max_attempts: int = 999999,
-        **kwargs,
     ):
         super().__init__(
             serialized_fields={"cluster_identifier": cluster_identifier},
@@ -66,17 +59,10 @@ class RedshiftCreateClusterTrigger(AwsBaseWaiterTrigger):
             waiter_delay=waiter_delay,
             waiter_max_attempts=waiter_max_attempts,
             aws_conn_id=aws_conn_id,
-            region_name=region_name,
-            **kwargs,
         )
 
     def hook(self) -> AwsGenericHook:
-        return RedshiftHook(
-            aws_conn_id=self.aws_conn_id,
-            region_name=self.region_name,
-            verify=self.verify,
-            config=self.botocore_config,
-        )
+        return RedshiftHook(aws_conn_id=self.aws_conn_id)
 
 
 class RedshiftPauseClusterTrigger(AwsBaseWaiterTrigger):
@@ -90,20 +76,14 @@ class RedshiftPauseClusterTrigger(AwsBaseWaiterTrigger):
     :param waiter_delay: The amount of time in seconds to wait between attempts.
     :param waiter_max_attempts: The maximum number of attempts to be made.
     :param aws_conn_id: The Airflow connection used for AWS credentials.
-    :param region_name: The AWS region where the cluster is. Used to build the hook.
-    :param verify: Whether or not to verify SSL certificates. Used to build the hook.
-    :param botocore_config: Configuration dictionary for the botocore client. Used to build the hook.
     """
 
     def __init__(
         self,
-        *,
         cluster_identifier: str,
         aws_conn_id: str | None = "aws_default",
-        region_name: str | None = None,
         waiter_delay: int = 15,
         waiter_max_attempts: int = 999999,
-        **kwargs,
     ):
         super().__init__(
             serialized_fields={"cluster_identifier": cluster_identifier},
@@ -116,17 +96,10 @@ class RedshiftPauseClusterTrigger(AwsBaseWaiterTrigger):
             waiter_delay=waiter_delay,
             waiter_max_attempts=waiter_max_attempts,
             aws_conn_id=aws_conn_id,
-            region_name=region_name,
-            **kwargs,
         )
 
     def hook(self) -> AwsGenericHook:
-        return RedshiftHook(
-            aws_conn_id=self.aws_conn_id,
-            region_name=self.region_name,
-            verify=self.verify,
-            config=self.botocore_config,
-        )
+        return RedshiftHook(aws_conn_id=self.aws_conn_id)
 
 
 class RedshiftCreateClusterSnapshotTrigger(AwsBaseWaiterTrigger):
@@ -140,20 +113,14 @@ class RedshiftCreateClusterSnapshotTrigger(AwsBaseWaiterTrigger):
     :param waiter_delay: The amount of time in seconds to wait between attempts.
     :param waiter_max_attempts: The maximum number of attempts to be made.
     :param aws_conn_id: The Airflow connection used for AWS credentials.
-    :param region_name: The AWS region where the cluster is. Used to build the hook.
-    :param verify: Whether or not to verify SSL certificates. Used to build the hook.
-    :param botocore_config: Configuration dictionary for the botocore client. Used to build the hook.
     """
 
     def __init__(
         self,
-        *,
         cluster_identifier: str,
         aws_conn_id: str | None = "aws_default",
-        region_name: str | None = None,
         waiter_delay: int = 15,
         waiter_max_attempts: int = 999999,
-        **kwargs,
     ):
         super().__init__(
             serialized_fields={"cluster_identifier": cluster_identifier},
@@ -166,17 +133,10 @@ class RedshiftCreateClusterSnapshotTrigger(AwsBaseWaiterTrigger):
             waiter_delay=waiter_delay,
             waiter_max_attempts=waiter_max_attempts,
             aws_conn_id=aws_conn_id,
-            region_name=region_name,
-            **kwargs,
         )
 
     def hook(self) -> AwsGenericHook:
-        return RedshiftHook(
-            aws_conn_id=self.aws_conn_id,
-            region_name=self.region_name,
-            verify=self.verify,
-            config=self.botocore_config,
-        )
+        return RedshiftHook(aws_conn_id=self.aws_conn_id)
 
 
 class RedshiftResumeClusterTrigger(AwsBaseWaiterTrigger):
@@ -190,20 +150,14 @@ class RedshiftResumeClusterTrigger(AwsBaseWaiterTrigger):
     :param waiter_delay: The amount of time in seconds to wait between attempts.
     :param waiter_max_attempts: The maximum number of attempts to be made.
     :param aws_conn_id: The Airflow connection used for AWS credentials.
-    :param region_name: The AWS region where the cluster is. Used to build the hook.
-    :param verify: Whether or not to verify SSL certificates. Used to build the hook.
-    :param botocore_config: Configuration dictionary for the botocore client. Used to build the hook.
     """
 
     def __init__(
         self,
-        *,
         cluster_identifier: str,
         aws_conn_id: str | None = "aws_default",
-        region_name: str | None = None,
         waiter_delay: int = 15,
         waiter_max_attempts: int = 999999,
-        **kwargs,
     ):
         super().__init__(
             serialized_fields={"cluster_identifier": cluster_identifier},
@@ -216,17 +170,10 @@ class RedshiftResumeClusterTrigger(AwsBaseWaiterTrigger):
             waiter_delay=waiter_delay,
             waiter_max_attempts=waiter_max_attempts,
             aws_conn_id=aws_conn_id,
-            region_name=region_name,
-            **kwargs,
         )
 
     def hook(self) -> AwsGenericHook:
-        return RedshiftHook(
-            aws_conn_id=self.aws_conn_id,
-            region_name=self.region_name,
-            verify=self.verify,
-            config=self.botocore_config,
-        )
+        return RedshiftHook(aws_conn_id=self.aws_conn_id)
 
 
 class RedshiftDeleteClusterTrigger(AwsBaseWaiterTrigger):
@@ -237,20 +184,14 @@ class RedshiftDeleteClusterTrigger(AwsBaseWaiterTrigger):
     :param waiter_max_attempts: The maximum number of attempts to be made.
     :param aws_conn_id: The Airflow connection used for AWS credentials.
     :param waiter_delay: The amount of time in seconds to wait between attempts.
-    :param region_name: The AWS region where the cluster is. Used to build the hook.
-    :param verify: Whether or not to verify SSL certificates. Used to build the hook.
-    :param botocore_config: Configuration dictionary for the botocore client. Used to build the hook.
     """
 
     def __init__(
         self,
-        *,
         cluster_identifier: str,
         aws_conn_id: str | None = "aws_default",
-        region_name: str | None = None,
         waiter_delay: int = 30,
         waiter_max_attempts: int = 30,
-        **kwargs,
     ):
         super().__init__(
             serialized_fields={"cluster_identifier": cluster_identifier},
@@ -263,17 +204,10 @@ class RedshiftDeleteClusterTrigger(AwsBaseWaiterTrigger):
             waiter_delay=waiter_delay,
             waiter_max_attempts=waiter_max_attempts,
             aws_conn_id=aws_conn_id,
-            region_name=region_name,
-            **kwargs,
         )
 
     def hook(self) -> AwsGenericHook:
-        return RedshiftHook(
-            aws_conn_id=self.aws_conn_id,
-            region_name=self.region_name,
-            verify=self.verify,
-            config=self.botocore_config,
-        )
+        return RedshiftHook(aws_conn_id=self.aws_conn_id)
 
 
 class RedshiftClusterTrigger(BaseTrigger):
@@ -284,9 +218,6 @@ class RedshiftClusterTrigger(BaseTrigger):
     :param cluster_identifier: unique identifier of a cluster
     :param target_status: Reference to the status which needs to be checked
     :param poke_interval:  polling period in seconds to check for the status
-    :param region_name: The AWS region where the cluster is. Used to build the hook.
-    :param verify: Whether or not to verify SSL certificates. Used to build the hook.
-    :param botocore_config: Configuration dictionary for the botocore client. Used to build the hook.
     """
 
     def __init__(
@@ -295,18 +226,12 @@ class RedshiftClusterTrigger(BaseTrigger):
         cluster_identifier: str,
         target_status: str,
         poke_interval: float,
-        region_name: str | None = None,
-        verify: bool | str | None = None,
-        botocore_config: dict | None = None,
     ):
         super().__init__()
         self.aws_conn_id = aws_conn_id
         self.cluster_identifier = cluster_identifier
         self.target_status = target_status
         self.poke_interval = poke_interval
-        self.region_name = region_name
-        self.verify = verify
-        self.botocore_config = botocore_config
 
     def serialize(self) -> tuple[str, dict[str, Any]]:
         """Serialize RedshiftClusterTrigger arguments and classpath."""
@@ -317,83 +242,18 @@ class RedshiftClusterTrigger(BaseTrigger):
                 "cluster_identifier": self.cluster_identifier,
                 "target_status": self.target_status,
                 "poke_interval": self.poke_interval,
-                "region_name": self.region_name,
-                "verify": self.verify,
-                "botocore_config": self.botocore_config,
             },
-        )
-
-    @cached_property
-    def hook(self) -> RedshiftHook:
-        return RedshiftHook(
-            aws_conn_id=self.aws_conn_id,
-            region_name=self.region_name,
-            verify=self.verify,
-            config=self.botocore_config,
         )
 
     async def run(self) -> AsyncIterator[TriggerEvent]:
         """Run async until the cluster status matches the target status."""
         try:
+            hook = RedshiftHook(aws_conn_id=self.aws_conn_id)
             while True:
-                status = await self.hook.cluster_status_async(self.cluster_identifier)
+                status = await hook.cluster_status_async(self.cluster_identifier)
                 if status == self.target_status:
                     yield TriggerEvent({"status": "success", "message": "target state met"})
                     return
                 await asyncio.sleep(self.poke_interval)
         except Exception as e:
             yield TriggerEvent({"status": "error", "message": str(e)})
-
-
-class RedshiftClusterSettledTrigger(AwsBaseWaiterTrigger):
-    """
-    Wait until a Redshift cluster settles into a non-transitional (deletable) lifecycle.
-
-    A ``delete_cluster`` call is rejected with ``InvalidClusterStateFault`` while an operation is in
-    flight (e.g. a pause or resize). Because a busy cluster can settle into *different* terminal states
-    depending on the in-flight operation (a ``pausing`` cluster becomes ``paused``; a ``resizing`` cluster
-    becomes ``available``), this trigger uses the custom ``cluster_deletable`` waiter, which has one
-    ``success`` acceptor per deletable ``ClusterStatus`` value rather than a single target state.
-
-    :param cluster_identifier: unique identifier of a cluster
-    :param waiter_delay: The amount of time in seconds to wait between attempts.
-    :param waiter_max_attempts: The maximum number of attempts to be made.
-    :param aws_conn_id: The Airflow connection used for AWS credentials.
-    :param region_name: The AWS region where the cluster is. Used to build the hook.
-    :param verify: Whether or not to verify SSL certificates. Used to build the hook.
-    :param botocore_config: Configuration dictionary for the botocore client. Used to build the hook.
-    """
-
-    def __init__(
-        self,
-        *,
-        cluster_identifier: str,
-        aws_conn_id: str | None = "aws_default",
-        region_name: str | None = None,
-        waiter_delay: int = 30,
-        waiter_max_attempts: int = 30,
-        **kwargs,
-    ):
-        super().__init__(
-            serialized_fields={"cluster_identifier": cluster_identifier},
-            waiter_name="cluster_deletable",
-            waiter_args={"ClusterIdentifier": cluster_identifier},
-            failure_message="Error while waiting for the redshift cluster to become deletable",
-            status_message="Waiting for redshift cluster to settle into a deletable state",
-            status_queries=["Clusters[].ClusterStatus"],
-            return_key="cluster_identifier",
-            return_value=cluster_identifier,
-            waiter_delay=waiter_delay,
-            waiter_max_attempts=waiter_max_attempts,
-            aws_conn_id=aws_conn_id,
-            region_name=region_name,
-            **kwargs,
-        )
-
-    def hook(self) -> AwsGenericHook:
-        return RedshiftHook(
-            aws_conn_id=self.aws_conn_id,
-            region_name=self.region_name,
-            verify=self.verify,
-            config=self.botocore_config,
-        )

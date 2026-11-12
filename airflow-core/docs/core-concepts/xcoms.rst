@@ -23,7 +23,7 @@ XComs
 
 XComs (short for "cross-communications") are a mechanism that let :doc:`tasks` talk to each other, as by default Tasks are entirely isolated and may be running on entirely different machines.
 
-An XCom is identified by a ``key`` (essentially its name), as well as the ``task_id`` and ``dag_id`` it came from. They can have any serializable value (including objects that are decorated with ``@dataclass`` or ``@attr.define``, see :ref:`TaskFlow arguments <concepts:arbitrary-arguments>`), but they are only designed for small amounts of data; do not use them to pass around large values, like dataframes.
+An XCom is identified by a ``key`` (essentially its name), as well as the ``task_id`` and ``dag_id`` it came from. They can have any serializable value (including objects that are decorated with ``@dataclass`` or ``@attr.define``, see :ref:`TaskFlow arguments <concepts:arbitrary-arguments>`:), but they are only designed for small amounts of data; do not use them to pass around large values, like dataframes.
 
 XCom operations should be performed through the Task Context using
 :func:`~airflow.sdk.get_current_context`. Directly updating using XCom database model is not possible.
@@ -48,16 +48,6 @@ Many operators will auto-push their results into an XCom key called ``return_val
 
     # Pulls the return_value XCOM from "pushing_task"
     value = task_instance.xcom_pull(task_ids='pushing_task')
-
-If you need to pull a value from a specific DAG run (for example, a DAG run triggered by
-``TriggerDagRunOperator``), specify both ``dag_id`` and ``run_id`` explicitly::
-
-    trigger_run_id = task_instance.xcom_pull(task_ids="trigger_child", key="trigger_run_id")
-    child_value = task_instance.xcom_pull(
-        task_ids="child_task",
-        dag_id="child_dag",
-        run_id=trigger_run_id,
-    )
 
 The return_value key (default key with which XComs are pushed) is defined as a constant XCOM_RETURN_KEY in the :class:`~airflow.sdk.bases.xcom.BaseXCom` class and can be accessed as BaseXCom.XCOM_RETURN_KEY.
 
@@ -106,22 +96,11 @@ The default XCom backend, BaseXCom, stores XComs in the Airflow database, which 
 Custom XCom Backends
 --------------------
 
-The XCom system has interchangeable backends, and you can set which backend is being used via the ``xcom_backend`` configuration option. A backend is a subclass of :class:`~airflow.sdk.bases.xcom.BaseXCom`.
+The XCom system has interchangeable backends, and you can set which backend is being used via the ``xcom_backend`` configuration option.
 
-A backend that keeps values outside the metadata database overrides ``store_value``, which receives an
-:class:`~airflow.sdk.bases.xcom.XComCoordinate`, stores the value and returns what the XCom row holds, and
-``load_value``, which turns that row value back into the value. ``XComCoordinate.build_path`` builds a storage
-location that is unique per task instance, or per write when the writer cannot know the task instance.
-The key is chosen by the Dag author and can look like a file extension, so pass a ``suffix`` that names the
-stored format if your backend reads the format back from the object name.
+If you want to implement your own backend, you should subclass :class:`~airflow.sdk.bases.xcom.BaseXCom`, and override the ``serialize_value`` and ``deserialize_value`` methods.
 
-Override ``purge`` to remove the stored data when the Task SDK deletes an XCom, either through ``XCom.delete`` or
-when a task instance clears its XComs as it starts again. ``purge`` is not called when a row is removed through
-the REST API, the UI or ``airflow db clean``, so those leave the stored data behind.
-
-A backend that only overrides ``serialize_value`` and ``deserialize_value`` keeps working, but cannot be used
-with Dags that use task loops: every iteration of a task in a loop is a separate task instance, and only
-``store_value`` can tell them apart.
+You can override the ``purge`` method in the ``BaseXCom`` class to have control over purging the XCom data from the custom backend. This will be called as part of ``delete``.
 
 Verifying Custom XCom Backend usage in Containers
 -------------------------------------------------

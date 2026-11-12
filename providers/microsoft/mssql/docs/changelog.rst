@@ -27,97 +27,6 @@
 Changelog
 ---------
 
-4.7.3
-.....
-
-Bug Fixes
-~~~~~~~~~
-
-* ``Cache the dialect on MsSqlHook (#75656)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-   * ``[main] Upgrade important CI environment (#76278)``
-
-4.7.2
-.....
-
-Misc
-~~~~
-
-* ``Drop support for Python 3.10 (#74157)``
-
-Doc-only
-~~~~~~~~
-
-* ``Update provider READMEs for the Python 3.11 baseline (#74158)``
-* ``Clarify the SQL dialect operations documentation (#73145)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-   * ``[main] Upgrade important CI environment (#73629)``
-   * ``Prepare providers release 2026-09-22 (#73506)``
-   * ``Revert "[main] Upgrade important CI environment (#73308)" (#73621)``
-   * ``[main] Upgrade important CI environment (#73308)``
-
-4.7.1
-.....
-
-Misc
-~~~~
-
-* ``Add type annotations to sql hooks (#70815)``
-
-Doc-only
-~~~~~~~~
-
-* ``Document each provider's optional extras in its docs index (#69478)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-   * ``Adopt flit 4 as the provider distribution build backend (#71186)``
-   * ``Update changelog with better wording (#71161)``
-   * ``Prepare providers release 2026-07-22 (#70256)``
-   * ``Fix inconsistency between generated provider docs and pyproject.toml (#68991)``
-
-
-4.7.0
-.....
-
-Features
-~~~~~~~~
-
-* ``Add Azure, Fabric and instance MSSQL Asset URI validation (#67999)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-
-4.6.1
-.....
-
-Misc
-~~~~
-
-* ``Fix MSSQL connection schema field metadata (#66756)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-
-
-4.6.0
-.....
-
-Features
-~~~~~~~~
-
-* ``Add uri sanitizers and asset factories for new schemes (#66426)``
-
-.. Below changes are excluded from the changelog. Move them to
-   appropriate section above if needed. Do not delete the lines(!):
-   * ``Add explicit [tool.flit.sdist] sections to flit-based pyproject.tomls (#65861)``
-   * ``chore: Some nits in asset normalization (#66710)``
-   * ``Fix stale system test documentation links (#65071)``
-
 4.5.2
 .....
 
@@ -299,7 +208,7 @@ Misc
 .....
 
 .. note::
-  This version contains no code changes. It was released to replace a previous version that was yanked due to a packaging issue.
+  This version has no code changes. It's released due to yank of previous version due to packaging issues.
 
 4.1.0
 .....

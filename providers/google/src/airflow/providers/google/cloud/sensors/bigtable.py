@@ -68,7 +68,6 @@ class BigtableTableReplicationCompletedSensor(BaseSensorOperator, BigtableValida
         "instance_id",
         "table_id",
         "impersonation_chain",
-        "gcp_conn_id",
     )
     operator_extra_links = (BigtableTablesLink(),)
 

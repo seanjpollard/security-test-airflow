@@ -17,7 +17,7 @@
 # under the License.
 
 """
-Replace asset_trigger table with asset_watcher.
+replace asset_trigger table with asset_watcher.
 
 Revision ID: 15d84ca19038
 Revises: 509b94a1042d

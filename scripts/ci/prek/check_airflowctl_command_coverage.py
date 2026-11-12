@@ -17,7 +17,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # /// script
-# requires-python = ">=3.11,<3.12"
+# requires-python = ">=3.10,<3.11"
 # dependencies = [
 #   "rich>=13.6.0",
 # ]
@@ -53,14 +53,15 @@ EXCLUDED_COMMANDS = {
     "assets delete-dag-queued-events",
     "assets delete-queued-event",
     "assets delete-queued-events",
-    "assets get-alias",
+    "assets get-by-alias",
     "assets get-dag-queued-event",
     "assets get-dag-queued-events",
     "assets get-queued-events",
-    "assets list-aliases",
+    "assets list-by-alias",
     "assets materialize",
     "backfill cancel",
     "backfill create",
+    "backfill create-dry-run",
     "backfill get",
     "backfill pause",
     "backfill unpause",
@@ -71,11 +72,6 @@ EXCLUDED_COMMANDS = {
     "dags get-tags",
 }
 
-SUBGROUPS = {
-    "taskinstances": {"state-store"},
-}
-NESTED_PREFIXES = {f"{group} {subgroup}" for group, subgroups in SUBGROUPS.items() for subgroup in subgroups}
-
 
 def parse_tested_commands() -> set[str]:
     tested: set[str] = set()
@@ -85,17 +81,11 @@ def parse_tested_commands() -> set[str]:
 
     # Match command patterns like "assets list", "dags list-import-errors", etc.
     # Also handles f-strings like f"dagrun get..." or f'dagrun get...'
-    # The third token is only kept for nested subgroups (NESTED_PREFIXES).
-    pattern = r'f?["\']([a-z]+(?:-[a-z]+)*(?:\s+[a-z]+(?:-[a-z]+)*){1,2})'
+    pattern = r'f?["\']([a-z]+(?:-[a-z]+)*\s+[a-z]+(?:-[a-z]+)*)'
     for match in re.findall(pattern, content):
         parts = match.split()
-        if len(parts) < 2:
-            continue
-        two = f"{parts[0]} {parts[1]}"
-        if two in NESTED_PREFIXES and len(parts) >= 3:
-            tested.add(f"{two} {parts[2]}")
-        else:
-            tested.add(two)
+        if len(parts) >= 2:
+            tested.add(f"{parts[0]} {parts[1]}")
 
     return tested
 
@@ -111,12 +101,7 @@ def main():
     missing = []
     for group, subcommands in sorted(available.items()):
         for subcommand in sorted(subcommands):
-            subgroup = next((sg for sg in SUBGROUPS.get(group, ()) if subcommand.endswith(f"-{sg}")), None)
-            cmd = (
-                f"{group} {subgroup} {subcommand.removesuffix(f'-{subgroup}')}"
-                if subgroup is not None
-                else f"{group} {subcommand}"
-            )
+            cmd = f"{group} {subcommand}"
             if cmd not in tested and cmd not in EXCLUDED_COMMANDS:
                 missing.append(cmd)
 

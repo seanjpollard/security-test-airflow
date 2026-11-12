@@ -17,17 +17,13 @@
 from __future__ import annotations
 
 import pytest
-from check_excluded_provider_markers import _check_dependency, _get_excluded_providers
-
-
-def _excluded(python=None, machines=None):
-    return {"python": list(python or []), "machines": list(machines or [])}
+from check_excluded_provider_markers import _check_dependency
 
 
 class TestCheckDependency:
     EXCLUDED = {
-        "apache-airflow-providers-amazon": _excluded(python=["3.14"]),
-        "apache-airflow-providers-google": _excluded(python=["3.14"]),
+        "apache-airflow-providers-amazon": ["3.14"],
+        "apache-airflow-providers-google": ["3.14"],
     }
 
     def test_no_error_when_marker_present(self):
@@ -68,14 +64,14 @@ class TestCheckDependency:
         ],
     )
     def test_multiple_excluded_versions(self, excluded_versions):
-        excluded = {"apache-airflow-providers-amazon": _excluded(python=excluded_versions)}
+        excluded = {"apache-airflow-providers-amazon": excluded_versions}
         dep = "apache-airflow-providers-amazon>=9.0.0"
         errors = _check_dependency(dep, excluded)
         assert len(errors) == len(excluded_versions)
 
     def test_partial_marker_flags_missing_version(self):
         """If provider is excluded for 3.14 and 3.15, but only 3.14 marker exists."""
-        excluded = {"apache-airflow-providers-amazon": _excluded(python=["3.14", "3.15"])}
+        excluded = {"apache-airflow-providers-amazon": ["3.14", "3.15"]}
         dep = 'apache-airflow-providers-amazon>=9.0.0; python_version !="3.14"'
         errors = _check_dependency(dep, excluded)
         assert len(errors) == 1
@@ -83,108 +79,5 @@ class TestCheckDependency:
 
     def test_and_combined_markers(self):
         dep = 'apache-airflow-providers-amazon>=9.0.0; python_version !="3.14" and python_version !="3.15"'
-        excluded = {"apache-airflow-providers-amazon": _excluded(python=["3.14", "3.15"])}
+        excluded = {"apache-airflow-providers-amazon": ["3.14", "3.15"]}
         assert _check_dependency(dep, excluded) == []
-
-
-class TestCheckDependencyPlatform:
-    EXCLUDED = {"apache-airflow-providers-ibm-mq": _excluded(machines=["aarch64", "arm64"])}
-
-    def test_no_error_when_platform_marker_present(self):
-        dep = (
-            'apache-airflow-providers-ibm-mq>=0.1.0; platform_machine !="aarch64" '
-            'and platform_machine !="arm64"'
-        )
-        assert _check_dependency(dep, self.EXCLUDED) == []
-
-    def test_error_when_platform_marker_missing(self):
-        dep = "apache-airflow-providers-ibm-mq>=0.1.0"
-        errors = _check_dependency(dep, self.EXCLUDED)
-        assert len(errors) == 2
-        assert all("platform_machine" in e for e in errors)
-
-    def test_partial_platform_marker_flags_missing_machine(self):
-        dep = 'apache-airflow-providers-ibm-mq>=0.1.0; platform_machine !="aarch64"'
-        errors = _check_dependency(dep, self.EXCLUDED)
-        assert len(errors) == 1
-        assert "arm64" in errors[0]
-
-    def test_combined_python_and_platform_exclusions(self):
-        excluded = {"apache-airflow-providers-ibm-mq": _excluded(python=["3.14"], machines=["aarch64"])}
-        dep = (
-            'apache-airflow-providers-ibm-mq>=0.1.0; python_version !="3.14" and platform_machine !="aarch64"'
-        )
-        assert _check_dependency(dep, excluded) == []
-
-
-@pytest.mark.parametrize(
-    ("version", "marker", "error"),
-    [
-        ("3.10.0", "", 'missing python_full_version !="3.10.0.*"'),
-        ("3.10.0", 'python_full_version != "3.10.1.*"', 'missing python_full_version !="3.10.0.*"'),
-        ("3.10.0", 'python_full_version != "3.10.0"', 'missing python_full_version !="3.10.0.*"'),
-        ("3.10.0", 'python_version != "3.10"', "excludes supported Python 3.10.1"),
-        (
-            "3.10.1",
-            'python_full_version != "3.10.0.*" and python_full_version != "3.10.1.*"',
-            "excludes supported Python 3.10.0",
-        ),
-        ("3.10.0", 'python_full_version != "3.10.0.*"', None),
-        ("3.10.1", 'python_full_version != "3.10.1.*"', None),
-        ("3.11.0", 'python_full_version != "3.11.0.*"', None),
-    ],
-)
-def test_patch_exclusion_marker(version, marker, error):
-    dependency = "apache-airflow-providers-example>=1.0.0"
-    if marker:
-        dependency += f"; {marker}"
-    excluded = {"apache-airflow-providers-example": {"python": [version], "machines": []}}
-
-    errors = _check_dependency(dependency, excluded)
-
-    if error:
-        assert any(error in message and "apache-airflow-providers-example" in message for message in errors)
-    else:
-        assert errors == []
-
-
-def test_patch_minor_and_platform_exclusions_together():
-    dependency = (
-        "apache-airflow-providers-example>=1.0.0; "
-        'python_full_version != "3.10.0.*" and python_version != "3.14" '
-        'and platform_machine != "arm64"'
-    )
-    excluded = {"apache-airflow-providers-example": {"python": ["3.10.0", "3.14"], "machines": ["arm64"]}}
-
-    assert _check_dependency(dependency, excluded) == []
-
-
-@pytest.mark.parametrize(
-    ("versions", "marker"),
-    [
-        (["3.10.0", "3.10.1"], 'python_full_version != "3.10.0.*" and python_full_version != "3.10.1.*"'),
-        (["3.10.0", "3.10"], 'python_full_version != "3.10.0.*" and python_version != "3.10"'),
-    ],
-)
-def test_adjacent_excluded_patches_do_not_count_as_supported(versions, marker):
-    dependency = f"apache-airflow-providers-example>=1.0.0; {marker}"
-    excluded = {"apache-airflow-providers-example": {"python": versions, "machines": []}}
-
-    assert _check_dependency(dependency, excluded) == []
-
-
-@pytest.fixture(scope="module")
-def excluded():
-    return _get_excluded_providers()
-
-
-class TestExcludedPlatformDerivation:
-    """``platform.machine()`` reports ``aarch64`` on Linux and ``arm64`` on macOS, so each
-    excluded platform must contribute only its own machine spelling. A provider that merely
-    lacks a Linux ARM build has to stay installable on Apple Silicon."""
-
-    def test_linux_arm_exclusion_leaves_apple_silicon_installable(self, excluded):
-        assert excluded["apache-airflow-providers-ibm-db2"]["machines"] == ["aarch64"]
-
-    def test_listing_both_arm_platforms_excludes_both_machines(self, excluded):
-        assert excluded["apache-airflow-providers-ibm-mq"]["machines"] == ["aarch64", "arm64"]

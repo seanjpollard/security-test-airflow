@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from json.decoder import JSONDecodeError
 from typing import TYPE_CHECKING, cast
 from unittest import mock
@@ -26,27 +26,12 @@ from unittest.mock import MagicMock, PropertyMock, patch
 import pendulum
 import pytest
 import time_machine
-from kubernetes.client import (
-    CoreV1Event,
-    CoreV1EventList,
-    V1ContainerState,
-    V1ContainerStateTerminated,
-    V1ContainerStateWaiting,
-    V1ContainerStatus,
-    V1ObjectMeta,
-    V1ObjectReference,
-    V1Pod,
-    V1PodCondition,
-    V1PodStatus,
-)
 from kubernetes.client.rest import ApiException
 from urllib3.exceptions import HTTPError as BaseHTTPError
 
 from airflow.providers.cncf.kubernetes.exceptions import KubernetesApiError
-from airflow.providers.cncf.kubernetes.hooks.kubernetes import AsyncKubernetesHook
 from airflow.providers.cncf.kubernetes.utils.pod_manager import (
     AsyncPodManager,
-    PodCommandException,
     PodLogsConsumer,
     PodManager,
     PodPhase,
@@ -62,16 +47,6 @@ from unit.cncf.kubernetes.test_callbacks import MockKubernetesPodOperatorCallbac
 
 if TYPE_CHECKING:
     from pendulum import DateTime
-
-POD_MANAGER_MODULE = "airflow.providers.cncf.kubernetes.utils.pod_manager"
-
-
-def _build_event_list() -> CoreV1EventList:
-    event = CoreV1Event(
-        involved_object=V1ObjectReference(),
-        metadata=V1ObjectMeta(uid="event-uid", resource_version="1"),
-    )
-    return CoreV1EventList(items=[event])
 
 
 @pytest.fixture
@@ -111,40 +86,6 @@ def test_parse_log_line():
     timestamp, line = parse_log_line(f"{real_timestamp} {log_message}")
     assert timestamp == pendulum.parse(real_timestamp)
     assert line == log_message
-
-
-@pytest.mark.parametrize(
-    ("raw_line", "expected_ts"),
-    [
-        pytest.param(
-            "2026-05-28T13:07:57.030578889Z \n",
-            "2026-05-28T13:07:57.030578889Z",
-            id="trailing-space-and-newline",
-        ),
-        pytest.param(
-            "2026-05-28T13:07:57.030581518Z\n",
-            "2026-05-28T13:07:57.030581518Z",
-            id="newline-only",
-        ),
-        pytest.param(
-            "2026-05-28T13:07:57.030642740Z ",
-            "2026-05-28T13:07:57.030642740Z",
-            id="trailing-space-no-newline",
-        ),
-    ],
-)
-def test_parse_log_line_handles_empty_container_writes(raw_line, expected_ts):
-    """
-    Regression for #36571: an empty container write (just ``\\n``) is streamed
-    back by kubelet as ``"<rfc3339-ts> \\n"`` when ``timestamps=True``. The
-    parser must recognise it as a real (empty) log line rather than as a
-    continuation of the previous one, otherwise the bare timestamp is appended
-    onto the previous buffered message and emitted unformatted into task logs.
-    """
-    timestamp, message = parse_log_line(raw_line)
-
-    assert timestamp == pendulum.parse(expected_ts)
-    assert message == ""
 
 
 def test_log_pod_event():
@@ -206,62 +147,15 @@ def test_log_pod_event_multiple_events():
     assert mock_pod_manager.log.info.call_count == 2
 
 
-def _build_waiting_container_status(name: str, reason: str, message: str = "") -> V1ContainerStatus:
-    return V1ContainerStatus(
-        name=name,
-        image="alpine",
-        image_id="1",
-        ready=False,
-        restart_count=0,
-        state=V1ContainerState(waiting=V1ContainerStateWaiting(reason=reason, message=message)),
-    )
-
-
-def _build_pod_with_waiting_container(reason: str, message: str, *, init: bool = False) -> V1Pod:
-    stuck = _build_waiting_container_status("init" if init else "base", reason, message)
-    if not init:
-        return V1Pod(status=V1PodStatus(container_statuses=[stuck]))
-    return V1Pod(
-        status=V1PodStatus(
-            init_container_statuses=[stuck],
-            container_statuses=[_build_waiting_container_status("base", "PodInitializing")],
-        )
-    )
-
-
-def _build_terminated_container_status(name: str) -> V1ContainerStatus:
-    return V1ContainerStatus(
-        name=name,
-        image="alpine",
-        image_id="1",
-        ready=False,
-        restart_count=0,
-        state=V1ContainerState(terminated=V1ContainerStateTerminated(exit_code=0)),
-    )
-
-
-def _build_pod_with_sidecar_pull_failure(*, initialized: bool) -> V1Pod:
-    """Build a pod whose native sidecar cannot pull its image.
-
-    With ``initialized=True`` the base container has already run, which keeps
-    ``Initialized`` true while the sidecar restarts.
-    """
-    return V1Pod(
-        status=V1PodStatus(
-            phase=PodPhase.RUNNING if initialized else PodPhase.PENDING,
-            conditions=[V1PodCondition(type="Initialized", status="True" if initialized else "False")],
-            init_container_statuses=[
-                _build_waiting_container_status(
-                    "sidecar", "ImagePullBackOff", 'Back-off pulling image "sidecar:latest"'
-                )
-            ],
-            container_statuses=[
-                _build_terminated_container_status("base")
-                if initialized
-                else _build_waiting_container_status("base", "PodInitializing")
-            ],
-        )
-    )
+def _pod_with_waiting_container(reason: str, message: str):
+    pod = mock.MagicMock()
+    container_status = mock.MagicMock()
+    waiting_state = mock.MagicMock()
+    waiting_state.reason = reason
+    waiting_state.message = message
+    container_status.state.waiting = waiting_state
+    pod.status.container_statuses = [container_status]
+    return pod
 
 
 @pytest.mark.parametrize(
@@ -284,17 +178,14 @@ def test_detect_pod_terminate_early_issues_returns_none_for_transient_messages(r
     total wait. Returning None here keeps the monitoring loop going so those
     retries have a chance to succeed.
     """
-    pod = _build_pod_with_waiting_container(reason, message)
+    pod = _pod_with_waiting_container(reason, message)
     assert detect_pod_terminate_early_issues(pod) is None
 
 
-@pytest.mark.parametrize("init", [False, True], ids=["main_container", "init_container"])
 @pytest.mark.parametrize(
     ("reason", "message"),
     [
         ("InvalidImageName", "Failed to apply default image tag"),
-        # The image name contains the transient pattern "timeout".
-        ("InvalidImageName", 'Failed to apply default image tag "timeout-worker:Bad Tag"'),
         ("ErrImageNeverPull", "Container image pull policy is Never"),
         ("ErrImagePull", "manifest unknown"),
         ("ImagePullBackOff", "unauthorized: authentication required"),
@@ -303,36 +194,12 @@ def test_detect_pod_terminate_early_issues_returns_none_for_transient_messages(r
         ("ImagePullBackOff", 'Back-off pulling image "nonexistent:latest"'),
     ],
 )
-def test_detect_pod_terminate_early_issues_returns_error_for_fatal_messages(reason, message, init):
-    pod = _build_pod_with_waiting_container(reason, message, init=init)
+def test_detect_pod_terminate_early_issues_returns_error_for_fatal_messages(reason, message):
+    pod = _pod_with_waiting_container(reason, message)
     error = detect_pod_terminate_early_issues(pod)
     assert error is not None
     assert reason in error
     assert message in error
-
-
-@pytest.mark.parametrize(
-    ("initialized", "expected_error_contains"),
-    [
-        pytest.param(False, "Image for container 'sidecar' cannot be pulled", id="still_initializing"),
-        pytest.param(True, None, id="already_initialized"),
-    ],
-)
-def test_detect_pod_terminate_early_issues_gates_sidecars_on_initialized(
-    initialized, expected_error_contains
-):
-    """A sidecar stuck pulling only justifies early termination while it gates start-up.
-
-    Once the pod is ``Initialized`` init containers no longer gate start-up, so a sidecar
-    failing a restart must not end the wait: the main container's work can still succeed.
-    """
-    pod = _build_pod_with_sidecar_pull_failure(initialized=initialized)
-    error = detect_pod_terminate_early_issues(pod)
-    if expected_error_contains is None:
-        assert error is None
-    else:
-        assert error is not None
-        assert expected_error_contains in error
 
 
 class TestPodManager:
@@ -564,32 +431,6 @@ class TestPodManager:
             resource_version=None,
             resource_version_match=None,
         )
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("read_result", "error"),
-        [
-            pytest.param(ApiException(status=504), str(ApiException(status=504)), id="reading-events"),
-            pytest.param(_build_event_list(), "bad event", id="logging-an-event"),
-        ],
-    )
-    @mock.patch(f"{POD_MANAGER_MODULE}.log_pod_event", autospec=True, side_effect=ValueError("bad event"))
-    @mock.patch.object(PodManager, "read_pod_events", autospec=True)
-    async def test_watch_pod_events_stops_on_error(
-        self, mock_read, mock_log_event, read_result, error, caplog
-    ):
-        mock_read.side_effect = [read_result]
-
-        await self.pod_manager.watch_pod_events(
-            V1Pod(metadata=V1ObjectMeta(name="test-pod")), check_interval=1
-        )
-
-        mock_read.assert_called_once()
-        assert (
-            mock.ANY,
-            logging.WARNING,
-            f"Stopped watching events of pod test-pod: {error}",
-        ) in caplog.record_tuples
 
     @pytest.mark.asyncio
     @mock.patch("asyncio.sleep", new_callable=mock.AsyncMock)
@@ -943,41 +784,6 @@ class TestPodManager:
 
     @mock.patch("airflow.providers.cncf.kubernetes.utils.pod_manager.PodManager.container_is_running")
     @mock.patch("airflow.providers.cncf.kubernetes.utils.pod_manager.PodManager.read_pod_logs")
-    def test_empty_container_lines_do_not_pollute_previous_message(
-        self, mock_read_pod_logs, mock_container_is_running, caplog
-    ):
-        """
-        Regression for #36571: when a container writes empty lines, kubelet
-        returns them as ``"<ts> \\n"`` rows. Previously these slipped through
-        ``parse_log_line`` as "no timestamp" and were appended as continuations
-        onto the previous buffered message, which then emitted multi-line
-        records where only the first line carried the Airflow log prefix --
-        leaving bare ``<ts>`` rows in task logs that downstream pendulum-based
-        parsers ``(file_task_handler._parse_timestamp)`` then choked on.
-        """
-        log = (
-            "2026-05-28T13:07:50.160Z first test line\n"
-            "2026-05-28T13:07:57.030578889Z \n"
-            "2026-05-28T13:07:57.030581518Z\n"
-            "2026-05-28T13:07:57.030642740Z \n"
-            "2026-05-28T13:07:57.034Z last test line\n"
-        )
-        mock_read_pod_logs.return_value = [bytes(line, "utf-8") for line in log.split("\n")]
-        mock_container_is_running.return_value = False
-
-        with caplog.at_level(logging.INFO):
-            self.pod_manager.fetch_container_logs(mock.MagicMock(), "base", follow=True)
-
-        assert "first test line" in caplog.text
-        assert "last test line" in caplog.text
-        # The empty-line timestamps must not leak into the previous message and
-        # must not be emitted as orphan rows.
-        assert "2026-05-28T13:07:57.030578889Z" not in caplog.text
-        assert "2026-05-28T13:07:57.030581518Z" not in caplog.text
-        assert "2026-05-28T13:07:57.030642740Z" not in caplog.text
-
-    @mock.patch("airflow.providers.cncf.kubernetes.utils.pod_manager.PodManager.container_is_running")
-    @mock.patch("airflow.providers.cncf.kubernetes.utils.pod_manager.PodManager.read_pod_logs")
     def test_container_log_times_tracks_last_timestamp(self, mock_read_pod_logs, mock_container_is_running):
         """Test that container_log_times dictionary tracks the last log timestamp for each container."""
         timestamp_string = "2020-10-08T14:16:17.793417674Z"
@@ -1114,13 +920,11 @@ class TestPodManager:
         waiting_state.reason = fail_reason
         waiting_state.message = "Test error"
         container_statuse.state.waiting = waiting_state
-        container_statuse.name = "base"
         pod_response.status.container_statuses = [container_statuse]
 
         self.mock_kube_client.read_namespaced_pod.return_value = pod_response
         expected_msg = (
-            "Image for container 'base' cannot be pulled, unable to start: "
-            f"{waiting_state.reason}\n{waiting_state.message}"
+            f"Image cannot be pulled, unable to start: {waiting_state.reason}\n{waiting_state.message}"
         )
         mock_pod = MagicMock()
         with pytest.raises(AirflowException, match=expected_msg):
@@ -1167,31 +971,9 @@ class TestPodManager:
             assert self.pod_manager.stop_watching_events is True
             assert mock_time_sleep.call_count == 3
             mock_log_info.assert_any_call(
-                "::group::Waiting up to %ss to get the POD scheduled...", schedule_timeout
+                "::group::Waiting until %ss to get the POD scheduled...", schedule_timeout
             )
             mock_log_info.assert_any_call("Waiting %ss to get the POD running...", startup_timeout)
-
-    @pytest.mark.asyncio
-    async def test_start_pod_preemption_raises_error(self):
-        """After a pod is scheduled on a node, it is possible that it gets preempted by another pod, such as a daemonset on a new node, it is possible this happens before
-        any containers are created.  In that case airflow needs to recreate the pod.
-        """
-
-        pod_response = mock.MagicMock()
-        pod_response.status.phase = "Failed"
-        pod_response.status.container_statuses = None
-        pod_response.status.message = "Pod was rejected: Node didn't have enough resource: memory, requested: 547356672, used: 14813233152, capacity: 15334334464"
-        pod_response.status.reason = "OutOfmemory"
-
-        self.mock_kube_client.read_namespaced_pod.return_value = pod_response
-        expected_msg = "Pod failed before containers started"
-        mock_pod = MagicMock()
-        with pytest.raises(AirflowException, match=expected_msg):
-            await self.pod_manager.await_pod_start(
-                pod=mock_pod,
-                schedule_timeout=60,
-                startup_timeout=60,
-            )
 
     @mock.patch("airflow.providers.cncf.kubernetes.utils.pod_manager.container_is_running")
     def test_container_is_running(self, container_is_running_mock):
@@ -1258,7 +1040,7 @@ class TestPodManager:
     def test_fetch_container_with_valid_since_time(self, logs_available, container_running):
         """Test that since_seconds is calculated correctly when since_time is a valid datetime."""
         mock_pod = MagicMock()
-        since_time = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC) - timedelta(seconds=30)
+        since_time = datetime(2026, 1, 1, 0, 0, 0, tzinfo=dt_timezone.utc) - timedelta(seconds=30)
         logs_available.return_value = True
         container_running.return_value = False
         self.mock_kube_client.read_namespaced_pod_log.return_value = mock.MagicMock(
@@ -1358,46 +1140,6 @@ class TestPodManager:
         "airflow.providers.cncf.kubernetes.utils.pod_manager.PodManager.container_is_running",
         return_value=True,
     )
-    def test_extract_xcom_returns_result_when_sidecar_kill_fails(
-        self, mock_container_is_running, mock_exec_xcom_kill, mock_kubernetes_stream
-    ):
-        """A failure to kill the sidecar must not discard the XCom value already read."""
-        xcom_json = """{"a": "true"}"""
-        mock_client = MagicMock()
-        mock_client.peek_stderr.return_value = ""
-        mock_client.read_all.return_value = xcom_json
-        mock_kubernetes_stream.return_value = mock_client
-        mock_exec_xcom_kill.side_effect = PodCommandException("Command failed with stderr: Permission denied")
-        ret = self.pod_manager.extract_xcom(pod=MagicMock())
-        assert ret == xcom_json
-        assert mock_exec_xcom_kill.call_count == 1
-
-    @mock.patch("airflow.providers.cncf.kubernetes.utils.pod_manager.kubernetes_stream")
-    @mock.patch("airflow.providers.cncf.kubernetes.utils.pod_manager.PodManager.extract_xcom_kill")
-    @mock.patch(
-        "airflow.providers.cncf.kubernetes.utils.pod_manager.PodManager.container_is_running",
-        return_value=True,
-    )
-    def test_extract_xcom_reraises_kill_failure_when_not_ignored(
-        self, mock_container_is_running, mock_exec_xcom_kill, mock_kubernetes_stream
-    ):
-        """With ignore_kill_failure=False the kill failure still propagates to the caller."""
-        xcom_json = """{"a": "true"}"""
-        mock_client = MagicMock()
-        mock_client.peek_stderr.return_value = ""
-        mock_client.read_all.return_value = xcom_json
-        mock_kubernetes_stream.return_value = mock_client
-        mock_exec_xcom_kill.side_effect = PodCommandException("Command failed with stderr: Permission denied")
-        with pytest.raises(PodCommandException, match="Permission denied"):
-            self.pod_manager.extract_xcom(pod=MagicMock(), ignore_kill_failure=False)
-        assert mock_exec_xcom_kill.call_count == 1
-
-    @mock.patch("airflow.providers.cncf.kubernetes.utils.pod_manager.kubernetes_stream")
-    @mock.patch("airflow.providers.cncf.kubernetes.utils.pod_manager.PodManager.extract_xcom_kill")
-    @mock.patch(
-        "airflow.providers.cncf.kubernetes.utils.pod_manager.PodManager.container_is_running",
-        return_value=True,
-    )
     def test_extract_xcom_failure(
         self, mock_container_is_running, mock_exec_xcom_kill, mock_kubernetes_stream
     ):
@@ -1468,8 +1210,8 @@ class TestPodManager:
         mock_pod = MagicMock()
         mock_container_is_running.return_value = False
         mock_container_is_terminated.return_value = False
-        with pytest.raises(AirflowException), mock.patch("time.sleep"):
-            self.pod_manager.await_xcom_sidecar_container_start(pod=mock_pod, timeout=0, log_interval=5)
+        with pytest.raises(AirflowException):
+            self.pod_manager.await_xcom_sidecar_container_start(pod=mock_pod, timeout=10, log_interval=5)
         mock_container_is_running.assert_any_call(mock_pod, "airflow-xcom-sidecar")
         mock_container_is_terminated.assert_any_call(mock_pod, "airflow-xcom-sidecar")
 
@@ -1657,37 +1399,6 @@ class TestAsyncPodManager:
         self.mock_async_hook.watch_pod_events.assert_called()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("watched", "error"),
-        [
-            pytest.param(ApiException(status=504), str(ApiException(status=504)), id="watching-events"),
-            pytest.param(_build_event_list().items[0], "bad event", id="logging-an-event"),
-        ],
-    )
-    @mock.patch(f"{POD_MANAGER_MODULE}.log_pod_event", autospec=True, side_effect=ValueError("bad event"))
-    async def test_watch_pod_events_stops_on_error(self, mock_log_event, watched, error, caplog):
-        async def event_stream(*_, **__):
-            if isinstance(watched, Exception):
-                raise watched
-            yield watched
-
-        hook = mock.create_autospec(AsyncKubernetesHook, instance=True)
-        hook.watch_pod_events.side_effect = event_stream
-        self.async_pod_manager._hook = hook
-
-        await self.async_pod_manager.watch_pod_events(
-            V1Pod(metadata=V1ObjectMeta(name="test-pod", namespace="test-namespace")),
-            startup_check_interval=30,
-        )
-
-        hook.watch_pod_events.assert_called_once()
-        assert (
-            mock.ANY,
-            logging.WARNING,
-            f"Stopped watching events of pod test-pod: {error}",
-        ) in caplog.record_tuples
-
-    @pytest.mark.asyncio
     async def test_watch_pod_events_tracks_resource_version(self):
         """Test that watch_pod_events tracks and updates resource version."""
         mock_pod = mock.Mock()
@@ -1822,16 +1533,19 @@ class TestAsyncPodManager:
         self.mock_async_hook.get_pod.assert_called()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("init", [False, True], ids=["main_container", "init_container"])
     @pytest.mark.parametrize("fail_reason", ["ErrImagePull", "ImagePullBackOff", "InvalidImageName"])
-    async def test_start_pod_raises_fast_error_on_image_error(self, fail_reason, init):
-        pod_response = _build_pod_with_waiting_container(fail_reason, "Test error", init=init)
-        pod_response.status.phase = PodPhase.PENDING
+    async def test_start_pod_raises_fast_error_on_image_error(self, fail_reason):
+        pod_response = mock.MagicMock()
+        pod_response.status.phase = "Pending"
+        container_status = mock.MagicMock()
+        waiting_state = mock.MagicMock()
+        waiting_state.reason = fail_reason
+        waiting_state.message = "Test error"
+        container_status.state.waiting = waiting_state
+        pod_response.status.container_statuses = [container_status]
         self.mock_async_hook.get_pod.return_value = pod_response
-        stuck_container = "init" if init else "base"
         expected_msg = (
-            f"Image for container '{stuck_container}' cannot be pulled, "
-            f"unable to start: {fail_reason}\nTest error"
+            f"Image cannot be pulled, unable to start: {waiting_state.reason}\n{waiting_state.message}"
         )
         mock_pod = mock.MagicMock()
         with pytest.raises(AirflowException, match=expected_msg):
@@ -1880,7 +1594,7 @@ class TestAsyncPodManager:
         )
         assert mock_time_sleep.call_count == 3
         mock_log_info.assert_any_call(
-            "::group::Waiting up to %ss to get the POD scheduled...", schedule_timeout
+            "::group::Waiting until %ss to get the POD scheduled...", schedule_timeout
         )
         mock_log_info.assert_any_call("Waiting %ss to get the POD running...", startup_timeout)
         assert self.async_pod_manager.stop_watching_events is True
@@ -1916,33 +1630,54 @@ class TestAsyncPodManager:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("log_line_offsets", "expected_log_messages", "not_expected_log_messages"),
+        ("log_lines", "now", "expected_log_messages", "not_expected_log_messages"),
         [
             # Case 1: No logs
-            ([], [], []),
+            ([], pendulum.now(), [], []),
             # Case 2: One log line with timestamp before now
-            ([(-2, "message")], ["message"], []),
+            (
+                [f"{pendulum.now().subtract(seconds=2).to_iso8601_string()} message"],
+                pendulum.now(),
+                ["message"],
+                [],
+            ),
             # Case 3: Log line with timestamp equal to now (should be skipped, so last_time is None)
-            ([(0, "message")], [], ["message"]),
+            ([f"{pendulum.now().to_iso8601_string()} message"], pendulum.now(), [], ["message"]),
             # Case 4: Multiple log lines, last before now
-            ([(-3, "msg1"), (-2, "msg2")], ["msg1", "msg2"], []),
+            (
+                [
+                    f"{pendulum.now().subtract(seconds=3).to_iso8601_string()} msg1",
+                    f"{pendulum.now().subtract(seconds=2).to_iso8601_string()} msg2",
+                ],
+                pendulum.now(),
+                ["msg1", "msg2"],
+                [],
+            ),
             # Case 5: Log lines with continuation (no timestamp)
-            ([(-2, "msg1"), (None, "continued line")], ["msg1\ncontinued line"], []),
-            # Case 6: Log line followed by one at the current second (the latter should be skipped)
-            ([(-2, "msg1"), (0, "msg2")], ["msg1"], ["msg2"]),
+            (
+                [
+                    f"{pendulum.now().subtract(seconds=2).to_iso8601_string()} msg1",
+                    "continued line",
+                ],
+                pendulum.now(),
+                ["msg1\ncontinued line"],
+                [],
+            ),
+            # Case 6: Log lines with continuation (no timestamp)
+            (
+                [
+                    f"{pendulum.now().subtract(seconds=2).to_iso8601_string()} msg1",
+                    f"{pendulum.now().to_iso8601_string()} msg2",
+                ],
+                pendulum.now(),
+                ["msg1"],
+                ["msg2"],
+            ),
         ],
     )
     async def test_fetch_container_logs_before_current_sec_various_logs(
-        self, log_line_offsets, expected_log_messages, not_expected_log_messages
+        self, log_lines, now, expected_log_messages, not_expected_log_messages
     ):
-        # Use a fixed reference instant instead of real wall-clock time: building the
-        # log-line timestamps from separate `pendulum.now()` calls made the "equal to
-        # the current second" cases flaky whenever those calls straddled a second boundary.
-        now = pendulum.datetime(2024, 1, 1, 12, 0, 0)
-        log_lines = [
-            message if offset is None else f"{now.add(seconds=offset).to_iso8601_string()} {message}"
-            for offset, message in log_line_offsets
-        ]
         pod = mock.MagicMock()
         container_name = "base"
         since_time = now.subtract(minutes=1)
@@ -1982,26 +1717,6 @@ class TestAsyncPodManager:
             await self.async_pod_manager.fetch_container_logs_before_current_sec(
                 pod=pod, container_name=container_name, since_time=since_time
             )
-
-    @pytest.mark.asyncio
-    @mock.patch("asyncio.to_thread", new_callable=mock.AsyncMock)
-    async def test_fetch_container_logs_offloads_parse_off_the_event_loop(self, mock_to_thread):
-        """The CPU-bound per-line parse/emit loop is offloaded to a worker thread, not run on the loop."""
-        now = pendulum.datetime(2024, 1, 1, 12, 0, 0)
-        pod = mock.MagicMock()
-        container_name = "base"
-        log_lines = [f"{now.subtract(seconds=2).to_iso8601_string()} hello"]
-        self.mock_async_hook.read_logs.return_value = log_lines
-
-        with mock.patch("airflow.providers.cncf.kubernetes.utils.pod_manager.pendulum.now", return_value=now):
-            result = await self.async_pod_manager.fetch_container_logs_before_current_sec(
-                pod=pod, container_name=container_name, since_time=now.subtract(minutes=1)
-            )
-
-        assert result == now
-        mock_to_thread.assert_awaited_once_with(
-            self.async_pod_manager._emit_container_logs, log_lines, now, container_name
-        )
 
 
 class TestPodLogsConsumer:

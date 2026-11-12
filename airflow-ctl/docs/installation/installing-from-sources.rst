@@ -29,14 +29,14 @@ Released packages
     the top-left of the page.
 
 The Source packages are official packages of the Apache Software Foundation - and the ones that you can
-use if you want to build the packages yourself from the source code and be sure that the provenance of
+use is you want to build the packages yourself from the source code and be sure that the provenance of
 the packages is verified and matches the source code from the repository and you can verify the
 checksums and signatures of the packages.
 
-The ``sdist`` and ``whl`` packages released are the convenience packages - for installation, also built from
+The ``sdist`` and ``whl`` packages released are the convenience packages - of installation also installed from
 the same sources and you can still verify the origin of the packages and want to verify checksums and
-signatures of the packages. The packages are available via the
-`Official Apache Software Foundation Downloads <https://dlcdn.apache.org/>`_
+signatures of the packages. The packages are available via the Official Apache Software Foundations Downloads
+`Official Apache Software Foundations Downloads <https://dlcdn.apache.org/>`_
 
 The ``|version|`` downloads of Airflow Ctl are available at:
 
@@ -47,12 +47,12 @@ The ``|version|`` downloads of Airflow Ctl are available at:
     * `Whl package for airflow-ctl distribution <{{ closer_lua_url }}/apache_airflow_ctl-{{ airflowctl_version }}-py3-none-any.whl>`__ (`asc <{{ base_url }}/apache_airflow_ctl-{{ airflowctl_version }}-py3-none-any.whl.asc>`__, `sha512 <{{ base_url }}/apache_airflow_ctl-{{ airflowctl_version }}-py3-none-any.whl.sha512>`__)
 
 If you want to install from the source code, you can download from the sources link above, it will contain
-an ``INSTALL`` file containing details on how you can build and install airflowctl.
+a ``INSTALL`` file containing details on how you can build and install airflowctl.
 
 Release integrity
 '''''''''''''''''
 
-`PGP signatures KEYS <https://downloads.apache.org/airflow/KEYS>`__
+`PGP signatures KEYS <https://downloads.apache.org/airflowctl/KEYS>`__
 
 It is essential that you verify the integrity of the downloaded files using the PGP or SHA signatures.
 The PGP signatures can be verified using GPG or PGP. Please download the KEYS as well as the asc
@@ -92,7 +92,7 @@ or
 
 .. code-block:: bash
 
-    pgp apache-airflow-ctl-********.asc
+    pgp apache-airflow-********.asc
 
 Example:
 
@@ -118,7 +118,7 @@ For SHA512 sum check, download the relevant ``sha512`` and run the following:
 
 .. code-block:: bash
 
-    shasum -a 512 apache-airflow-ctl-********  | diff - apache-airflow-ctl-********.sha512
+    shasum -a 512 apache-airflow-ctl--********  | diff - apache-airflow-ctl--********.sha512
 
 The ``SHASUM`` of the file should match the one provided in ``.sha512`` file.
 
@@ -144,14 +144,14 @@ and SHA sum files with the script below:
         #!/bin/bash
         airflowctl_version="{{ airflowctl_version }}"
         ctl_download_dir="$(mktemp -d)"
-        pip download --no-deps "apache-airflow-ctl==${airflowctl_version}" --dest "${ctl_download_dir}"
-        curl "https://downloads.apache.org/airflow/airflow-ctl/${airflowctl_version}/apache_airflow_ctl-${airflowctl_version}-py3-none-any.whl.asc" \
-            -L -o "${ctl_download_dir}/apache_airflow_ctl-${airflowctl_version}-py3-none-any.whl.asc"
-        curl "https://downloads.apache.org/airflow/airflow-ctl/${airflowctl_version}/apache_airflow_ctl-${airflowctl_version}-py3-none-any.whl.sha512" \
-            -L -o "${ctl_download_dir}/apache_airflow_ctl-${airflowctl_version}-py3-none-any.whl.sha512"
+        pip download --no-deps "apache-airflow-ctl==${airflowctl_version}" --dest "${airflow_download_dir}"
+        curl "https://downloads.apache.org/airflowctl/${airflowctl_version}/apache_airflow_ctl-${airflowctl_version}-py3-none-any.whl.asc" \
+            -L -o "${airflowctl_download_dir}/apache_airflow_ctl-${airflowctl_version}-py3-none-any.whl.asc"
+        curl "https://downloads.apache.org/airflow/${airflowctl_version}/apache_airflow_ctl-${airflowctl_version}-py3-none-any.whl.sha512" \
+            -L -o "${airflowctl_download_dir}/apache_airflow_ctl-${airflowctl_version}-py3-none-any.whl.sha512"
         echo
-        echo "Please verify files downloaded to ${ctl_download_dir}"
-        ls -la "${ctl_download_dir}"
+        echo "Please verify files downloaded to ${airflowctl_download_dir}"
+        ls -la "${airflowctl_download_dir}"
         echo
 
 Once you verify the files following the instructions from previous chapter you can remove the temporary

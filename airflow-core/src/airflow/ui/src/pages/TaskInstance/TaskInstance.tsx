@@ -20,177 +20,105 @@ import { Heading } from "@chakra-ui/react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { useTranslation } from "react-i18next";
 import { FiCode, FiDatabase, FiUser } from "react-icons/fi";
-import {
-  MdDetails,
-  MdOutlineEventNote,
-  MdOutlineStorage,
-  MdOutlineTask,
-  MdReorder,
-  MdSyncAlt,
-} from "react-icons/md";
+import { MdDetails, MdOutlineEventNote, MdOutlineTask, MdReorder, MdSyncAlt } from "react-icons/md";
 import { PiBracketsCurlyBold } from "react-icons/pi";
-import { Navigate, useLocation, useParams, useSearchParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 
-import { DetailsLayout } from "src/layouts/Details/DetailsLayout";
-import type { NavTab } from "src/layouts/Details/NavTabs";
-
-import { SearchParamsKeys } from "src/constants/searchParams";
+import { useTaskInstanceServiceGetMappedTaskInstance } from "openapi/queries";
 import { useHITLReviewTabs } from "src/hooks/useHITLReviewTabs";
 import { usePluginTabs } from "src/hooks/usePluginTabs";
-import { type TabItem, useRequiredActionTabs } from "src/hooks/useRequiredActionTabs";
-import { useResolvePassCoordinate } from "src/hooks/useResolvePassCoordinate";
-import { useTaskInstanceCoordinates } from "src/hooks/useTaskInstanceCoordinates";
-import { useTaskInstanceView } from "src/hooks/useTaskInstanceView";
-import { useDefaultTaskInstanceTab } from "src/hooks/useUserSettings";
+import { useRequiredActionTabs } from "src/hooks/useRequiredActionTabs";
+import { DetailsLayout } from "src/layouts/Details/DetailsLayout";
 import { useGridTiSummariesStream } from "src/queries/useGridTISummaries.ts";
-import { isStatePending, useAutoRefresh, useDocumentTitle } from "src/utils";
-import { getDefaultTaskInstanceTabPath, getTaskInstanceLink } from "src/utils/links";
-import { isLoopTaskInstance } from "src/utils/loopTaskInstance";
+import { isStatePending, useAutoRefresh } from "src/utils";
 
-import { Header, HistoryHeader } from "./Header";
+import { Header } from "./Header";
 
 export const TaskInstance = () => {
   const { t: translate } = useTranslation(["dag", "common", "hitl"]);
   const { dagId = "", mapIndex = "-1", runId = "", taskId = "" } = useParams();
-  const [searchParams] = useSearchParams();
-  const location = useLocation();
-  const coordinates = useTaskInstanceCoordinates();
-  const isResolvingCoordinate = useResolvePassCoordinate();
-  const { error, historical, historicalTaskInstance, isLoading, liveTaskInstance, taskInstance } =
-    useTaskInstanceView();
-  const regional = liveTaskInstance !== undefined && isLoopTaskInstance(liveTaskInstance);
-  const tryNumber = searchParams.get(SearchParamsKeys.TRY_NUMBER);
-  const coordinateSearch = new URLSearchParams();
-
-  if (coordinates.regionId !== undefined) {
-    coordinateSearch.set(SearchParamsKeys.REGION_ID, coordinates.regionId);
-  }
-  if (coordinates.regionIndex !== undefined) {
-    coordinateSearch.set(SearchParamsKeys.REGION_INDEX, String(coordinates.regionIndex));
-  }
-  const tryParams = new URLSearchParams(coordinateSearch);
-
-  if (tryNumber !== null) {
-    tryParams.set(SearchParamsKeys.TRY_NUMBER, tryNumber);
-  }
-  const trySearch = tryParams.toString() || undefined;
-
-  useDocumentTitle(taskId);
-
   // Get external views with task_instance destination
   const externalTabs = usePluginTabs("task_instance");
 
-  // When another tab is the default, the index route redirects to it, so the Logs
-  // tab must point at the explicit /logs path to stay reachable.
-  const [defaultTab] = useDefaultTaskInstanceTab();
-  const logsTabValue = getDefaultTaskInstanceTabPath(defaultTab) === "" ? "" : "logs";
-
-  const tabs: Array<NavTab & TabItem> = [
-    {
-      icon: <MdReorder />,
-      label: translate("tabs.logs"),
-      matchPaths: ["logs"],
-      search: trySearch,
-      value: logsTabValue,
-    },
-    {
-      icon: <FiUser />,
-      label: translate("tabs.requiredActions"),
-      search: trySearch,
-      value: "required_actions",
-    },
+  const tabs = [
+    { icon: <MdReorder />, label: translate("tabs.logs"), value: "" },
+    { icon: <FiUser />, label: translate("tabs.requiredActions"), value: "required_actions" },
     {
       icon: <PiBracketsCurlyBold />,
       label: translate("tabs.renderedTemplates"),
       value: "rendered_templates",
     },
     { icon: <MdSyncAlt />, label: translate("tabs.xcom"), value: "xcom" },
-    { icon: <MdOutlineStorage />, label: translate("tabs.taskStateStore"), value: "task-state-store" },
     { icon: <FiDatabase />, label: translate("tabs.assetEvents"), value: "asset_events" },
     { icon: <MdOutlineEventNote />, label: translate("tabs.auditLog"), value: "events" },
     { icon: <FiCode />, label: translate("tabs.code"), value: "code" },
-    { icon: <MdDetails />, label: translate("tabs.details"), search: trySearch, value: "details" },
+    { icon: <MdDetails />, label: translate("tabs.details"), value: "details" },
     ...externalTabs,
   ];
 
   const refetchInterval = useAutoRefresh({ dagId });
   const parsedMapIndex = parseInt(mapIndex, 10);
 
-  const { summariesByRunId } = useGridTiSummariesStream({
-    dagId,
-    runIds: !historical && runId ? [runId] : [],
-  });
+  const {
+    data: taskInstance,
+    error,
+    isLoading,
+  } = useTaskInstanceServiceGetMappedTaskInstance(
+    {
+      dagId,
+      dagRunId: runId,
+      mapIndex: parsedMapIndex,
+      taskId,
+    },
+    undefined,
+    {
+      enabled: !isNaN(parsedMapIndex),
+      refetchInterval: (query) => (isStatePending(query.state.data?.state) ? refetchInterval : false),
+    },
+  );
+
+  const { summariesByRunId } = useGridTiSummariesStream({ dagId, runIds: runId ? [runId] : [] });
   const gridTISummaries = summariesByRunId.get(runId);
 
   const taskInstanceSummary = gridTISummaries?.task_instances.find((ti) => ti.task_id === taskId);
   const taskCount = Object.entries(taskInstanceSummary?.child_states ?? {})
     .map(([_state, count]) => count)
     .reduce((sum, val) => sum + val, 0);
-  const scopedTabs = tabs
-    .filter((tab) => !historical || ["details", logsTabValue, "required_actions"].includes(tab.value))
-    .map((tab) => ({
-      ...tab,
-      search: tab.search ?? (coordinateSearch.toString() || undefined),
-    }));
-  const newTabs =
-    taskInstance && taskInstance.map_index > -1 && !regional && !historical
-      ? [
-          ...scopedTabs.slice(0, 1),
-          {
-            icon: <MdOutlineTask />,
-            label: translate("tabs.mappedTaskInstances_other", {
-              count: Number(taskCount),
-            }),
-            value: "task_instances",
-          },
-          ...scopedTabs.slice(1),
-        ]
-      : scopedTabs;
+  let newTabs = tabs;
 
-  const { tabs: requiredActionTabs } = useRequiredActionTabs(
-    { ...coordinates, dagId, dagRunId: runId, mapIndex: parsedMapIndex, taskId },
-    newTabs,
-    {
-      autoRedirect: true,
-      refetchInterval: isStatePending(taskInstance?.state) && refetchInterval,
-    },
-  );
+  if (taskInstance && taskInstance.map_index > -1) {
+    newTabs = [
+      ...tabs.slice(0, 1),
+      {
+        icon: <MdOutlineTask />,
+        label: translate("tabs.mappedTaskInstances_other", {
+          count: Number(taskCount),
+        }),
+        value: "task_instances",
+      },
+      ...tabs.slice(1),
+    ];
+  }
 
-  const { tabs: displayTabs } = useHITLReviewTabs({ dagId, dagRunId: runId, taskId }, requiredActionTabs, {
-    ...coordinates,
-    enabled: !historical,
-    mapIndex: parsedMapIndex,
-    refetchInterval: isStatePending(taskInstance?.state) && refetchInterval,
+  const { tabs: requiredActionTabs } = useRequiredActionTabs({ dagId, dagRunId: runId, taskId }, newTabs, {
+    autoRedirect: true,
+    refetchInterval: isStatePending(taskInstance?.state) ? refetchInterval : false,
   });
 
-  const taskPath = getTaskInstanceLink({ dagId, dagRunId: runId, mapIndex: parsedMapIndex, taskId });
-
-  if (
-    historical &&
-    ![`${taskPath}/details`, `${taskPath}/logs`, `${taskPath}/required_actions`, taskPath].includes(
-      location.pathname,
-    )
-  ) {
-    return <Navigate replace to={{ pathname: `${taskPath}/logs`, search: searchParams.toString() }} />;
-  }
+  const { tabs: displayTabs } = useHITLReviewTabs({ dagId, dagRunId: runId, taskId }, requiredActionTabs, {
+    mapIndex: parsedMapIndex,
+    refetchInterval: isStatePending(taskInstance?.state) ? refetchInterval : false,
+  });
 
   return (
     <ReactFlowProvider>
-      {/* Held rather than rendered empty: a looped task instance cannot be asked for without a
-          coordinate, so the children must not run their queries until the pass resolves. */}
-      <DetailsLayout error={error} isLoading={isLoading || isResolvingCoordinate} tabs={displayTabs}>
+      <DetailsLayout error={error} isLoading={isLoading} tabs={displayTabs}>
         {taskInstance === undefined ? (
-          isLoading ? undefined : (
-            <Heading p={2} size="lg">
-              {translate("common:noItemsFound", { modelName: translate("common:taskInstance_one") })}
-            </Heading>
-          )
-        ) : historicalTaskInstance === undefined ? (
-          liveTaskInstance === undefined ? undefined : (
-            <Header taskInstance={liveTaskInstance} />
-          )
+          <Heading p={2} size="lg">
+            {translate("common:noItemsFound", { modelName: translate("common:taskInstance_one") })}
+          </Heading>
         ) : (
-          <HistoryHeader taskInstance={historicalTaskInstance} />
+          <Header taskInstance={taskInstance} />
         )}
       </DetailsLayout>
     </ReactFlowProvider>

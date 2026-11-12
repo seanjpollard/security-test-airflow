@@ -95,7 +95,8 @@ class Param:
         :param suppress_exception: To raise an exception or not when the validations fails.
             If true and validations fails, the return value would be None.
         """
-        from jsonschema import FormatChecker, validate
+        import jsonschema
+        from jsonschema import FormatChecker
         from jsonschema.exceptions import ValidationError
 
         if value is not NOTSET:
@@ -106,12 +107,7 @@ class Param:
                 return None
             raise ParamValidationError("No value passed and Param has no default value")
         try:
-            validate(
-                final_val,
-                self.schema,
-                format_checker=FormatChecker(),
-            )
-
+            jsonschema.validate(final_val, self.schema, format_checker=FormatChecker())
         except ValidationError as err:
             if suppress_exception:
                 return None

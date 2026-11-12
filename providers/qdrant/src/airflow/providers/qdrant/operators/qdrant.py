@@ -61,7 +61,6 @@ class QdrantIngestOperator(BaseOperator):
         "method",
         "max_retries",
         "wait",
-        "conn_id",
     )
 
     def __init__(

@@ -149,23 +149,14 @@ def patch_variable(
     update_mask: list[str] | None = Query(None),
 ) -> VariableResponse:
     """Update a variable by key."""
-    if patch_body.key != variable_key:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Invalid body, key from request body doesn't match uri parameter"
-        )
-    old_variable = session.scalar(select(Variable).filter_by(key=variable_key).limit(1))
-    if not old_variable:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, f"The Variable with key: `{variable_key}` was not found"
-        )
-    variable = update_orm_from_pydantic(old_variable, patch_body, update_mask)
+    variable = update_orm_from_pydantic(variable_key, patch_body, update_mask, session)
     return variable
 
 
 @variables_router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    responses=create_openapi_http_exception_doc([status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT]),
+    responses=create_openapi_http_exception_doc([status.HTTP_409_CONFLICT]),
     dependencies=[Depends(action_logging()), Depends(requires_access_variable("POST"))],
 )
 def post_variable(
@@ -183,7 +174,14 @@ def post_variable(
 
     Variable.set(**post_body.model_dump(), session=session)
 
-    return session.scalars(select(Variable).where(Variable.key == post_body.key)).one()
+    variable = session.scalar(select(Variable).where(Variable.key == post_body.key).limit(1))
+    if variable is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"Variable with key: `{post_body.key}` was not found",
+        )
+
+    return variable
 
 
 @variables_router.patch(

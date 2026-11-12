@@ -16,19 +16,19 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 /**
  * Dag  Runs page data fixture — creates runs across two Dags for filtering tests.
  */
 import { testConfig } from "playwright.config";
-
 import { test as base } from "tests/e2e/fixtures";
 import {
   apiCreateDagRun,
   apiSetDagRunState,
   safeCleanupDagRun,
+  uniqueRunId,
   waitForDagReady,
-} from "tests/e2e/utils/api/dag-runs";
-import { uniqueRunId } from "tests/e2e/utils/shared";
+} from "tests/e2e/utils/test-helpers";
 
 export type DagRunsPageData = {
   dag1Id: string;

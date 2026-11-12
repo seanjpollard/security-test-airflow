@@ -20,21 +20,16 @@ import type { Virtualizer } from "@tanstack/react-virtual";
 import type { TFunction } from "i18next";
 
 import type { TaskInstancesLogResponse } from "openapi/requests/types.gen";
-
 import {
   extractTIContext,
   renderStructuredLog,
   renderTIContextPreamble,
 } from "src/components/renderStructuredLog";
-
 import { parseStreamingLogContent } from "src/utils/logs";
-
-export const getGroupHeaderMarker = (isExpanded: boolean): string => (isExpanded ? "▼" : "▶");
 
 type GetDownloadTextOptions = {
   fetchedData: TaskInstancesLogResponse | undefined;
   logLevelFilters: Array<string>;
-  showLogLevel: boolean;
   showSource: boolean;
   showTimestamp: boolean;
   sourceFilters: Array<string>;
@@ -49,7 +44,6 @@ type GetDownloadTextOptions = {
 export const getDownloadText = ({
   fetchedData,
   logLevelFilters,
-  showLogLevel,
   showSource,
   showTimestamp,
   sourceFilters,
@@ -65,7 +59,6 @@ export const getDownloadText = ({
       logLink: "",
       logMessage: line,
       renderingMode: "text",
-      showLogLevel,
       showSource,
       showTimestamp,
       sourceFilters,
@@ -74,14 +67,14 @@ export const getDownloadText = ({
   );
 
   if (tiContext !== undefined) {
-    const preExecuteGroup = lines.findIndex((line) => {
+    const firstEndGroup = lines.findIndex((line) => {
       const text = typeof line === "string" ? line : line.event;
 
-      return text.includes("::group::Pre Execute");
+      return text.includes("::endgroup::");
     });
 
     rendered.splice(
-      preExecuteGroup === -1 ? 0 : preExecuteGroup + 1,
+      firstEndGroup === -1 ? 0 : firstEndGroup + 1,
       0,
       renderTIContextPreamble(tiContext, "text", "Task Identity") as string,
     );
@@ -92,7 +85,7 @@ export const getDownloadText = ({
 
 export type HighlightOptions = {
   currentMatchLineIndex?: number;
-  hashIndex?: number;
+  hash: string;
   index: number;
   searchMatchIndices?: Set<number>;
 };
@@ -104,7 +97,7 @@ export type HighlightOptions = {
  */
 export const getHighlightColor = ({
   currentMatchLineIndex,
-  hashIndex,
+  hash,
   index,
   searchMatchIndices,
 }: HighlightOptions): string => {
@@ -114,8 +107,11 @@ export const getHighlightColor = ({
   if (searchMatchIndices?.has(index)) {
     return "yellow.subtle";
   }
+  if (Boolean(hash) && index === Number(hash) - 1) {
+    return "brand.emphasized";
+  }
 
-  return hashIndex !== undefined && index === hashIndex ? "brand.emphasized" : "transparent";
+  return "transparent";
 };
 
 /**
@@ -149,7 +145,11 @@ export const splitBySearchQuery = (text: string, query: string): Array<Highlight
     segments.push({ highlight: false, text: text.slice(lastIndex) });
   }
 
-  return segments.length === 0 ? [{ highlight: false, text }] : segments;
+  if (segments.length === 0) {
+    return [{ highlight: false, text }];
+  }
+
+  return segments;
 };
 
 type VirtualizerInstance = Virtualizer<HTMLDivElement, Element>;
@@ -183,15 +183,3 @@ export const scrollToBottom = ({ element, virtualizer }: ScrollToBottomOptions):
   virtualizer.scrollToOffset(offset);
   element.scrollTop = offset;
 };
-
-/**
- * Whether a non-empty text selection currently sits inside `container`.
- * Used to pause following new log lines while the user is selecting text, so
- * auto-scrolling does not move the text out from under the cursor.
- */
-export const isSelectionWithin = (selection: Selection | null, container: HTMLElement | null): boolean =>
-  selection !== null &&
-  !selection.isCollapsed &&
-  selection.rangeCount !== 0 &&
-  container !== null &&
-  (container.contains(selection.anchorNode) || container.contains(selection.focusNode));

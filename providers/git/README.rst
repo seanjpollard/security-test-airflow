@@ -23,7 +23,7 @@
 
 Package ``apache-airflow-providers-git``
 
-Release: ``1.0.1``
+Release: ``0.3.2``
 
 
 `Distributed version control system (GIT) <https://git-scm.com/>`__
@@ -36,7 +36,7 @@ This is a provider package for ``git`` provider. All classes for this provider p
 are in ``airflow.providers.git`` python package.
 
 You can find package information and changelog for the provider
-in the `documentation <https://airflow.apache.org/docs/apache-airflow-providers-git/1.0.1/>`_.
+in the `documentation <https://airflow.apache.org/docs/apache-airflow-providers-git/0.3.2/>`_.
 
 Installation
 ------------
@@ -45,7 +45,7 @@ You can install this package on top of an existing Airflow installation (see ``R
 for the minimum Airflow version supported) via
 ``pip install apache-airflow-providers-git``
 
-The package supports the following python versions: 3.11,3.12,3.13,3.14
+The package supports the following python versions: 3.10,3.11,3.12,3.13,3.14
 
 Requirements
 ------------
@@ -54,18 +54,28 @@ Requirements
 PIP package                                 Version required
 ==========================================  ==================
 ``apache-airflow``                          ``>=3.0.0``
-``apache-airflow-providers-common-compat``  ``>=1.15.0``
+``apache-airflow-providers-common-compat``  ``>=1.12.0``
 ``GitPython``                               ``>=3.1.44``
 ==========================================  ==================
 
-Optional dependencies
-----------------------
+Cross provider package dependencies
+-----------------------------------
 
-==========  ===================
-Extra       Dependencies
-==========  ===================
-``github``  ``PyGithub>=2.1.1``
-==========  ===================
+Those are dependencies that might be needed in order to use all the features of the package.
+You need to install the specified providers in order to use them.
+
+You can install such cross-provider dependencies when installing from PyPI. For example:
+
+.. code-block:: bash
+
+    pip install apache-airflow-providers-git[common.compat]
+
+
+==================================================================================================================  =================
+Dependent package                                                                                                   Extra
+==================================================================================================================  =================
+`apache-airflow-providers-common-compat <https://airflow.apache.org/docs/apache-airflow-providers-common-compat>`_  ``common.compat``
+==================================================================================================================  =================
 
 The changelog for the provider package can be found in the
-`changelog <https://airflow.apache.org/docs/apache-airflow-providers-git/1.0.1/changelog.html>`_.
+`changelog <https://airflow.apache.org/docs/apache-airflow-providers-git/0.3.2/changelog.html>`_.

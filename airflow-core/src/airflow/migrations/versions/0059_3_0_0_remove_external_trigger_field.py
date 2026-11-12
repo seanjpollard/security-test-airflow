@@ -17,7 +17,7 @@
 # under the License.
 
 """
-Remove external_trigger field.
+remove external_trigger field.
 
 Revision ID: e00344393f31
 Revises: 6a9e7a527a88

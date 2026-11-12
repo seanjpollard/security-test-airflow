@@ -22,7 +22,6 @@ import collections.abc
 import copy
 from typing import TYPE_CHECKING, Any, Literal
 
-from airflow.exceptions import ParamValidationError
 from airflow.serialization.definitions.notset import NOTSET, is_arg_set
 
 if TYPE_CHECKING:
@@ -56,16 +55,12 @@ class SerializedParam:
         :param raises: All exceptions during validation are suppressed by
             default. They are only raised if this is set to *True* instead.
         """
-        from jsonschema import FormatChecker, validate
+        import jsonschema
 
         try:
             if not is_arg_set(value := self.value):
                 raise ValueError("No value passed")
-            validate(
-                value,
-                self.schema,
-                format_checker=FormatChecker(),
-            )
+            jsonschema.validate(value, self.schema, format_checker=jsonschema.FormatChecker())
         except Exception:
             if not raises:
                 return None
@@ -148,7 +143,7 @@ class SerializedParamsDict(collections.abc.Mapping[str, Any]):
             try:
                 return v.resolve(raises=True)
             except Exception as e:
-                raise ParamValidationError(f"Invalid input for param {k}: {e}") from None
+                raise ValueError(f"Invalid input for param {k}: {e}") from None
 
         return {k: _validate_one(k, v) for k, v in self.__dict.items()}
 

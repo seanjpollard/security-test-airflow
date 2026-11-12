@@ -47,9 +47,8 @@ class ReadyToRescheduleDep(BaseTIDep):
     def _get_dep_statuses(
         self,
         ti: TaskInstance,
-        dep_context: DepContext,
-        *,
         session: Session,
+        dep_context: DepContext,
     ) -> Iterator[TIDepStatus]:
         """
         Determine whether a task is ready to be rescheduled.
@@ -63,12 +62,7 @@ class ReadyToRescheduleDep(BaseTIDep):
         # UP_FOR_RESCHEDULE we *always* check TaskReschedule regardless of operator type
         # (e.g. startup/DAG-load rescheduling).  For NONE-state tasks, only reschedule-mode
         # sensors (and mapped tasks whose reschedule attr is unknown) need the DB query.
-        map_index = (
-            dep_context.coordinate_resolver(ti, session=session).public_map_index(ti)
-            if dep_context.has_regions(ti, session=session)
-            else ti.region_index
-        )
-        if ti.state is None and map_index < 0 and not getattr(ti.task, "reschedule", False):
+        if ti.state is None and ti.map_index < 0 and not getattr(ti.task, "reschedule", False):
             yield self._passing_status(reason="Task is not in reschedule mode.")
             return
 
@@ -92,7 +86,7 @@ class ReadyToRescheduleDep(BaseTIDep):
         if not next_reschedule_date:
             # Because mapped sensors don't have the reschedule property, here's the last resort
             # and we need a slightly different passing reason
-            if map_index >= 0:
+            if ti.map_index >= 0:
                 yield self._passing_status(reason="The task is mapped and not in reschedule mode")
                 return
             yield self._passing_status(reason="There is no reschedule request for this task instance.")

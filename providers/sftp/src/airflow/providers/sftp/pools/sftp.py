@@ -24,32 +24,11 @@ from threading import Lock
 from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary
 
-from asyncssh import SFTPBadMessage, SFTPConnectionLost, SFTPError, SFTPNoConnection
-
 from airflow.providers.sftp.hooks.sftp import SFTPHookAsync
 from airflow.utils.log.logging_mixin import LoggingMixin
 
 if TYPE_CHECKING:
     import asyncssh
-
-#: SFTP status codes that report a broken or desynchronised transport.
-_TRANSPORT_SFTP_ERRORS: tuple[type[SFTPError], ...] = (
-    SFTPNoConnection,
-    SFTPConnectionLost,
-    SFTPBadMessage,
-)
-
-
-def _is_connection_faulty(exc: BaseException) -> bool:
-    """
-    Whether ``exc`` means the pooled SSH connection can no longer be reused.
-
-    Any other ``SFTPError`` is a status-level failure that leaves the channel usable,
-    so the connection stays good; a non-``SFTPError`` is assumed to have broken it.
-    """
-    if isinstance(exc, SFTPError):
-        return isinstance(exc, _TRANSPORT_SFTP_ERRORS)
-    return True
 
 
 @dataclass
@@ -257,16 +236,9 @@ class SFTPClientPool(LoggingMixin):
                 await self._release_pair(pair, state, faulty=True)
             raise
         except Exception as e:
-            faulty = _is_connection_faulty(e)
-            if faulty:
-                self.log.warning("Dropping faulty connection for '%s': %s", self.sftp_conn_id, e)
-            else:
-                # Debug: fires once per missing file when iterating many paths.
-                self.log.debug(
-                    "Keeping pooled connection for '%s' after SFTP error: %s", self.sftp_conn_id, e
-                )
+            self.log.warning("Dropping faulty connection for '%s': %s", self.sftp_conn_id, e)
             if pair:
-                await self._release_pair(pair, state, faulty=faulty)
+                await self._release_pair(pair, state, faulty=True)
             raise
         else:
             await self._release_pair(pair, state, faulty=False)

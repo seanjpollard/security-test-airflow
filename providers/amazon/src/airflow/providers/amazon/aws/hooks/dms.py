@@ -37,32 +37,6 @@ class DmsTaskWaiterStatus(str, Enum):
     STOPPED = "stopped"
 
 
-class DmsTaskState(str, Enum):
-    """
-    AWS DMS replication task states.
-
-    Source: https://docs.aws.amazon.com/boto3/latest/reference/services/dms/client/modify_replication_task.html
-    """
-
-    CREATING = "creating"
-    READY = "ready"
-    STARTING = "starting"
-    RUNNING = "running"
-    STOPPING = "stopping"
-    STOPPED = "stopped"
-    MODIFYING = "modifying"
-    MOVING = "moving"
-    TESTING = "testing"
-    FAILED = "failed"
-    FAILED_MOVE = "failed-move"
-    DELETING = "deleting"
-
-
-DMS_MODIFIABLE_STATES: frozenset[DmsTaskState] = frozenset(
-    {DmsTaskState.STOPPED, DmsTaskState.READY, DmsTaskState.FAILED}
-)
-
-
 class DmsHook(AwsBaseHook):
     """
     Interact with AWS Database Migration Service (DMS).
@@ -118,27 +92,6 @@ class DmsHook(AwsBaseHook):
 
         return tasks
 
-    def get_task_description(self, replication_task_arn: str) -> dict | None:
-        """
-        Retrieve the replication task description, without task settings.
-
-        :param replication_task_arn: Replication task ARN
-        :return: The task as returned by ``DescribeReplicationTasks``, or ``None`` if not found
-        """
-        replication_tasks = self.find_replication_tasks_by_arn(
-            replication_task_arn=replication_task_arn,
-            without_settings=True,
-        )
-
-        if len(replication_tasks) == 1:
-            task = replication_tasks[0]
-            self.log.info(
-                'Replication task with ARN(%s) has status "%s".', replication_task_arn, task["Status"]
-            )
-            return task
-        self.log.info("Replication task with ARN(%s) is not found.", replication_task_arn)
-        return None
-
     def get_task_status(self, replication_task_arn: str) -> str | None:
         """
         Retrieve task status.
@@ -146,8 +99,17 @@ class DmsHook(AwsBaseHook):
         :param replication_task_arn: Replication task ARN
         :return: Current task status
         """
-        task = self.get_task_description(replication_task_arn)
-        return task["Status"] if task else None
+        replication_tasks = self.find_replication_tasks_by_arn(
+            replication_task_arn=replication_task_arn,
+            without_settings=True,
+        )
+
+        if len(replication_tasks) == 1:
+            status = replication_tasks[0]["Status"]
+            self.log.info('Replication task with ARN(%s) has status "%s".', replication_task_arn, status)
+            return status
+        self.log.info("Replication task with ARN(%s) is not found.", replication_task_arn)
+        return None
 
     def create_replication_task(
         self,
@@ -237,48 +199,6 @@ class DmsHook(AwsBaseHook):
         dms_client.delete_replication_task(ReplicationTaskArn=replication_task_arn)
 
         self.wait_for_task_status(replication_task_arn, DmsTaskWaiterStatus.DELETED)
-
-    def modify_replication_task(
-        self,
-        replication_task_arn: str,
-        table_mappings: dict | None = None,
-        migration_type: str | None = None,
-        replication_task_settings: dict | None = None,
-        cdc_start_time: datetime | None = None,
-        cdc_start_position: str | None = None,
-        cdc_stop_position: str | None = None,
-    ) -> dict:
-        """
-        Modify an existing replication task.
-
-        .. seealso::
-            - :external+boto3:py:meth:`DatabaseMigrationService.Client.modify_replication_task`
-
-        :param replication_task_arn: Replication task ARN
-        :param table_mappings: JSON table mappings dict
-        :param migration_type: Migration type ('full-load'|'cdc'|'full-load-and-cdc')
-        :param replication_task_settings: Task settings dict
-        :param cdc_start_time: Start time for CDC
-        :param cdc_start_position: CDC start position (checkpoint or LSN/SCN format)
-        :param cdc_stop_position: CDC stop position
-        :return: Modified replication task dict
-        """
-        dms_client = self.get_conn()
-        kwargs: dict = {"ReplicationTaskArn": replication_task_arn}
-        if table_mappings is not None:
-            kwargs["TableMappings"] = json.dumps(table_mappings)
-        if migration_type is not None:
-            kwargs["MigrationType"] = migration_type
-        if replication_task_settings is not None:
-            kwargs["ReplicationTaskSettings"] = json.dumps(replication_task_settings)
-        if cdc_start_time is not None:
-            kwargs["CdcStartTime"] = cdc_start_time
-        if cdc_start_position is not None:
-            kwargs["CdcStartPosition"] = cdc_start_position
-        if cdc_stop_position is not None:
-            kwargs["CdcStopPosition"] = cdc_stop_position
-        response = dms_client.modify_replication_task(**kwargs)
-        return response.get("ReplicationTask", {})
 
     def wait_for_task_status(self, replication_task_arn: str, status: DmsTaskWaiterStatus):
         """

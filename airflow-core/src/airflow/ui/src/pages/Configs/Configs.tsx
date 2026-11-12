@@ -16,25 +16,21 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Box } from "@chakra-ui/react";
+import { Heading, Separator } from "@chakra-ui/react";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 
 import { useConfigServiceGetConfig } from "openapi/queries";
 import type { ConfigOption } from "openapi/requests/types.gen";
-
 import { DataTable } from "src/components/DataTable";
-import type { DataTableFeatures } from "src/components/DataTable/features";
 import { ErrorAlert } from "src/components/ErrorAlert";
-
-import { useDocumentTitle } from "src/utils";
 
 type ConfigColums = {
   section: string;
 } & ConfigOption;
 
-const createColumns = (translate: TFunction): Array<ColumnDef<DataTableFeatures, ConfigColums>> => [
+const createColumns = (translate: TFunction): Array<ColumnDef<ConfigColums>> => [
   {
     accessorKey: "section",
     enableSorting: false,
@@ -54,9 +50,6 @@ const createColumns = (translate: TFunction): Array<ColumnDef<DataTableFeatures,
 
 export const Configs = () => {
   const { t: translate } = useTranslation(["admin", "common"]);
-
-  useDocumentTitle(translate("common:admin.Config"));
-
   const { data, error } = useConfigServiceGetConfig();
 
   const columns = createColumns(translate);
@@ -70,14 +63,14 @@ export const Configs = () => {
     ) ?? [];
 
   return (
-    <Box px={2}>
-      <DataTable
-        columns={columns}
-        data={render}
-        errorMessage={<ErrorAlert error={error} />}
-        modelName="admin:config.config"
-        total={render.length}
-      />
-    </Box>
+    <>
+      <Heading mb={4}>{translate("config.title")}</Heading>
+      <Separator />
+      {error === null ? (
+        <DataTable columns={columns} data={render} modelName="common:admin.Config" />
+      ) : (
+        <ErrorAlert error={error} />
+      )}
+    </>
   );
 };

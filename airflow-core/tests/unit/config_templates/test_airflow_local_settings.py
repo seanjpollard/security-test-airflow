@@ -40,12 +40,8 @@ REMOTE_IO_PROVIDERS = [
     ),
     ("oss://bucket/path", "airflow.providers.alibaba.cloud.log.oss_task_handler.OSSRemoteLogIO"),
     ("hdfs://host/path", "airflow.providers.apache.hdfs.log.hdfs_task_handler.HdfsRemoteLogIO"),
-    (
-        "stackdriver://host/path",
-        "airflow.providers.google.cloud.log.stackdriver_task_handler.StackdriverRemoteLogIO",
-    ),
 ]
-REMOTE_IO_IDS = ["s3", "wasb", "gcs", "cloudwatch", "oss", "hdfs", "stackdriver"]
+REMOTE_IO_IDS = ["s3", "wasb", "gcs", "cloudwatch", "oss", "hdfs"]
 
 
 @pytest.fixture
@@ -129,34 +125,6 @@ def test_mixed_kwargs_split_correctly(remote_base, remote_io_path, restore_local
         assert mock_remote_io.call_args.kwargs["custom_io_key"] == "val"
         assert "max_bytes" not in mock_remote_io.call_args.kwargs
         assert "backup_count" not in mock_remote_io.call_args.kwargs
-
-
-@pytest.mark.parametrize(
-    ("configured_port", "expected_port"),
-    [
-        pytest.param("", 9200, id="unset-falls-back-to-9200"),
-        pytest.param("9201", 9201, id="explicit-port-is-an-int"),
-    ],
-)
-def test_opensearch_port_resolution(configured_port, expected_port, restore_local_settings):
-    """``[opensearch] port`` defaults to an empty string, which must not blow up module import."""
-    remote_io_path = "airflow.providers.opensearch.log.os_task_handler.OpensearchRemoteLogIO"
-    pytest.importorskip(remote_io_path.rsplit(".", 1)[0])
-    with (
-        mock.patch(remote_io_path) as mock_remote_io,
-        conf_vars(
-            {
-                ("logging", "remote_logging"): "True",
-                ("logging", "remote_base_log_folder"): "",
-                ("elasticsearch", "host"): "",
-                ("opensearch", "host"): "https://opensearch.example.com:9202",
-                ("opensearch", "port"): configured_port,
-            }
-        ),
-    ):
-        importlib.reload(airflow_local_settings)
-
-        assert mock_remote_io.call_args.kwargs["port"] == expected_port
 
 
 def test_file_handler_params_introspected_correctly():

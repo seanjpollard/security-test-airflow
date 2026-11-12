@@ -22,7 +22,6 @@ import os
 import smtplib
 import ssl
 import tempfile
-from contextlib import nullcontext
 from email.mime.application import MIMEApplication
 from unittest import mock
 from unittest.mock import AsyncMock, Mock, call, patch
@@ -54,7 +53,6 @@ ACCESS_TOKEN = "test-token"
 
 CONN_ID_DEFAULT = "smtp_default"
 CONN_ID_NONSSL = "smtp_nonssl"
-CONN_ID_0_RETRIES = "smtp_0_retries"
 CONN_ID_SSL_EXTRA = "smtp_ssl_extra"
 CONN_ID_OAUTH = "smtp_oauth2"
 
@@ -84,27 +82,6 @@ def _create_fake_smtp(mock_smtplib, use_ssl=True):
 
 
 class TestSmtpHook:
-    @pytest.mark.parametrize("close_fails", [False, True])
-    @patch("smtplib.SMTP_SSL", autospec=True)
-    def test_reconnect_after_context_exit(self, mock_smtp_ssl, close_fails):
-        clients = [mock.create_autospec(smtplib.SMTP, instance=True) for _ in range(2)]
-        mock_smtp_ssl.side_effect = clients
-        if close_fails:
-            clients[0].close.side_effect = OSError("Close failed")
-        hook = SmtpHook()
-
-        with pytest.raises(OSError, match="Close failed") if close_fails else nullcontext():
-            with hook:
-                hook.send_email_smtp(to=TO_EMAIL, subject=TEST_SUBJECT, html_content=TEST_BODY)
-
-        with hook:
-            hook.send_email_smtp(to=TO_EMAIL, subject=TEST_SUBJECT, html_content=TEST_BODY)
-
-        assert mock_smtp_ssl.call_count == 2
-        for client in clients:
-            client.sendmail.assert_called_once()
-            client.close.assert_called_once()
-
     @pytest.fixture(autouse=True)
     def setup_connections(self, create_connection_without_db):
         create_connection_without_db(
@@ -127,17 +104,6 @@ class TestSmtpHook:
                 password=SMTP_PASSWORD,
                 port=NONSSL_PORT,
                 extra=json.dumps(dict(disable_ssl=True, from_email=FROM_EMAIL)),
-            )
-        )
-        create_connection_without_db(
-            Connection(
-                conn_id=CONN_ID_0_RETRIES,
-                conn_type=CONN_TYPE,
-                host=SMTP_HOST,
-                login=SMTP_LOGIN,
-                password=SMTP_PASSWORD,
-                port=NONSSL_PORT,
-                extra=json.dumps(dict(from_email=FROM_EMAIL, retry_limit=0, disable_ssl=True)),
             )
         )
         create_connection_without_db(
@@ -168,7 +134,6 @@ class TestSmtpHook:
         [
             pytest.param(CONN_ID_DEFAULT, True, DEFAULT_PORT, True, id="ssl-connection"),
             pytest.param(CONN_ID_NONSSL, False, NONSSL_PORT, False, id="non-ssl-connection"),
-            pytest.param(CONN_ID_0_RETRIES, False, NONSSL_PORT, False, id="0-retries-connection"),
         ],
     )
     @patch(smtplib_string)
@@ -179,10 +144,8 @@ class TestSmtpHook:
         """Test sync connection with different configurations."""
         mock_conn = _create_fake_smtp(mock_smtplib, use_ssl=use_ssl)
 
-        smtp_hook = SmtpHook(smtp_conn_id=conn_id)
-        assert smtp_hook._smtp_client is None
-        with smtp_hook:
-            assert smtp_hook._smtp_client is not None
+        with SmtpHook(smtp_conn_id=conn_id):
+            pass
 
         if create_context:
             assert create_default_context.called
@@ -256,26 +219,6 @@ class TestSmtpHook:
         assert "Reply-To" in msg
         assert [mail_to] == recipients
         assert msg["To"] == ",".join(recipients)
-
-    @patch(smtplib_string)
-    def test_build_mime_message_escapes_attachment_filename(self, mock_smtplib, tmp_path):
-        # A quote in the filename must not break out of the quoted
-        # Content-Disposition value and inject extra parameters.
-        malicious = 'report.txt"; x-evil="1'
-        attachment = tmp_path / malicious
-        attachment.write_bytes(b"data")
-        with SmtpHook() as smtp_hook:
-            msg, _ = smtp_hook._build_mime_message(
-                mail_from=FROM_EMAIL,
-                to=TO_EMAIL,
-                subject=TEST_SUBJECT,
-                html_content=TEST_BODY,
-                files=[os.fspath(attachment)],
-            )
-
-        part = msg.get_payload()[-1]
-        assert part.get_filename() == malicious
-        assert "x-evil" not in dict(part.get_params(header="Content-Disposition"))
 
     @patch(smtplib_string)
     def test_send_smtp(self, mock_smtplib):
@@ -445,7 +388,7 @@ class TestSmtpHook:
                     html_content=TEST_BODY,
                 )
 
-        assert mock_smtp_ssl().sendmail.call_count == DEFAULT_RETRY_LIMIT + 1
+        assert mock_smtp_ssl().sendmail.call_count == DEFAULT_RETRY_LIMIT
 
     @patch("email.message.Message.as_string")
     @patch("smtplib.SMTP_SSL")
@@ -498,7 +441,7 @@ class TestSmtpHook:
         )
         assert expected_call in mock_smtp_ssl.call_args_list
         assert create_default_context.called
-        assert mock_smtp_ssl().sendmail.call_count == custom_retry_limit + 1
+        assert mock_smtp_ssl().sendmail.call_count == 10
 
     @patch(smtplib_string)
     def test_oauth2_auth_called(self, mock_smtplib):
@@ -632,26 +575,6 @@ class TestSmtpHook:
 class TestSmtpHookAsync:
     """Tests for async functionality in SmtpHook."""
 
-    @pytest.mark.parametrize("quit_fails", [False, True])
-    async def test_reconnect_after_context_exit(self, mock_get_connection, mocker, quit_fails):
-        clients = [self._create_fake_async_smtp(Mock()) for _ in range(2)]
-        mock_smtp = mocker.patch("airflow.providers.smtp.hooks.smtp.aiosmtplib.SMTP", side_effect=clients)
-        if quit_fails:
-            clients[0].quit.side_effect = OSError("Quit failed")
-        hook = SmtpHook()
-
-        with pytest.raises(OSError, match="Quit failed") if quit_fails else nullcontext():
-            async with hook:
-                await hook.asend_email_smtp(to=TO_EMAIL, subject=TEST_SUBJECT, html_content=TEST_BODY)
-
-        async with hook:
-            await hook.asend_email_smtp(to=TO_EMAIL, subject=TEST_SUBJECT, html_content=TEST_BODY)
-
-        assert mock_smtp.call_count == 2
-        for client in clients:
-            client.sendmail.assert_awaited_once()
-            client.quit.assert_awaited_once()
-
     @pytest.fixture(autouse=True)
     def setup_connections(self, create_connection_without_db):
         create_connection_without_db(
@@ -674,17 +597,6 @@ class TestSmtpHookAsync:
                 password=SMTP_PASSWORD,
                 port=NONSSL_PORT,
                 extra=json.dumps(dict(disable_ssl=True, from_email=FROM_EMAIL)),
-            )
-        )
-        create_connection_without_db(
-            Connection(
-                conn_id=CONN_ID_0_RETRIES,
-                conn_type=CONN_TYPE,
-                host=SMTP_HOST,
-                login=SMTP_LOGIN,
-                password=SMTP_PASSWORD,
-                port=NONSSL_PORT,
-                extra=json.dumps(dict(from_email=FROM_EMAIL, retry_limit=0, disable_ssl=True)),
             )
         )
 
@@ -735,17 +647,14 @@ class TestSmtpHookAsync:
         [
             pytest.param(CONN_ID_NONSSL, NONSSL_PORT, False, id="non-ssl-connection"),
             pytest.param(CONN_ID_DEFAULT, DEFAULT_PORT, True, id="ssl-connection"),
-            pytest.param(CONN_ID_0_RETRIES, NONSSL_PORT, False, id="0-retries-connection"),
         ],
     )
     async def test_async_connection(
         self, mock_smtp, mock_smtp_client, mock_get_connection, conn_id, expected_port, expected_ssl
     ):
         """Test async connection with different configurations."""
-        smtp_hook = SmtpHook(smtp_conn_id=conn_id)
-        assert smtp_hook._smtp_client is None
-        async with smtp_hook:
-            assert smtp_hook._smtp_client is not None
+        async with SmtpHook(smtp_conn_id=conn_id) as hook:
+            assert hook is not None
 
         mock_smtp.assert_called_once()
         call_kwargs = mock_smtp.call_args.kwargs
@@ -755,7 +664,9 @@ class TestSmtpHookAsync:
         assert call_kwargs["use_tls"] == expected_ssl
         assert call_kwargs["start_tls"] == (None if expected_ssl else True)
         assert isinstance(call_kwargs["tls_context"], ssl.SSLContext)
-        mock_smtp_client.starttls.assert_not_awaited()
+
+        if expected_ssl:
+            assert mock_smtp_client.starttls.await_count == 1
 
         assert mock_smtp_client.auth_login.await_count == 1
         mock_smtp_client.auth_login.assert_awaited_once_with(SMTP_LOGIN, SMTP_PASSWORD)
@@ -787,7 +698,7 @@ class TestSmtpHookAsync:
                 False,
                 id="success_after_retries",
             ),
-            pytest.param(SERVER_DISCONNECTED_ERROR, DEFAULT_RETRY_LIMIT + 1, True, id="max_retries_exceeded"),
+            pytest.param(SERVER_DISCONNECTED_ERROR, DEFAULT_RETRY_LIMIT, True, id="max_retries_exceeded"),
         ],
     )
     @pytest.mark.asyncio
@@ -826,33 +737,14 @@ class TestSmtpHookAsync:
 
         mock_smtp_client.sendmail.assert_not_awaited()
 
-    async def test_async_starttls_not_repeated_after_connect(
-        self, mock_smtp, mock_smtp_client, mock_get_connection
-    ):
-        """Test that aget_conn does not repeat the STARTTLS upgrade aiosmtplib already did in connect()."""
-        # Like aiosmtplib, reject STARTTLS on a connection that already uses TLS.
-        mock_smtp_client.starttls.side_effect = aiosmtplib.errors.SMTPException(
-            "Connection already using TLS"
-        )
-
-        async with SmtpHook(smtp_conn_id=CONN_ID_NONSSL) as hook:
-            await hook.asend_email_smtp(to=TO_EMAIL, subject=TEST_SUBJECT, html_content=TEST_BODY)
-
-        assert mock_smtp.call_args.kwargs["start_tls"] is True
-        mock_smtp_client.starttls.assert_not_awaited()
-        mock_smtp_client.sendmail.assert_awaited_once()
-
     async def test_async_ehlo_called_after_starttls(self, mock_smtp, mock_smtp_client, mock_get_connection):
-        """Test that ehlo() is called after connect(), which does the STARTTLS upgrade, and before login."""
-        manager = AsyncMock()
-        mock_smtp_client.connect = manager.connect
-        mock_smtp_client.ehlo = manager.ehlo
-        mock_smtp_client.auth_login = manager.auth_login
-
+        """Test that ehlo() is called after starttls() in async path."""
         async with SmtpHook(smtp_conn_id=CONN_ID_NONSSL):
             pass
 
-        assert manager.mock_calls == [call.connect(), call.ehlo(), call.auth_login(SMTP_LOGIN, SMTP_PASSWORD)]
+        # For non-SSL, starttls is called followed by ehlo
+        assert mock_smtp_client.starttls.await_count == 1
+        assert mock_smtp_client.ehlo.await_count >= 2  # once in _abuild_client + once after starttls
 
     async def test_async_oauth2_auth(
         self, mock_smtp, mock_smtp_client, mock_get_connection, create_connection_without_db

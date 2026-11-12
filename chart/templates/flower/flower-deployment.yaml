@@ -79,22 +79,17 @@ spec:
       tolerations: {{- toYaml $tolerations | nindent 8 }}
       topologySpreadConstraints: {{- toYaml $topologySpreadConstraints | nindent 8 }}
       serviceAccountName: {{ include "flower.serviceAccountName" . }}
-      enableServiceLinks: {{ .Values.enableServiceLinks }}
       {{- if .Values.flower.priorityClassName }}
       priorityClassName: {{ .Values.flower.priorityClassName }}
       {{- end }}
       restartPolicy: Always
-      {{- if $securityContext }}
       securityContext: {{ $securityContext | nindent 8 }}
-      {{- end }}
       imagePullSecrets: {{- include "image_pull_secrets" . | nindent 8 }}
       containers:
         - name: flower
           image: {{ template "flower_image" . }}
           imagePullPolicy: {{ .Values.images.flower.pullPolicy }}
-          {{- if $containerSecurityContext }}
           securityContext: {{ $containerSecurityContext | nindent 12 }}
-          {{- end }}
           {{- if $containerLifecycleHooks  }}
           lifecycle: {{- tpl (toYaml $containerLifecycleHooks) . | nindent 12 }}
           {{- end }}
@@ -108,7 +103,7 @@ spec:
           volumeMounts:
             {{- include "airflow_config_mount" . | nindent 12 }}
             {{- if .Values.volumeMounts }}
-              {{- tpl (toYaml .Values.volumeMounts) . | nindent 12 }}
+              {{- toYaml .Values.volumeMounts | nindent 12 }}
             {{- end }}
             {{- if .Values.flower.extraVolumeMounts }}
               {{- tpl (toYaml .Values.flower.extraVolumeMounts) . | nindent 12 }}
@@ -176,7 +171,7 @@ spec:
           configMap:
             name: {{ template "airflow_config" . }}
         {{- if .Values.volumes }}
-          {{- tpl (toYaml .Values.volumes) . | nindent 8 }}
+          {{- toYaml .Values.volumes | nindent 8 }}
         {{- end }}
         {{- if .Values.flower.extraVolumes }}
           {{- tpl (toYaml .Values.flower.extraVolumes) . | nindent 8 }}
